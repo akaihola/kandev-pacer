@@ -61,14 +61,16 @@ with slow polling and parallel tasks a high cap can overshoot the line between t
   (bare `GET /api/v1/tasks` 404s); move `POST /api/v1/tasks/:id/move` with body
   `{workflow_id, workflow_step_id, position}` (both ids required). `/api/v1` is unauthenticated.
 
-### ⚠️ The Paced Kanban workflow needs one fix
+### ✅ Paced Kanban workflow is configured for pacing
 
-Its `is_start_step` is on **In Progress**, so newly created tasks land there and
-**auto-start immediately, bypassing Backlog**. For pacing to work, move the start flag to
-**Backlog**. (Backlog events are correctly `{}`; In Progress correctly has
-`on_enter: auto_start_agent`.) Also note the Review/Done steps have `on_turn_start` events
-that move a task back into In Progress and auto-start it — a re-engagement path that bypasses
-pacing on manual re-prompt. Acceptable (user-initiated), but a known gap.
+- **Start step is Backlog.** `is_start_step` is on **Backlog**, so newly created tasks land
+  there inert (events `{}`) and wait for the pacer instead of auto-starting. In Progress
+  correctly has `on_enter: auto_start_agent`.
+- **Re-prompts are re-paced.** The Review and Done steps have `on_turn_start` events that
+  move the task back to **Backlog** (not In Progress). So a manual re-prompt of a finished
+  task returns it to the gated queue and is admitted through the pacer like any other Backlog
+  task — closing the earlier re-engagement bypass. No code change needed: the pacer already
+  admits whatever sits in Backlog.
 
 ## Open questions (before this runs for real)
 
