@@ -11,22 +11,26 @@ the current step's rules choose the next step. Those rules may branch or loop.
 The difficult part is pausing between turns without losing the workflow's choice
 of next step.
 
+Unless marked otherwise, the claims below are verified against the Kandev
+source (`~/repos/ai/kandev`, 2026-07-24).
+
 ## Quick comparison
 
 | Design | Extra steps | Kandev change | Branches and loops | Verdict |
 |---|---:|---|---|---|
 | 1. Single Kanban gate | 1 | No | No | Good for a flat queue |
 | 2. Next-step marker | 1 | Usually | Yes | Correct but duplicates state |
-| 3. Infer from history | 1 | No | No | Only safe for linear flows |
+| 3. Infer from history | 1 | No | No | History is not even stored |
 | 4. Waiting/running pairs | One per stage | No | Yes | Reliable but verbose |
-| 5. Start in place | 0 | Maybe | Usually | Clean model; profile changes can bypass it |
-| 6. Existing launch surface | 0 | No | Usually | Primitive confirmed; not universal |
+| 5. Start in place | 0 | No | Yes | Sound model; realized by design 13 |
+| 6. Existing launch surface | 0 | No | Usually | Confirmed primitive behind 13 |
 | 7. Shared launchpad | 1 | No | Yes in theory | Racy and loses step settings |
 | 8. Shadow workflow | 0 in the main flow | No | Yes | Duplicates the whole workflow |
-| 9. Completion-signal gate | 0–1 | No | Yes | The agent may release itself |
+| 9. Completion-signal gate | 0–1 | No | Yes | The agent releases itself |
 | 10. Agent-specific hook | 0 | No | Yes | Not portable across agents |
 | 11. Model API proxy | 0 | No | Yes | Gates API calls, not turns |
-| 12. ACP turnstile | 0 | No | Yes | Best general solution |
+| 12. ACP turnstile | 0 | No | Yes | Strong, but misses passthrough |
+| 13. Hold in place, launch on release | 0 | No | Yes | Best fit for the criteria |
 
 ## 1. Single Kanban gate
 
@@ -50,10 +54,13 @@ tag. The pacer reads that value and moves the task there.
 
 The pacer reads the task's step history and computes what should come next.
 
-- **Good:** Uses data Kandev already stores.
+- **Good:** Would need no marker and no extra configuration.
 - **Bad:** History says where the task was, not which branch was selected.
-  Multiple sessions, pacer-created moves, and read timing make it more fragile.
-  It is suitable only for simple linear workflows.
+  Worse, Kandev does not actually store it: the step-history writer
+  (`CreateStepTransition`) has no caller in the current source, so the audit
+  table stays empty and history would have to be reconstructed from live
+  events. Multiple sessions, pacer-created moves, and read timing make that
+  reconstruction fragile. Unsafe even for simple linear workflows.
 
 ## 4. Per-stage waiting and running steps
 
@@ -62,7 +69,10 @@ Each logical stage becomes two steps, for example `Implement waiting` and
 the task to its matching running step.
 
 - **Good:** The task's position records the selected branch. It needs no marker
-  or guesswork and uses only the move API.
+  or guesswork and uses only the move API. Confirmed in source: a pacer-driven
+  move into an auto-start step reliably launches the agent, with or without an
+  existing session, and has no start race because the pacer initiates the
+  move. This is the only fully race-free external gate.
 - **Bad:** It nearly doubles the workflow and makes every transition harder to
   configure.
 
@@ -74,10 +84,14 @@ moving the task.
 
 - **Good:** Kandev owns routing and the pacer owns timing. Ordinary branches
   and loops need no special handling.
-- **Bad:** The pacer needs a reliable "start this task's current step" operation.
-  A generic REST endpoint was not found; using Kandev's WebSocket protocol adds
-  session-state and reconnect complexity. Kandev can also auto-launch a step
-  after an agent-profile change, bypassing this gate.
+- **Bad:** The required "start this task's current step" operation exists only
+  on Kandev's WebSocket surface (Design 6's `session.launch`). The REST API
+  has no turn-start endpoint at all — confirmed against the full route
+  inventory — so the pacer takes on WebSocket session-state and reconnect
+  complexity. Kandev can also auto-launch a step after an agent-profile
+  change, bypassing this gate.
+
+Design 13 realizes this model with Design 6's primitive.
 
 ## 6. Use an existing session-launch surface
 
@@ -88,8 +102,9 @@ WebSocket action `session.launch` with `intent: workflow_step`.
 
 The live probe and source trace found three different behaviors:
 
-- `spawn_session` sends the caller's text, adds peer-agent framing, and creates
-  another session on later turns. It is the wrong operation.
+- `spawn_session` sends the caller's text, adds peer-agent framing, and
+  immediately creates an additional parallel session on the task. It is the
+  wrong operation.
 - Quick chat creates a separate temporary task. It is also the wrong operation.
 - `workflow_step` is the operation used by Kandev's own auto-start callback. It
   continues the supplied session, builds the configured step prompt, applies
@@ -112,25 +127,34 @@ creates the primary session. Later turns use `intent: workflow_step`.
 **Important limits.**
 
 - A step that changes the agent profile and has a prompt is auto-launched by
-  Kandev even when `auto_start_agent` is absent. That bypasses the pacer.
-- `workflow_step_id` is not checked against the task's current step. If the task
-  moves after the pacer reads it, this call can move it back to a stale step.
-- A session awaiting review approval (`ReviewStatus = pending`) rejects the call
-  outright — a step with an approval gate cannot be released by the pacer until
-  the reviewer acts.
+  Kandev even when `auto_start_agent` is absent. That bypasses the pacer. The
+  bypass needs a non-empty step prompt; a profile-switch step without a prompt
+  only creates the switched session and waits.
+- `workflow_step_id` is not checked against the task's current step, and the
+  call unconditionally moves the task there (clearing any review status on the
+  way). Passing the current step id, read immediately before the call, makes
+  the move a no-op and shrinks the race to a narrow window.
+- A session awaiting review approval (`ReviewStatus = pending`) rejects
+  `intent: workflow_step`; the other intents carry no such check. A step
+  behind an approval gate cannot be released by the pacer until the reviewer
+  acts.
+- Because a profile-switch step creates a new session on entry, the pacer must
+  resolve the task's newest live session id at release time, never from cache.
 - The pacer still needs WebSocket reconnect, response matching, and duplicate
-  start protection.
+  start protection. There is no REST alternative: the route inventory has no
+  turn-start endpoint.
 
 **Revised verdict.** The launch primitive is confirmed and requires no Kandev
-change. The source trace reaches the public WebSocket handler, and Kandev's
-`TestResolveIntent` and `TestPromptTask_PassthroughRoutesToPTYStdin` tests pass.
-It uses Kandev's common prompt path, so it is equally applicable to Claude Code,
-Codex, and Hermes Agent profiles.
+change. The source trace reaches the public WebSocket handler, and the same
+prompt path serves ACP profiles and CLI-passthrough profiles alike (Kandev's
+passthrough test routes the prompt to PTY stdin), so the primitive works for
+any built-in agent profile in either mode. Stock Kandev has no Hermes Agent
+adapter — the agent catalog is compiled into the binary — so Hermes support is
+out of scope until an adapter exists.
 
-However, the profile-switch bypass and stale-step race mean Design 6 is safe
-only for controlled workflows with one stable agent profile and no competing
-task moves. It does not satisfy the requirement for every arbitrarily complex
-workflow. Design 12 remains the general no-Kandev-change solution.
+The profile-switch bypass and the review-approval gate mean Design 6 alone is
+still not a complete pacer. Design 13 packages this primitive with the
+conventions that close the closable gaps.
 
 ## 7. One shared launchpad step
 
@@ -139,7 +163,8 @@ move it `S → Launchpad → S`. The turn starts at Launchpad, but finishes whil
 the task is back at S, so S performs the routing.
 
 - **Good:** Uses one extra step and, in theory, preserves arbitrary routing.
-- **Bad:** Kandev processes moves and auto-start asynchronously, so a fast turn
+- **Bad:** Kandev processes moves and auto-start asynchronously (confirmed:
+  step-entry actions run in a goroutine detached from the move), so a fast turn
   can finish before the move back. The Launchpad may also use the wrong step
   prompt, agent profile, or mode. It is not robust enough.
 
@@ -155,15 +180,23 @@ running tasks use matching auto-start steps in the active workflow.
 
 ## 9. Gate the completion signal
 
-Kandev can require an explicit step-complete signal before running a step's
-completion route. The pacer could release that signal when quota allows, causing
-the task to enter its next auto-starting step.
+A step with `auto_advance_requires_signal` runs its completion route only after
+an explicit step-complete signal. Without the signal, the turn ends with the
+session waiting for input and the task stays on its step; a signal arriving
+later still triggers the route. The signal surface is the WebSocket action
+`mcp.step_complete`, which any gateway client with the task and session ids can
+call — so a pacer-side release primitive does exist.
 
-- **Good:** Routing remains entirely inside Kandev and no waiting pair is needed.
-- **Bad:** This feature is designed for the agent to emit the signal itself.
-  The agent can therefore bypass the pacer. Preventing or intercepting that call
-  needs another convention or proxy. An initial task may still need one inert
-  queue step.
+- **Good:** Routing remains entirely inside Kandev and no waiting pair is
+  needed. The held state and the late-release path are both implemented.
+- **Bad:** The signal belongs to the agent. The `step_complete_kandev` MCP tool
+  is registered unconditionally for every task session, with no per-profile or
+  per-step off switch, and on gated steps the system prompt explicitly
+  instructs the agent to call it when its work is done. Agent self-release is
+  therefore the designed behavior, not a corner case; preventing it needs a
+  prompt convention the agent may ignore. The manual "mark complete" fallback
+  described in Kandev's ADR is not implemented. An initial task still needs
+  one inert queue step or a Design 6 start.
 
 ## 10. Agent-specific prompt hook
 
@@ -190,7 +223,7 @@ Place a small, external Agent Client Protocol (ACP) proxy between Kandev and the
 real agent:
 
 ```text
-Kandev -> paced-acp -> Claude Code, Codex, or Hermes Agent
+Kandev -> paced-acp -> agent ACP bridge (Claude Code, Codex, ...)
                     -> central quota scheduler
 ```
 
@@ -200,24 +233,88 @@ proxy forwards it unchanged. The matching response releases the concurrency
 slot. Only then does Kandev run the step's normal completion route.
 
 - **Good:** Adds no workflow steps and needs no Kandev source change. Kandev
-  keeps all step prompts, profiles, branches, and loops. Claude Code, Codex, and
-  Hermes Agent all support ACP, so the same proxy works for all three.
-- **Bad:** Kandev may display a queued prompt as running, and each queued task
-  may keep an agent process prepared. The proxy must correctly handle
-  cancellation, crashes, fairness, and fail closed if its scheduler is down.
+  keeps all step prompts, profiles, branches, and loops. Confirmed in source:
+  Kandev puts no timeout on the prompt round trip (it deliberately detaches
+  the caller's deadline), so a queued prompt can wait indefinitely without
+  failing anything.
+- **Bad:**
+  - Kandev shows a queued prompt as a running session, and every queued task
+    keeps its long-lived agent process alive (confirmed: one process per
+    session, reused across turns).
+  - CLI-passthrough profiles bypass ACP entirely — Kandev drives them through
+    a PTY with raw keystrokes — so the proxy cannot pace them. Paced profiles
+    must run in ACP mode.
+  - Profiles cannot override the launch command; they can only append CLI
+    flags. The shim must shadow `npx` — or the agent's native binary name such
+    as `claude`, which Kandev prefers when found on `PATH` — for the whole
+    backend, not per profile. Per-profile selection has to move into the
+    proxy, for example a marker flag added via the profile's extra CLI flags
+    that the shim strips before exec.
+  - The proxy must queue at `session/prompt` only. Kandev enforces startup and
+    prompt-readiness timeouts (about a minute) before dispatch, so delaying
+    process start or `initialize` breaks the session.
+  - Cancellation is two distinct paths: interrupting a turn sends ACP
+    `session/cancel` and keeps the process, while stopping the task kills the
+    agent process under the proxy. Both must be handled, plus crashes,
+    fairness, and failing closed if the scheduler is down.
+  - Hermes Agent has no adapter in stock Kandev (the catalog is compiled in).
+    Hermes ships its own ACP adapter, so a forked or future integration would
+    flow through the same proxy, but today the design covers only built-in
+    agents.
 
-The wrapper can be installed through agent launch commands or selective `PATH`
-shims. Low-priority profiles use the proxy; interactive or high-priority
-profiles launch their agent directly.
+## 13. Hold in place, launch on release
+
+Combine Designs 5 and 6: hold every task at its routed step, then start it in
+place with the confirmed launch primitive.
+
+Configuration, in workflow settings only: remove `auto_start_agent` from every
+paced step, and give no paced step both an agent-profile override and a step
+prompt (that combination auto-launches and would bypass the gate).
+
+Kandev still runs each step's completion route when a turn ends, so the task
+lands on the correct next step — through any branch, loop, or agent-driven
+`move_task` hand-off — and waits there with its session marked
+waiting-for-input. When quota allows, the pacer starts the turn in place:
+
+- Later turns: `session.launch` with `intent: workflow_step`, the task's
+  current step id read immediately before the call (making the unvalidated
+  move a no-op), and the task's newest live session id.
+- First turn of a task: the same action with `intent: start`.
+
+The pacer follows progress through the public WebSocket events
+`session.state_changed`, `task.updated` (which carries the new step id), and
+`session.turn_completed`, or by polling the task list.
+
+- **Good:** Zero extra steps, no Kandev modification, and Kandev keeps all
+  routing, prompts, templates, plan mode, and profile selection, so arbitrary
+  branching works. The launch primitive uses Kandev's common prompt path, so
+  it paces ACP and CLI-passthrough profiles alike — the gap Design 12 cannot
+  cover. Between turns the session honestly reads waiting-for-input instead of
+  appearing to run.
+- **Bad:** It inherits Design 6's residual limits. The profile-switch-plus-
+  prompt combination must be kept out of paced workflows by convention — a
+  configuration lint, not an enforced rule. A review-gated step stays closed
+  until the human approves, and the turn that approval triggers is not paced.
+  The pacer needs WebSocket plumbing: reconnect, response matching, and
+  duplicate-start protection. And it is coupled to Kandev's internal WebSocket
+  actions, which are less stable than ACP.
+
+A tempting variant — leave auto-start on, watch for launches, and immediately
+`stop_task` anything over quota, relaunching it later — was rejected: the
+launch runs in a detached goroutine after the step change, so the stop is a
+race; each false start burns quota; and a stop parks the task in review state
+with a cancelled session.
 
 ## Recommendation
 
 - Keep **Design 1** for a simple flat backlog.
-- Use **Design 4** when only Kandev's move API may be used.
-- Use **Design 6** only for controlled workflows with one stable agent profile
-  and no competing task moves. Its WebSocket launch primitive is real, but
-  Kandev can bypass it after an agent-profile change.
-- Prefer **Design 12, the ACP turnstile**, when the pacer must stay agnostic to
-  Kandev's protocol and work identically across Claude Code, Codex, and Hermes
-  Agent — it gates at the agent boundary rather than the Kandev boundary.
-- Do not use history inference for branching workflows.
+- Use **Design 4** when only Kandev's REST move API may be used; it is the one
+  fully race-free gate.
+- Prefer **Design 13** for the stated criteria — no Kandev modification,
+  complicated and branching workflows, zero added steps. Its price is two
+  workflow conventions (no auto-start, no profile-switch step with a prompt)
+  and WebSocket plumbing.
+- Use **Design 12, the ACP turnstile**, when the pacer must stay decoupled
+  from Kandev's own protocol; it needs a backend-wide `PATH` shim and paces
+  only ACP-mode profiles.
+- Do not use history inference: Kandev does not store step history.
