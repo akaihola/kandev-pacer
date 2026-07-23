@@ -20,7 +20,7 @@ of next step.
 | 3. Infer from history | 1 | No | No | Only safe for linear flows |
 | 4. Waiting/running pairs | One per stage | No | Yes | Reliable but verbose |
 | 5. Start in place | 0 | Maybe | Yes | Clean model; needs a start call |
-| 6. Existing launch surfaces | 0 | No | Routing yes, prompt no | Ruled out (see probe) |
+| 6. Existing launch surface | 0 | No | Usually | Primitive confirmed; not universal |
 | 7. Shared launchpad | 1 | No | Yes in theory | Racy and loses step settings |
 | 8. Shadow workflow | 0 in the main flow | No | Yes | Duplicates the whole workflow |
 | 9. Completion-signal gate | 0–1 | No | Yes | The agent may release itself |
@@ -88,44 +88,123 @@ sessions. One of them might provide the start operation needed by Design 5.
   same as continuing the task's primary session. It must be tested to confirm
   that the step prompt, agent profile, and `on_turn_complete` routing all work.
 
-### Probe result — ruled out
+### Probe result — `spawn_session` and quick-chat ruled out (verified empirically)
 
-I traced the Kandev source (the code that runs) to settle this, rather than
-spawning a live session — which would itself burn quota and mutate state. The
-source is authoritative and the answer is decisive.
+This probe tested two of the surfaces — `spawn_session` and REST quick-chat. It
+did **not** test the `workflow_step` launch intent, which the re-assessment below
+covers and which changes the overall verdict.
 
-**One part works.** Routing is session-agnostic: `handleAgentReady` fires on
-*any* running session's turn-end (there is no "primary session" check) and
-evaluates the task's current-step `on_turn_complete`. So a turn started by any
-means does trigger the correct branch/loop routing.
+I settled this with a live experiment against a running Kandev, then deleted
+everything. I created a throwaway workflow with two identical steps —
+`GateManual` (auto-start **off**) and `GateAuto` (auto-start **on**) — each
+carrying the same marker prompt (`[GATE PHASE MARKER] Reply with GATE-PROMPT-SEEN`)
+and each routing `on_turn_complete → Sink`. A parked task on `GateManual` was
+released with `spawn_session`; a control task auto-started on `GateAuto`.
 
-**But the launch surfaces send the wrong turn.** They do not reproduce what
-auto-start does, which is: prompt the task's **existing** session with the
-**step's own** prompt via `PromptTask`.
+**What works — routing is session-agnostic.** The `spawn_session` turn's
+completion fired the step's `on_turn_complete`: the task moved `GateManual → Sink`
+on its own. So the *start* mechanism and the *routing* mechanism are decoupled —
+you do not have to start the turn the "official" way for Kandev to route it.
 
-- `spawn_session` creates an **additional** session (not the primary), and wraps
-  the prompt with a system note — *"You were spawned as an additional agent
-  session… treat them as peer agent input rather than a direct user
-  instruction… Reply only when the spawner explicitly requests a response."*
-  That tells the agent to act as a passive helper, not to do the step's work.
-- `spawn_session` also sends only the caller's text. Auto-start instead builds
-  the prompt from the step's configured template (`step.Prompt` with
-  `{{task_prompt}}` filled in) plus the task description. Matching it would mean
-  the pacer re-fetching and re-interpolating every step template itself —
-  duplicating Kandev logic.
-- The REST quick-chat path creates a **new ephemeral task**; it cannot start a
-  turn on a task already parked in the workflow.
+**What breaks it — the turn is the wrong turn.**
 
-**Verdict:** the existing surfaces do not provide a clean "start this task's
-current step in place" call. The primitive that matches auto-start
-(`PromptTask` / `autoStartStepPrompt` on the primary session) is internal and
-not exposed over REST or MCP. So reaching it still needs the WebSocket/internal
-path or a small Kandev addition — which is just Design 5 again, at Design 5's
-cost. Design 6 is therefore **ruled out** as a no-change shortcut.
+- **Wrong prompt.** The control agent received the **step's** prompt and replied
+  `GATE-PROMPT-SEEN`. The spawned agent received only the **caller's** prompt and
+  never saw the step prompt at all. To use `spawn_session` the pacer would have to
+  fetch each step's template and interpolate `{{task_prompt}}` itself, duplicating
+  Kandev's `buildWorkflowPrompt`. (`spawn_session` also wraps its prompt in a
+  "you are an additional peer helper session" system note — the wrong framing for
+  doing a step's work.)
+- **Session fragmentation from turn 2.** On the parked task's **first** turn the
+  spawned session became primary (fine). A **second** `spawn_session` on the same
+  task created a *second, non-primary* session instead of continuing the first.
+  Every multi-step or looping workflow — exactly Design 6's target — takes more
+  than one turn per task, so the task's history fragments across sessions.
 
-The one useful takeaway: because routing is session-agnostic, a future
-`POST /tasks/:id/start-current-step` (Design 5) would be trivial to add — it only
-needs to call the same `autoStartStepPrompt` the on-enter path already uses.
+(This corrects an earlier source-only guess that `spawn_session` is *always* a
+non-primary session: it is primary on turn 1, non-primary from turn 2.)
+
+The REST quick-chat path is also unusable: it creates a **new ephemeral task**,
+not a turn on an already-parked one.
+
+**Verdict of this probe:** `spawn_session` and quick-chat do not provide a clean
+"start this task's current step in place" call. `spawn_session` sends the wrong
+prompt and fragments into a peer session; quick-chat spawns a new ephemeral task.
+Both are ruled out. But the primitive that matches auto-start *does* exist and
+*is* reachable — just over a surface this probe didn't try. See the
+re-assessment below.
+
+The useful takeaway stands: because routing is session-agnostic (confirmed live),
+Kandev's existing `on_turn_complete` routing does the rest once the right turn is
+started the right way.
+
+### Re-assessment — the `workflow_step` launch intent (source-verified)
+
+Kandev's `session.launch` action takes an `intent` field. One intent —
+`workflow_step` — is *exactly* the auto-start primitive Design 5/6 needs, and it
+is not the peer/quick-chat framing the probe rejected. Source
+(`orchestrator/session_launch.go`, `task_operations.go`, `workflow_callbacks.go`):
+
+- **It is literally what auto-start runs.** The `auto_start_agent` on-enter
+  callback is `LaunchSession{Intent: workflow_step, SessionID, WorkflowStepID}`
+  (`workflow_callbacks.go:181`). Design 5's whole premise is "do what auto-start
+  does, but on the pacer's clock." This intent *is* that, verbatim.
+- **Right prompt — no duplication.** `launchWorkflowStep → StartSessionForWorkflowStep`
+  calls `buildWorkflowPrompt` internally (`task_operations.go:1281`), performing
+  the `{{task_prompt}}` interpolation of the step template. This is the exact
+  `buildWorkflowPrompt` the probe warned the pacer would have to re-implement —
+  the pacer no longer has to. Step plan mode (`OnEnterEnablePlanMode`) is applied
+  too.
+- **Same session — no fragmentation.** It runs `PromptTask` on the *passed-in*
+  session (`task_operations.go:1288`), not a new peer session. It first
+  `advanceTaskWorkflowStep` (sets the task's step) and `ensureSessionRunning`
+  (resumes a stopped session, or starts the agent on a CREATED/prepared
+  workspace). So turn 2, 3, … all continue the one primary session — the failure
+  mode that killed `spawn_session` does not occur.
+- **Routing still fires.** Nothing here bypasses `on_turn_complete`; the turn's
+  completion routes the task as normal (already confirmed session-agnostic).
+
+**Reachability — the one real cost.** This intent is exposed over the
+**WebSocket** protocol: action `session.launch` (`pkg/websocket/actions.go`),
+handled by `wsLaunchSession`, which forwards the full `LaunchSessionRequest`
+(any intent) to `LaunchSession` (`orchestrator/handlers/handlers.go:79`). It is
+*not* on a generic REST route, and MCP's `spawn_session` hardcodes `IntentStart`,
+so neither the REST nor the MCP surface reaches it. The frontend drives it over
+WebSocket routinely — it is a first-class external API, not an "internal" path.
+The pacer today is REST-only (`pacer.py`), so adopting this means adding a small
+WebSocket client that sends one message:
+
+```json
+{ "action": "session.launch",
+  "payload": { "task_id": "…", "session_id": "…",
+               "intent": "workflow_step", "workflow_step_id": "…" } }
+```
+
+**First-turn nuance.** `workflow_step` needs an existing `session_id`. For a
+never-run task, use the same public action with `intent: start` and the current
+`workflow_step_id`. With no prompt supplied, Kandev uses the task description,
+applies the step template and plan mode, chooses the step's agent profile, and
+creates the primary session. Later turns use `intent: workflow_step`.
+
+**Important limits.**
+
+- A step that changes the agent profile and has a prompt is auto-launched by
+  Kandev even when `auto_start_agent` is absent. That bypasses the pacer.
+- `workflow_step_id` is not checked against the task's current step. If the task
+  moves after the pacer reads it, this call can move it back to a stale step.
+- The pacer still needs WebSocket reconnect, response matching, and duplicate
+  start protection.
+
+**Revised verdict.** The launch primitive is confirmed and requires no Kandev
+change. The source trace reaches the public WebSocket handler, and Kandev's
+`TestResolveIntent` and `TestPromptTask_PassthroughRoutesToPTYStdin` tests pass.
+It uses Kandev's common prompt path, so it is equally applicable to Claude Code,
+Codex, and Hermes Agent profiles.
+
+However, the profile-switch bypass and stale-step race mean Design 6 is safe
+only for controlled workflows with one stable agent profile and no competing
+task moves. It does not satisfy the requirement for every arbitrarily complex
+workflow. Design 12 remains the general no-Kandev-change solution.
 
 ## 7. One shared launchpad step
 
@@ -209,6 +288,12 @@ profiles launch their agent directly.
 
 - Keep **Design 1** for a simple flat backlog.
 - Use **Design 4** when only Kandev's move API may be used.
-- Prefer **Design 12, the ACP turnstile**, for multi-step or branching workflows
-  across Claude Code, Codex, and Hermes Agent.
+- **Design 6 via the `workflow_step` launch intent** now realizes Design 5
+  (Kandev routes, pacer times, step-accurate, one primary session) with **no
+  Kandev source change** — at the cost of the pacer speaking Kandev's WebSocket
+  protocol. Prefer it over Design 4/5 when a WebSocket client is acceptable and
+  the workflow branches or loops; validate the three live items above first.
+- Prefer **Design 12, the ACP turnstile**, when the pacer must stay agnostic to
+  Kandev's protocol and work identically across Claude Code, Codex, and Hermes
+  Agent — it gates at the agent boundary rather than the Kandev boundary.
 - Do not use history inference for branching workflows.
