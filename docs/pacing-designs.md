@@ -19,7 +19,7 @@ of next step.
 | 2. Next-step marker | 1 | Usually | Yes | Correct but duplicates state |
 | 3. Infer from history | 1 | No | No | Only safe for linear flows |
 | 4. Waiting/running pairs | One per stage | No | Yes | Reliable but verbose |
-| 5. Start in place | 0 | Maybe | Yes | Clean model; needs a start call |
+| 5. Start in place | 0 | Maybe | Usually | Clean model; profile changes can bypass it |
 | 6. Existing launch surface | 0 | No | Usually | Primitive confirmed; not universal |
 | 7. Shared launchpad | 1 | No | Yes in theory | Racy and loses step settings |
 | 8. Shadow workflow | 0 in the main flow | No | Yes | Duplicates the whole workflow |
@@ -66,113 +66,36 @@ the task to its matching running step.
 - **Bad:** It nearly doubles the workflow and makes every transition harder to
   configure.
 
-## 5. Universal gate: start in place
+## 5. Start in place
 
 Disable auto-start on all work steps. Kandev still routes a completed task to
 the correct next step, where it waits. The pacer starts the next turn without
 moving the task.
 
-- **Good:** Kandev owns routing and the pacer owns timing. Workflow complexity
-  no longer matters.
+- **Good:** Kandev owns routing and the pacer owns timing. Ordinary branches
+  and loops need no special handling.
 - **Bad:** The pacer needs a reliable "start this task's current step" operation.
   A generic REST endpoint was not found; using Kandev's WebSocket protocol adds
-  session-state and reconnect complexity.
+  session-state and reconnect complexity. Kandev can also auto-launch a step
+  after an agent-profile change, bypassing this gate.
 
 ## 6. Use an existing session-launch surface
 
-Kandev has internal, MCP, WebSocket, and quick-chat paths that can launch
-sessions. One of them might provide the start operation needed by Design 5.
+Kandev has several ways to launch a session. The important one is the public
+WebSocket action `session.launch` with `intent: workflow_step`.
 
-- **Good:** Could implement start-in-place without changing Kandev.
-- **Bad:** Starting an additional or quick-chat session is not necessarily the
-  same as continuing the task's primary session. It must be tested to confirm
-  that the step prompt, agent profile, and `on_turn_complete` routing all work.
+### Probe result
 
-### Probe result — `spawn_session` and quick-chat ruled out (verified empirically)
+The live probe and source trace found three different behaviors:
 
-This probe tested two of the surfaces — `spawn_session` and REST quick-chat. It
-did **not** test the `workflow_step` launch intent, which the re-assessment below
-covers and which changes the overall verdict.
+- `spawn_session` sends the caller's text, adds peer-agent framing, and creates
+  another session on later turns. It is the wrong operation.
+- Quick chat creates a separate temporary task. It is also the wrong operation.
+- `workflow_step` is the operation used by Kandev's own auto-start callback. It
+  continues the supplied session, builds the configured step prompt, applies
+  plan mode, and leaves `on_turn_complete` routing unchanged.
 
-I settled this with a live experiment against a running Kandev, then deleted
-everything. I created a throwaway workflow with two identical steps —
-`GateManual` (auto-start **off**) and `GateAuto` (auto-start **on**) — each
-carrying the same marker prompt (`[GATE PHASE MARKER] Reply with GATE-PROMPT-SEEN`)
-and each routing `on_turn_complete → Sink`. A parked task on `GateManual` was
-released with `spawn_session`; a control task auto-started on `GateAuto`.
-
-**What works — routing is session-agnostic.** The `spawn_session` turn's
-completion fired the step's `on_turn_complete`: the task moved `GateManual → Sink`
-on its own. So the *start* mechanism and the *routing* mechanism are decoupled —
-you do not have to start the turn the "official" way for Kandev to route it.
-
-**What breaks it — the turn is the wrong turn.**
-
-- **Wrong prompt.** The control agent received the **step's** prompt and replied
-  `GATE-PROMPT-SEEN`. The spawned agent received only the **caller's** prompt and
-  never saw the step prompt at all. To use `spawn_session` the pacer would have to
-  fetch each step's template and interpolate `{{task_prompt}}` itself, duplicating
-  Kandev's `buildWorkflowPrompt`. (`spawn_session` also wraps its prompt in a
-  "you are an additional peer helper session" system note — the wrong framing for
-  doing a step's work.)
-- **Session fragmentation from turn 2.** On the parked task's **first** turn the
-  spawned session became primary (fine). A **second** `spawn_session` on the same
-  task created a *second, non-primary* session instead of continuing the first.
-  Every multi-step or looping workflow — exactly Design 6's target — takes more
-  than one turn per task, so the task's history fragments across sessions.
-
-(This corrects an earlier source-only guess that `spawn_session` is *always* a
-non-primary session: it is primary on turn 1, non-primary from turn 2.)
-
-The REST quick-chat path is also unusable: it creates a **new ephemeral task**,
-not a turn on an already-parked one.
-
-**Verdict of this probe:** `spawn_session` and quick-chat do not provide a clean
-"start this task's current step in place" call. `spawn_session` sends the wrong
-prompt and fragments into a peer session; quick-chat spawns a new ephemeral task.
-Both are ruled out. But the primitive that matches auto-start *does* exist and
-*is* reachable — just over a surface this probe didn't try. See the
-re-assessment below.
-
-The useful takeaway stands: because routing is session-agnostic (confirmed live),
-Kandev's existing `on_turn_complete` routing does the rest once the right turn is
-started the right way.
-
-### Re-assessment — the `workflow_step` launch intent (source-verified)
-
-Kandev's `session.launch` action takes an `intent` field. One intent —
-`workflow_step` — is *exactly* the auto-start primitive Design 5/6 needs, and it
-is not the peer/quick-chat framing the probe rejected. Source
-(`orchestrator/session_launch.go`, `task_operations.go`, `workflow_callbacks.go`):
-
-- **It is literally what auto-start runs.** The `auto_start_agent` on-enter
-  callback is `LaunchSession{Intent: workflow_step, SessionID, WorkflowStepID}`
-  (`workflow_callbacks.go:181`). Design 5's whole premise is "do what auto-start
-  does, but on the pacer's clock." This intent *is* that, verbatim.
-- **Right prompt — no duplication.** `launchWorkflowStep → StartSessionForWorkflowStep`
-  calls `buildWorkflowPrompt` internally (`task_operations.go:1281`), performing
-  the `{{task_prompt}}` interpolation of the step template. This is the exact
-  `buildWorkflowPrompt` the probe warned the pacer would have to re-implement —
-  the pacer no longer has to. Step plan mode (`OnEnterEnablePlanMode`) is applied
-  too.
-- **Same session — no fragmentation.** It runs `PromptTask` on the *passed-in*
-  session (`task_operations.go:1288`), not a new peer session. It first
-  `advanceTaskWorkflowStep` (sets the task's step) and `ensureSessionRunning`
-  (resumes a stopped session, or starts the agent on a CREATED/prepared
-  workspace). So turn 2, 3, … all continue the one primary session — the failure
-  mode that killed `spawn_session` does not occur.
-- **Routing still fires.** Nothing here bypasses `on_turn_complete`; the turn's
-  completion routes the task as normal (already confirmed session-agnostic).
-
-**Reachability — the one real cost.** This intent is exposed over the
-**WebSocket** protocol: action `session.launch` (`pkg/websocket/actions.go`),
-handled by `wsLaunchSession`, which forwards the full `LaunchSessionRequest`
-(any intent) to `LaunchSession` (`orchestrator/handlers/handlers.go:79`). It is
-*not* on a generic REST route, and MCP's `spawn_session` hardcodes `IntentStart`,
-so neither the REST nor the MCP surface reaches it. The frontend drives it over
-WebSocket routinely — it is a first-class external API, not an "internal" path.
-The pacer today is REST-only (`pacer.py`), so adopting this means adding a small
-WebSocket client that sends one message:
+The useful request is:
 
 ```json
 { "action": "session.launch",
