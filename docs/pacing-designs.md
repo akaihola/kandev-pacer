@@ -288,11 +288,9 @@ profiles launch their agent directly.
 
 - Keep **Design 1** for a simple flat backlog.
 - Use **Design 4** when only Kandev's move API may be used.
-- **Design 6 via the `workflow_step` launch intent** now realizes Design 5
-  (Kandev routes, pacer times, step-accurate, one primary session) with **no
-  Kandev source change** — at the cost of the pacer speaking Kandev's WebSocket
-  protocol. Prefer it over Design 4/5 when a WebSocket client is acceptable and
-  the workflow branches or loops; validate the three live items above first.
+- Use **Design 6** only for controlled workflows with one stable agent profile
+  and no competing task moves. Its WebSocket launch primitive is real, but
+  Kandev can bypass it after an agent-profile change.
 - Prefer **Design 12, the ACP turnstile**, when the pacer must stay agnostic to
   Kandev's protocol and work identically across Claude Code, Codex, and Hermes
   Agent — it gates at the agent boundary rather than the Kandev boundary.
