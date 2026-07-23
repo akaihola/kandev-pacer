@@ -115,6 +115,9 @@ creates the primary session. Later turns use `intent: workflow_step`.
   Kandev even when `auto_start_agent` is absent. That bypasses the pacer.
 - `workflow_step_id` is not checked against the task's current step. If the task
   moves after the pacer reads it, this call can move it back to a stale step.
+- A session awaiting review approval (`ReviewStatus = pending`) rejects the call
+  outright — a step with an approval gate cannot be released by the pacer until
+  the reviewer acts.
 - The pacer still needs WebSocket reconnect, response matching, and duplicate
   start protection.
 
