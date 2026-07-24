@@ -331,7 +331,10 @@ immediately — and it survives normal step edits, which round-trip the loaded
 value. It does not survive a workflow re-import, which recreates the steps
 with the default `"custom"`. Because the tag can silently reset, treat a
 hand-set `stage_type` as a corroborating hint for the startup lint — never
-as the operative classifier.
+as the operative classifier. `make_paced.py` packages the escape hatch: one
+command strips `auto_start_agent` from every step and normalizes `stage_type`
+to match the routing-derived classification, so re-running it after an import
+(or a UI edit that re-enabled auto-start) restores the paced configuration.
 
 The classifier that works is derived from routing, which the step API does
 let you write: **a work step is a step whose `on_turn_complete` events

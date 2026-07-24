@@ -1,0 +1,67 @@
+#!/usr/bin/env -S uv run --script
+# /// script
+# requires-python = ">=3.11"
+# dependencies = []
+# ///
+"""Pure planning tests for make_paced.py (no database). Run: uv run test_make_paced.py"""
+from make_paced import plan_changes, planned_steps, strip_auto_start, target_stage
+
+def _step(id, name, events=None, stage="custom"):
+    return {"id": id, "name": name, "events": events or {}, "stage_type": stage,
+            "is_start_step": id == "bk", "position": 0, "agent_profile_id": "",
+            "prompt": "", "auto_advance_requires_signal": 0}
+
+# The live pre-reconfig shape: auto-start plus a completion route on one step.
+DIRTY_EVENTS = {"on_enter": [{"type": "auto_start_agent"}],
+                "on_turn_complete": [{"type": "move_to_step", "config": {"step_id": "x"}}]}
+
+def test_strip_auto_start():
+    ev, n = strip_auto_start(DIRTY_EVENTS)
+    assert n == 1
+    assert "on_enter" not in ev                                   # emptied trigger dropped
+    assert ev["on_turn_complete"] == DIRTY_EVENTS["on_turn_complete"]  # routing untouched
+    assert strip_auto_start({}) == ({}, 0)
+    assert strip_auto_start(None) == ({}, 0)
+    # only the auto_start_agent action goes; siblings under the same trigger stay
+    ev, n = strip_auto_start({"on_enter": [{"type": "auto_start_agent"}, {"type": "add_label"}]})
+    assert n == 1 and ev == {"on_enter": [{"type": "add_label"}]}
+
+def test_target_stage():
+    review = frozenset({"review"})
+    otc = {"on_turn_complete": [{"type": "move_to_next"}]}
+    assert target_stage(_step("ip", "In Progress", otc), review) == "work"
+    assert target_stage(_step("rv", "Review"), review) == "review"
+    assert target_stage(_step("rv", "  REVIEW  "), review) == "review"      # case/space-insensitive
+    assert target_stage(_step("bk", "Backlog"), review) == "custom"
+    # routing wins over the name: a routing step named Review is still 'work'
+    assert target_stage(_step("rv", "Review", otc), review) == "work"
+
+def test_plan_changes():
+    steps = [_step("bk", "Backlog"),
+             _step("ip", "In Progress", DIRTY_EVENTS, stage="custom"),
+             _step("rv", "Review", {"on_turn_start": [{"type": "move_to_step"}]}),
+             _step("dn", "Done", {"on_turn_start": [{"type": "move_to_step"}]})]
+    changes = plan_changes(steps)
+    assert [c["id"] for c in changes] == ["ip", "rv"]             # Backlog/Done already correct
+    ip, rv = changes
+    assert ip["removed"] == 1 and ip["stage_to"] == "work" and "on_enter" not in ip["events"]
+    assert rv["removed"] == 0 and rv["stage_to"] == "review"
+    # extra --review names are honored
+    assert [c["stage_to"] for c in plan_changes(steps, frozenset({"review", "done"}))
+            if c["id"] == "dn"] == ["review"]
+    # applying the plan makes a second plan empty (idempotent)
+    assert plan_changes(planned_steps(steps, changes)) == []
+
+def test_planned_steps_merge():
+    steps = [_step("ip", "In Progress", DIRTY_EVENTS), _step("bk", "Backlog")]
+    after = planned_steps(steps, plan_changes(steps))
+    assert [s["id"] for s in after] == ["ip", "bk"]               # order and untouched steps kept
+    assert after[0]["stage_type"] == "work" and "on_enter" not in after[0]["events"]
+    assert after[1] == steps[1]
+
+if __name__ == "__main__":
+    tests = [(n, f) for n, f in sorted(globals().items()) if n.startswith("test_") and callable(f)]
+    for name, fn in tests:
+        fn()
+        print(f"ok {name}")
+    print(f"\n{len(tests)} passed")

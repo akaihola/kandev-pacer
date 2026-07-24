@@ -93,14 +93,23 @@ launches until the turn is observed to start.
 ## Run
 
 ```bash
+./make_paced.py             # list workflows in the kandev SQLite DB
+./make_paced.py 'Paced Kanban'          # dry run: show the edits pacing needs
+./make_paced.py 'Paced Kanban' --apply  # write them (server can stay up; WAL)
 ./pacer.py --dump-usage     # inspect live usage payload first
 ./pacer.py                  # start the pacing loop (lints the workflow on startup)
 uv run test_pace.py         # pure pacing + classification tests (no network)
+uv run test_make_paced.py   # pure workflow-adaptation planning tests
 ```
 
-**Workflow setup:** remove `on_enter: auto_start_agent` from every work step (the startup lint
-flags any that remain). The live "Paced Kanban" needs only that one change — Backlog already
-parks the queue and In Progress already routes away on completion.
+**Workflow setup:** `make_paced.py` adapts an existing workflow in place: it strips every
+`on_enter: auto_start_agent` action and normalizes `stage_type` (`work` for steps that route
+away on `on_turn_complete` — the same classifier the pacer uses — `review` for parked steps
+named Review or listed via `--review`, `custom` otherwise). It edits `~/.kandev/data/kandev.db`
+directly (`--db`/`KANDEV_DB` to override) because `stage_type` has no API/UI/import surface;
+dry run is read-only, and a workflow re-import silently resets `stage_type`, so re-run it after
+any import. The steps it leaves alone still show as `ok` lines, and it prints the same lint
+warnings the pacer would.
 
 Config via env: `KANDEV_URL`, `KANDEV_WS_URL` (default derives `ws://host/ws`),
 `PACED_WORKFLOW_ID`, `PACER_PROVIDER` (default `anthropic`), `PACER_CONCURRENCY`, `PACER_ALPHA`,
