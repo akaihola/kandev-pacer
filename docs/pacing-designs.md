@@ -318,11 +318,20 @@ at a launchable step" pacer would relaunch that task's last step forever.
 The tempting answer is a dead end. Each workflow step carries a `stage_type`
 field with the values `"work"`, `"review"`, `"approval"`, and `"custom"` — a
 semantic tag the workflow engine explicitly never branches on, seemingly
-purpose-built for this. But nothing can set it on a user-created workflow:
-the step create and update APIs have no such field, the settings UI only
-displays it, and the import/export format omits it. Only Kandev's built-in
-workflow templates ship non-`"custom"` values, so on user workflows every
-step reads `"custom"` and the field carries no signal.
+purpose-built for this. But no supported surface can set it on a
+user-created workflow: the step create and update APIs have no such field,
+the settings UI only displays it, and the import/export format omits it.
+Only Kandev's built-in workflow templates ship non-`"custom"` values.
+
+There is an unsupported escape hatch: writing `workflow_steps.stage_type`
+directly in Kandev's SQLite database. This works on a live server — the
+database runs in WAL mode, so a brief external write coexists with it, and
+steps are read from the database on every use, so the change is visible
+immediately — and it survives normal step edits, which round-trip the loaded
+value. It does not survive a workflow re-import, which recreates the steps
+with the default `"custom"`. Because the tag can silently reset, treat a
+hand-set `stage_type` as a corroborating hint for the startup lint — never
+as the operative classifier.
 
 The classifier that works is derived from routing, which the step API does
 let you write: **a work step is a step whose `on_turn_complete` events

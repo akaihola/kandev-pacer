@@ -6,7 +6,13 @@
 #   admits from it with session.launch into In Progress.
 # - Review/Done keep their on_turn_start rules that re-queue manual
 #   re-prompts back into Backlog.
-# stage_type is not settable via import, API, or UI - it is omitted.
+# stage_type is not settable via import, API, or UI - it is omitted here.
+# On the live gogo instance it was set by direct SQLite update on
+# 2026-07-24 (In Progress = "work", Review = "review"). Re-importing this
+# file recreates the steps and silently resets stage_type to "custom",
+# so re-apply the update after any import:
+#   UPDATE workflow_steps SET stage_type='work'   WHERE name='In Progress' AND workflow_id='<id>';
+#   UPDATE workflow_steps SET stage_type='review' WHERE name='Review'      AND workflow_id='<id>';
 version: 1
 type: kandev_workflow
 workflows:
