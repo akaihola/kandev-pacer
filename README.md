@@ -47,11 +47,12 @@ While under the steady-burn curve, the pacer starts the next turn via the WebSoc
   `intent: workflow_step` for a re-queued one. A supplied `workflow_step_id` moves the task
   (`moveTaskToWorkflowStep` / `advanceTaskWorkflowStep`), so no separate move API is needed.
 
-**Work-step classification is read from Kandev, not a local list.** A step is a *work step*
-iff its `on_turn_complete` carries a transition action (`move_to_next` | `move_to_previous` |
-`move_to_step`) — writable via the normal step-edit API and self-consistent with the rule that
-a completed turn always moves the task off the step (so "task sitting at a work step" ⇒ "turn
-pending", no relaunch loop). `stage_type: "work"` is a corroborating hint only (it is read-only
+**Work-step classification is read from Kandev, not a local list.** A step counts as a *work
+step* when — and only when — its `on_turn_complete` carries a transition action (`move_to_next` |
+`move_to_previous` | `move_to_step`) — writable via the normal step-edit API and self-consistent
+with the rule that a completed turn always moves the task off the step. That gives us a handy
+guarantee: if a task is *still sitting* on a work step, its turn hasn't finished yet, so the
+pacer won't double-launch it. `stage_type: "work"` is a corroborating hint only (it is read-only
 via the step API; settable only out of band, via workflow import or a direct SQLite write).
 Parked steps (Review/Done, the queue)
 must route via `on_turn_start`/`on_comment`, never `on_turn_complete`. On startup the pacer
