@@ -63,6 +63,12 @@ lints the workflow and warns about bypass/ambiguity (leftover `auto_start_agent`
 Routine/UI burn. When high-priority work pushes `c` above `e`, headroom goes negative and the
 gate closes automatically. You classify by *which workflow* you create a task in.
 
+`PACER_PROVIDER` picks which usage agent to gate on. If it matches no provider in the payload
+(a typo, or a renamed provider), the pacer would otherwise see zero windows and pace *blind* —
+fully open, backstop dead. So a mismatch **fails closed**: the pacer withholds and logs
+`check PACER_PROVIDER` instead. A genuinely fresh account (provider present, no windows yet)
+still paces normally.
+
 **Backstop** (`PACER_BACKSTOP`, default `0.97`; `≥1.0` disables): near an absolute ceiling the
 pacer withholds *all* launches (including admissions). A hard mid-turn lockout on an
 already-running turn is **not** preventable here — halting a live turn needs a WebSocket

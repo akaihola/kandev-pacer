@@ -6,7 +6,8 @@
 """Pure pacing + classification tests (no network). Run: uv run test_pace.py"""
 from pacer import (
     clamp01, elapsed_frac, headroom, worst_headroom, gate_open, ceiling_breached,
-    parse_windows, is_work_step, work_step_ids, queue_step_id, admission_target,
+    parse_windows, usage_providers, provider_missing,
+    is_work_step, work_step_ids, queue_step_id, admission_target,
     lint_workflow, newest_session, is_launchable, launch_target, pick_intent, prune_booked,
 )
 
@@ -83,6 +84,14 @@ def test_parse_windows_skips_unknown_label():
     u = {"agents": [{"usage": {"provider": "anthropic", "windows": [
         {"label": "1-minute", "utilization_pct": 5, "reset_at": "2026-07-23T19:39:59Z"}]}}]}
     assert parse_windows(u, provider="anthropic") == []
+
+def test_provider_guard():
+    """A PACER_PROVIDER that matches nothing must be caught, not silently fail open."""
+    assert usage_providers(USAGE) == {"anthropic", "openai"}
+    assert usage_providers({"agents": []}) == set()
+    assert provider_missing(USAGE, "claude")            # typo -> present providers, ours absent -> guard fires
+    assert not provider_missing(USAGE, "anthropic")     # ours is present -> fine
+    assert not provider_missing({"agents": []}, "anthropic")  # empty payload -> can't tell -> don't withhold
 
 # --- workflow step fixtures ---
 
@@ -164,13 +173,27 @@ def test_newest_session():
     assert newest_session([_sess("a", "X", "1"), _sess("b", "X", "3"), _sess("c", "X", "2")])["id"] == "b"
 
 def test_prune_booked():
+    now, ttl = 1000.0, 360.0
     tasks = [{"id": "t", "workflow_step_id": "ip"}]
     # still WAITING at same (step, session) -> booking retained (launch not yet taken effect)
     ts_waiting = {"t": [_sess("s", "WAITING_FOR_INPUT")]}
-    assert prune_booked({("t", "ip", "s")}, tasks, ts_waiting) == {("t", "ip", "s")}
+    assert prune_booked({("t", "ip", "s"): 990.0}, tasks, ts_waiting, now, ttl) == {("t", "ip", "s"): 990.0}
     # turn started (RUNNING) -> booking cleared
     ts_running = {"t": [_sess("s", "RUNNING")]}
-    assert prune_booked({("t", "ip", "s")}, tasks, ts_running) == set()
+    assert prune_booked({("t", "ip", "s"): 990.0}, tasks, ts_running, now, ttl) == {}
+
+def test_prune_booked_never_run_admission():
+    """W1: a never-run admission booking (sid None) must survive while its session is invisible."""
+    now, ttl = 1000.0, 360.0
+    at_bk = [{"id": "t", "workflow_step_id": "bk"}]
+    no_sess = {"t": []}                                     # session not yet surfaced (detached goroutine)
+    # within TTL -> retained, so is_launchable stays guarded and no second intent:start fires
+    assert prune_booked({("t", "bk", None): 900.0}, at_bk, no_sess, now, ttl) == {("t", "bk", None): 900.0}
+    # older than TTL -> expired, so a silently-failed launch can retry instead of wedging
+    assert prune_booked({("t", "bk", None): 500.0}, at_bk, no_sess, now, ttl) == {}
+    # session surfaced -> the None key no longer matches the task's key -> dropped naturally
+    surfaced = {"t": [_sess("s2", "RUNNING")]}
+    assert prune_booked({("t", "bk", None): 900.0}, at_bk, surfaced, now, ttl) == {}
 
 # --- lint ---
 
@@ -189,6 +212,12 @@ def test_lint_workflow():
     # signal-gated work step -> flagged.
     assert any("step_complete" in w for w in lint_workflow(
         [_step("x", "X", otc=["move_to_step"], signal=True)]))
+    # P2: a PARKED step (no on_turn_complete) leaks too -- auto_start_agent / profile+prompt
+    # auto-launch on entry regardless of classification, so both must be flagged there.
+    assert any("auto_start_agent" in w for w in lint_workflow(
+        [_step("rv", "Review", oe=["auto_start_agent"], ots=["move_to_step"])]))
+    assert any("agent-profile" in w for w in lint_workflow(
+        [_step("rv", "Review", ots=["move_to_step"], profile="p", prompt="review it")]))
     # clean workflow -> no warnings.
     assert lint_workflow(CLEAN) == []
 

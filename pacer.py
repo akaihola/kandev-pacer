@@ -32,6 +32,10 @@ ALPHA = float(os.environ.get("PACER_ALPHA", "1.0"))          # reserve slope; <1
 RESUME_MARGIN = float(os.environ.get("PACER_RESUME_MARGIN", "0.0"))  # hysteresis reopen threshold
 BACKSTOP = float(os.environ.get("PACER_BACKSTOP", "0.97"))   # absolute cutoff; >=1.0 disables
 INTERVAL = int(os.environ.get("PACER_INTERVAL", "120"))      # seconds between ticks
+# How long a never-run admission booking (session not yet visible) is held before it may
+# retry -- long enough to outlast Kandev's detached launch goroutine, short enough that a
+# launch that silently failed still gets another shot instead of wedging forever.
+BOOKING_TTL = 3 * INTERVAL
 ADMISSION_OVERRIDE = os.environ.get("PACER_ADMISSION_STEP_ID") or None
 WS_URL = os.environ.get("KANDEV_WS_URL") or (
     URL.replace("https://", "wss://").replace("http://", "ws://") + "/ws")
@@ -107,6 +111,21 @@ def parse_windows(usage, provider=None):
                         "resets_at": _epoch(ra), "duration_s": dur})
     return out
 
+def usage_providers(usage):
+    """Provider names present in the /agents/usage payload."""
+    return {(a.get("usage") or {}).get("provider") for a in usage.get("agents", [])} - {None}
+
+def provider_missing(usage, provider):
+    """True if the payload names some providers but not ours -- a likely PACER_PROVIDER typo.
+
+    Guards a fail-OPEN hole: with no matching windows, worst_headroom is 1.0 (fully open) and
+    the ceiling never trips, so a misconfigured provider would silently disable all pacing. An
+    empty payload (no providers at all) returns False -- we can't tell misconfig from a fresh
+    account there, so we don't withhold on it.
+    """
+    provs = usage_providers(usage)
+    return bool(provs) and provider not in provs
+
 # --- workflow step classification (pure) ---
 
 def is_work_step(step):
@@ -144,11 +163,13 @@ def lint_workflow(steps):
     for s in steps:
         name = s.get("name", "?")
         stage = (s.get("stage_type") or "").lower()
+        # These two auto-launch a turn on step ENTRY, before the pacer gets to act, so they
+        # bypass the gate on ANY step -- a parked Review step leaks just as a work step does.
+        if _has_on_enter(s, "auto_start_agent"):
+            warns.append(f"step {name!r} still has on_enter:auto_start_agent (bypasses the gate)")
+        if s.get("agent_profile_id") and (s.get("prompt") or "").strip():
+            warns.append(f"step {name!r} has both an agent-profile override and a prompt (auto-launch bypass)")
         if s["id"] in works:
-            if _has_on_enter(s, "auto_start_agent"):
-                warns.append(f"work step {name!r} still has on_enter:auto_start_agent (bypasses the gate)")
-            if s.get("agent_profile_id") and (s.get("prompt") or "").strip():
-                warns.append(f"work step {name!r} has both an agent-profile override and a prompt (auto-launch bypass)")
             if s.get("auto_advance_requires_signal"):
                 warns.append(f"work step {name!r} gates routing on the agent step_complete signal")
             if stage in ("review", "approval"):
@@ -202,20 +223,32 @@ def pick_intent(sessions):
         return ("start", None)
     return ("workflow_step", newest["id"])
 
-def prune_booked(booked, tasks, task_sessions):
-    """Keep a booking only while its task still looks launchable at the same (step, session).
+def prune_booked(booked, tasks, task_sessions, now, ttl):
+    """Keep a booking (key -> booked_at) only while it still guards against a double start.
 
-    Once the launched turn starts (state leaves WAITING) or the task routes away, the key
-    is dropped -- bounding memory and self-clearing the duplicate-start guard.
+    Two retention rules, one per launch shape:
+    - Session already exists (sid set): keep only while it reads WAITING. Once the launched
+      turn starts (state leaves WAITING) or the task routes away, the key stops matching and
+      is dropped -- bounding memory and self-clearing the guard.
+    - Never-run admission (sid None): the launched session may not have surfaced in the API
+      yet (Kandev launches in a detached goroutine), so the task still reads "at the queue,
+      no session" and would look launchable again. Hold the booking until the session appears
+      (the key stops matching) or `ttl` elapses -- the TTL lets a launch that silently failed
+      retry instead of wedging the task forever.
     """
-    keep = set()
+    keep = {}
     for t in tasks:
         newest = newest_session(task_sessions.get(t["id"], []))
         sid = newest["id"] if newest else None
         st = newest["state"] if newest else None
         key = (t["id"], t.get("workflow_step_id", ""), sid)
-        if key in booked and st == READY_STATE:
-            keep.add(key)
+        if key not in booked:
+            continue
+        if sid is None:
+            if now - booked[key] < ttl:
+                keep[key] = booked[key]
+        elif st == READY_STATE:
+            keep[key] = booked[key]
     return keep
 
 # --- kandev glue (IO) ---
@@ -263,7 +296,7 @@ def ws_launch(task_id, intent, session_id, workflow_step_id, req_id="pace-1"):
 
 # --- pacing loop ---
 
-_BOOKED = set()          # (task_id, step_id, session_id) launched this window
+_BOOKED = {}             # (task_id, step_id, session_id) -> booked_at (launch issued)
 _WORK_STEPS = set()
 _QUEUE_STEP = None
 _ADMISSION = None
@@ -273,6 +306,10 @@ def tick(was_open):
     usage = _req("GET", "/api/v1/agents/usage")
     now = time.time()
     windows = parse_windows(usage)
+    if not windows and provider_missing(usage, PROVIDER):
+        print(f"provider {PROVIDER!r} not in usage {sorted(usage_providers(usage))} "
+              f"-> WITHHOLDING (check PACER_PROVIDER)", flush=True)
+        return False  # fail closed: never pace freely against a quota we can't see
     wh = worst_headroom(windows, now, ALPHA)
     if ceiling_breached(windows, BACKSTOP):
         print(f"headroom={wh:+.3f} CEILING (consumed>{BACKSTOP:.2f}) -> withholding", flush=True)
@@ -284,7 +321,7 @@ def tick(was_open):
 
     tasks = paced_tasks()
     task_sessions = {t["id"]: sessions_of(t["id"]) for t in tasks}
-    _BOOKED = prune_booked(_BOOKED, tasks, task_sessions)
+    _BOOKED = prune_booked(_BOOKED, tasks, task_sessions, now, BOOKING_TTL)
     running = sum(1 for t in tasks for s in task_sessions[t["id"]] if s.get("state") in RUNNING_STATES)
     if running >= CONCURRENCY:
         print(f"headroom={wh:+.3f} open, full ({running}/{CONCURRENCY})", flush=True)
@@ -297,13 +334,21 @@ def tick(was_open):
         return is_open
 
     task = launchable[0]
-    # Resolve step + newest live session immediately before the call (never cached).
+    # Re-read the task's current step immediately before launching. The workflow_step_id we
+    # pass is an unvalidated move, so acting on the top-of-tick snapshot could drag a task
+    # that was moved in between (human board edit, another agent's move_task) back to a stale
+    # step. If it moved since selection, skip and re-evaluate next tick. Resolve the newest
+    # live session now too -- a profile-switch step spawns a fresh one on entry.
+    fresh = next((t for t in paced_tasks() if t["id"] == task["id"]), None)
+    if fresh is None or fresh.get("workflow_step_id", "") != task.get("workflow_step_id", ""):
+        print(f"headroom={wh:+.3f} open, {task['id']} moved since selection -> skip", flush=True)
+        return is_open
+    step = fresh.get("workflow_step_id", "")
     sessions = sessions_of(task["id"])
-    step = task.get("workflow_step_id", "")
     intent, sid = pick_intent(sessions)
-    target = launch_target(task, _WORK_STEPS, _QUEUE_STEP, _ADMISSION)
+    target = launch_target(fresh, _WORK_STEPS, _QUEUE_STEP, _ADMISSION)
     ws_launch(task["id"], intent, sid, target)
-    _BOOKED.add((task["id"], step, sid))
+    _BOOKED[(task["id"], step, sid)] = now
     print(f"headroom={wh:+.3f} open -> launched {task['id']} intent={intent} target={target} "
           f"({running + 1}/{CONCURRENCY})", flush=True)
     return is_open
