@@ -33,8 +33,9 @@ RESUME_MARGIN = float(os.environ.get("PACER_RESUME_MARGIN", "0.0"))  # hysteresi
 BACKSTOP = float(os.environ.get("PACER_BACKSTOP", "0.97"))   # absolute cutoff; >=1.0 disables
 INTERVAL = int(os.environ.get("PACER_INTERVAL", "120"))      # seconds between ticks
 # How long a never-run admission booking (session not yet visible) is held before it may
-# retry -- long enough to outlast Kandev's detached launch goroutine, short enough that a
-# launch that silently failed still gets another shot instead of wedging forever.
+# retry -- long enough to outlast the lag before a just-started session shows up in the API
+# (Kandev starts it in a background goroutine, detached from our launch call), short enough
+# that a launch that silently failed still gets another shot instead of wedging forever.
 BOOKING_TTL = 3 * INTERVAL
 ADMISSION_OVERRIDE = os.environ.get("PACER_ADMISSION_STEP_ID") or None
 WS_URL = os.environ.get("KANDEV_WS_URL") or (
