@@ -267,9 +267,14 @@ slot. Only then does Kandev run the step's normal completion route.
 Combine Designs 5 and 6: hold every task at its routed step, then start it in
 place with the confirmed launch primitive.
 
-Configuration, in workflow settings only: remove `auto_start_agent` from every
-paced step, and give no paced step both an agent-profile override and a step
-prompt (that combination auto-launches and would bypass the gate).
+Configuration, in workflow settings only:
+
+- remove `auto_start_agent` from every paced step;
+- give no paced step both an agent-profile override and a step prompt (that
+  combination auto-launches and would bypass the gate);
+- tag every step that should receive agent turns with `stage_type: "work"`,
+  and give every such step an `on_turn_complete` transition that routes the
+  task somewhere (see "Telling work steps from parked steps" below).
 
 Kandev still runs each step's completion route when a turn ends, so the task
 lands on the correct next step — through any branch, loop, or agent-driven
@@ -298,6 +303,47 @@ The pacer follows progress through the public WebSocket events
   The pacer needs WebSocket plumbing: reconnect, response matching, and
   duplicate-start protection. And it is coupled to Kandev's internal WebSocket
   actions, which are less stable than ACP.
+
+### Telling work steps from parked steps
+
+Removing auto-start erases a distinction Kandev's config used to carry: with
+`auto_start_agent` gone from every step, a task waiting at Implement and a
+task parked at Review or Done both sit with their session reading
+waiting-for-input. The session state alone cannot tell the pacer which tasks
+deserve a launch. And there is a second, sneakier ambiguity: a work step
+whose turn already ran, and whose routing kept the task in place, looks
+identical to one whose turn has not run yet — a naive "launch whatever waits
+at a launchable step" pacer would relaunch that task's last step forever.
+
+Kandev already has the answer to the first ambiguity. Each workflow step
+carries a `stage_type` field with the values `"work"`, `"review"`,
+`"approval"`, and `"custom"` — a semantic tag the workflow engine explicitly
+never branches on, exposed with the step's events by the workflow API. The
+rule: **the pacer launches only at steps tagged `stage_type: "work"`.** This
+is a launch whitelist stored on the steps themselves — a single source of
+truth that survives workflow edits, shows in the UI, and fails safe (an
+untagged step defaults to `"custom"` and is treated as parked). Verify at
+prototype time that the step-update API accepts `stage_type` on write; the
+read path exposes it already.
+
+The second ambiguity is solved by the routing convention above: every work
+step must route the task somewhere on turn completion. Then a completed turn
+always moves the task, so "task sitting at a work step" always means "turn
+pending" — the relaunch loop cannot form. The two rules cross-check each
+other: at startup the pacer fetches the workflow and warns about ambiguous
+steps (tagged `"work"` but no outgoing transition, or the reverse) before
+pacing anything.
+
+Alternatives considered and rejected: an environment-variable whitelist of
+step ids works and fails safe, but duplicates workflow structure outside
+Kandev (Design 2's objection) and silently rots when someone edits the
+workflow in the UI — keep it at most as an emergency override. A blacklist
+of parked steps fails open: a forgotten new Review-like step would receive
+agent turns. Heuristics on step names or prompt presence are too fragile.
+Independently of classification, the pacer keeps its own launch bookkeeping
+(task, step, launch issued, turn completed) — it already needs
+duplicate-start protection, and the same state closes any residual relaunch
+window if a workflow violates the convention.
 
 ### What the profile-switch convention costs
 
@@ -355,8 +401,9 @@ with a cancelled session.
 - Use **Design 4** when only Kandev's REST move API may be used; it is the one
   fully race-free gate.
 - Prefer **Design 13** for the stated criteria — no Kandev modification,
-  complicated and branching workflows, zero added steps. Its price is two
-  workflow conventions (no auto-start, no profile-switch step with a prompt)
+  complicated and branching workflows, zero added steps. Its price is three
+  workflow conventions (no auto-start; no profile-switch step with a prompt;
+  work steps tagged `stage_type: "work"` and always routing on completion)
   and WebSocket plumbing.
 - Use **Design 12, the ACP turnstile**, when the pacer must stay decoupled
   from Kandev's own protocol; it needs a backend-wide `PATH` shim and paces
