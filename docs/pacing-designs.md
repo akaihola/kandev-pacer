@@ -299,6 +299,50 @@ The pacer follows progress through the public WebSocket events
   duplicate-start protection. And it is coupled to Kandev's internal WebSocket
   actions, which are less stable than ACP.
 
+### What the profile-switch convention costs
+
+An agent profile bundles which agent runs a step and with which model. A step
+prompt is the step's own instruction template. Kandev implements multi-agent
+pipelines by combining the two on one step: entering the step switches to the
+step's profile and launches the new agent with the step's instructions.
+
+Design 13 bans only that combination — but the combination is where most of
+the multi-agent value lives:
+
+- **Cross-agent hand-offs with instructions.** "Implement under Claude Code,
+  then review under Codex with the prompt 'adversarially review the changes'"
+  is exactly a profile-switch step with a prompt.
+- **Per-step model tiering.** "Plan on a strong model, implement on a default
+  one, clean up on a cheap one" is done by switching profiles; any of those
+  steps that also carries its own template hits the ban.
+
+The two halves remain available, with limits:
+
+- **Same profile, any prompt:** fully paced, nothing lost. This is the common
+  single-agent case.
+- **Profile switch, empty prompt:** Kandev still creates the switched session
+  on step entry, and the pacer can launch it — but with no step template the
+  launch prompt falls back to the plain task description, so the new agent is
+  never told what its step is for.
+
+Three softening notes:
+
+- Keeping a banned step is a leak, not a breakage. Routing still works; the
+  step's turn simply launches immediately, outside the quota gate and the
+  pacer's concurrency cap. One unpaced turn per task through a rare review
+  step may be an acceptable trade.
+- Mitigations exist, each with a cost. The previous step's agent can leave a
+  hand-off message, which Kandev merges into the next launch prompt — but
+  that depends on agent discipline. Or the pacer can keep the step's template
+  in its own configuration and supply it at release time — but that
+  duplicates workflow state outside Kandev (Design 2's objection) and assumes
+  `session.launch` honors a caller-supplied prompt on the `workflow_step`
+  intent, which is unverified.
+- The bypass fires only for ACP-mode sessions. CLI-passthrough sessions do
+  not auto-launch on a profile switch, so for passthrough-only workflows the
+  convention is stricter than technically necessary. Keeping it anyway keeps
+  the rule simple.
+
 A tempting variant — leave auto-start on, watch for launches, and immediately
 `stop_task` anything over quota, relaunching it later — was rejected: the
 launch runs in a detached goroutine after the step change, so the stop is a
