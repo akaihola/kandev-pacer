@@ -272,9 +272,9 @@ Configuration, in workflow settings only:
 - remove `auto_start_agent` from every paced step;
 - give no paced step both an agent-profile override and a step prompt (that
   combination auto-launches and would bypass the gate);
-- tag every step that should receive agent turns with `stage_type: "work"`,
-  and give every such step an `on_turn_complete` transition that routes the
-  task somewhere (see "Telling work steps from parked steps" below).
+- give every step that should receive agent turns an `on_turn_complete`
+  transition that routes the task somewhere; a step without one is parked
+  (see "Telling work steps from parked steps" below).
 
 Kandev still runs each step's completion route when a turn ends, so the task
 lands on the correct next step — through any branch, loop, or agent-driven
@@ -315,24 +315,36 @@ whose turn already ran, and whose routing kept the task in place, looks
 identical to one whose turn has not run yet — a naive "launch whatever waits
 at a launchable step" pacer would relaunch that task's last step forever.
 
-Kandev already has the answer to the first ambiguity. Each workflow step
-carries a `stage_type` field with the values `"work"`, `"review"`,
-`"approval"`, and `"custom"` — a semantic tag the workflow engine explicitly
-never branches on, exposed with the step's events by the workflow API. The
-rule: **the pacer launches only at steps tagged `stage_type: "work"`.** This
-is a launch whitelist stored on the steps themselves — a single source of
-truth that survives workflow edits, shows in the UI, and fails safe (an
-untagged step defaults to `"custom"` and is treated as parked). Verify at
-prototype time that the step-update API accepts `stage_type` on write; the
-read path exposes it already.
+The tempting answer is a dead end. Each workflow step carries a `stage_type`
+field with the values `"work"`, `"review"`, `"approval"`, and `"custom"` — a
+semantic tag the workflow engine explicitly never branches on, seemingly
+purpose-built for this. But nothing can set it on a user-created workflow:
+the step create and update APIs have no such field, the settings UI only
+displays it, and the import/export format omits it. Only Kandev's built-in
+workflow templates ship non-`"custom"` values, so on user workflows every
+step reads `"custom"` and the field carries no signal.
 
-The second ambiguity is solved by the routing convention above: every work
-step must route the task somewhere on turn completion. Then a completed turn
-always moves the task, so "task sitting at a work step" always means "turn
-pending" — the relaunch loop cannot form. The two rules cross-check each
-other: at startup the pacer fetches the workflow and warns about ambiguous
-steps (tagged `"work"` but no outgoing transition, or the reverse) before
-pacing anything.
+The classifier that works is derived from routing, which the step API does
+let you write: **a work step is a step whose `on_turn_complete` events
+contain a transition action** (`move_to_next`, `move_to_previous`, or
+`move_to_step`); every other step is parked. This doubles as the fix for the
+second ambiguity, as a convention: every work step must route the task
+somewhere on turn completion. Then a completed turn always moves the task,
+so "task sitting at a work step" always means "turn pending" — the relaunch
+loop cannot form. The corollary is that a parked step must never carry an
+`on_turn_complete` transition; give human-driven steps `on_turn_start` rules
+instead, as the live Paced Kanban already does. At startup the pacer fetches
+the workflow and warns about suspicious steps — for example a step with a
+prompt but no transition — before pacing anything.
+
+The parked start step needs one special rule. New tasks land on the start
+step (Backlog), which is parked, so launch-in-place alone would never start
+them. The pacer instead admits from the start step directly into the first
+work step with a single call: `session.launch` with `intent: start` for a
+never-run task, or `intent: workflow_step` for a task re-queued with an
+existing session, passing the work step's id — both variants move the task
+and start the turn together. This keeps the board's meaning intact: Backlog
+shows what waits for quota, In Progress shows what actually runs.
 
 Alternatives considered and rejected: an environment-variable whitelist of
 step ids works and fails safe, but duplicates workflow structure outside
@@ -403,8 +415,7 @@ with a cancelled session.
 - Prefer **Design 13** for the stated criteria — no Kandev modification,
   complicated and branching workflows, zero added steps. Its price is three
   workflow conventions (no auto-start; no profile-switch step with a prompt;
-  work steps tagged `stage_type: "work"` and always routing on completion)
-  and WebSocket plumbing.
+  work steps always route on turn completion) and WebSocket plumbing.
 - Use **Design 12, the ACP turnstile**, when the pacer must stay decoupled
   from Kandev's own protocol; it needs a backend-wide `PATH` shim and paces
   only ACP-mode profiles.
