@@ -27,72 +27,84 @@ rising, so `h` climbs back to 0 on its own and the gate reopens with no external
 `e = clamp01(1 − (resets_at − now) / duration)`. Window durations are hardcoded
 (5h = 18000s, 7d = 604800s) since the payload gives `resets_at`, not duration.
 
-## Enforcement: admission control, not preemption
+## Enforcement: hold in place, launch on release (Design 13)
 
 Don't kill running turns — gate what's allowed to *start*. The unit is a **turn** (a prompt
-that spends quota), gated at the task boundary.
+that spends quota). This paces **complicated, multi-step, branching/looping** workflows, not
+just a flat queue. See [`docs/pacing-designs.md`](docs/pacing-designs.md) §13 for the full
+comparison of alternatives.
 
-- A **"Paced Kanban"** workflow holds low-priority tasks in a **Backlog** step whose events
-  are `{}` (no `auto_start_agent`) — tasks sit there inert.
-- The pacer moves one Backlog task at a time into the **In Progress** step (which has
-  `on_enter: auto_start_agent`) via `POST /api/v1/tasks/:id/move`. Entering that step
-  starts the agent.
-- Priority tiering is **free**: the gate reads *account-level* usage, which already includes
-  Routine/UI burn. When high-priority work pushes `c` above `e`, headroom goes negative and
-  the Backlog gate closes automatically. kandev needs no concept of priority — the shared
-  quota number is the coordination channel. You classify by *which workflow* you create a
-  task in.
-- Backstop (not yet implemented): near an absolute ceiling (`c > ~0.97` on any window),
-  `stop_task` low-priority in-flight to avoid a hard mid-turn lockout. Never touches
-  high-priority.
+**Kandev owns routing, the pacer owns timing.** Auto-start is removed from every **work step**,
+so a finished turn still runs the step's completion route and lands the task on its correct
+next step — through any branch, loop, or agent `move_task` — where it waits `WAITING_FOR_INPUT`.
+While under the steady-burn curve, the pacer starts the next turn via the WebSocket
+`session.launch` primitive:
 
-Concurrency cap (`PACER_CONCURRENCY`, default 1) bounds how many paced tasks run at once;
-with slow polling and parallel tasks a high cap can overshoot the line between ticks.
+- **In place** for a task already sitting at a work step: `intent: workflow_step` with the
+  task's current step id and its newest live session id.
+- **Admission from the parked queue** (the start step, e.g. Backlog): one call both moves the
+  task to the first work step *and* starts it — `intent: start` for a never-run task,
+  `intent: workflow_step` for a re-queued one. A supplied `workflow_step_id` moves the task
+  (`moveTaskToWorkflowStep` / `advanceTaskWorkflowStep`), so no separate move API is needed.
 
-## Confirmed against kandev source (`~/repos/ai/kandev`, 2026-07-23)
+**Work-step classification is read from Kandev, not a local list.** A step is a *work step*
+iff its `on_turn_complete` carries a transition action (`move_to_next` | `move_to_previous` |
+`move_to_step`) — writable via the normal step-edit API and self-consistent with the rule that
+a completed turn always moves the task off the step (so "task sitting at a work step" ⇒ "turn
+pending", no relaunch loop). `stage_type: "work"` is a corroborating hint only (it is read-only
+via the step API; settable only out of band, via workflow import or a direct SQLite write).
+Parked steps (Review/Done, the queue)
+must route via `on_turn_start`/`on_comment`, never `on_turn_complete`. On startup the pacer
+lints the workflow and warns about bypass/ambiguity (leftover `auto_start_agent`, profile-switch
++ prompt, signal-gated routing, stage_type/routing disagreement, missing work step or queue).
 
-- **Move → auto-start works, including for a task that never ran.**
-  `handleTaskMovedNoSession` (`orchestrator/event_handlers_workflow.go:397`): moving a task
-  with no session into a step where `HasOnEnterAction(OnEnterAutoStartAgent)` creates a
-  session and calls `StartTask`. So Backlog → In Progress reliably fires the agent.
-- **New tasks land in the workflow's start step** (`ResolveStartStep`,
-  `backendapp/services.go:224`; unique index `idx_workflow_steps_single_start`).
-- **Endpoints:** usage `GET /api/v1/agents/usage`; list `GET /api/v1/workflows/:id/tasks`
-  (bare `GET /api/v1/tasks` 404s); move `POST /api/v1/tasks/:id/move` with body
-  `{workflow_id, workflow_step_id, position}` (both ids required). `/api/v1` is unauthenticated.
+**Priority tiering is free**: the gate reads *account-level* usage, which already includes
+Routine/UI burn. When high-priority work pushes `c` above `e`, headroom goes negative and the
+gate closes automatically. You classify by *which workflow* you create a task in.
 
-### ✅ Paced Kanban workflow is configured for pacing
+**Backstop** (`PACER_BACKSTOP`, default `0.97`; `≥1.0` disables): near an absolute ceiling the
+pacer withholds *all* launches (including admissions). A hard mid-turn lockout on an
+already-running turn is **not** preventable here — halting a live turn needs a WebSocket
+`stop_task`, which is preemption and out of scope for this admission-control pacer.
 
-- **Start step is Backlog.** `is_start_step` is on **Backlog**, so newly created tasks land
-  there inert (events `{}`) and wait for the pacer instead of auto-starting. In Progress
-  correctly has `on_enter: auto_start_agent`.
-- **Re-prompts are re-paced.** The Review and Done steps have `on_turn_start` events that
-  move the task back to **Backlog** (not In Progress). So a manual re-prompt of a finished
-  task returns it to the gated queue and is admitted through the pacer like any other Backlog
-  task — closing the earlier re-engagement bypass. No code change needed: the pacer already
-  admits whatever sits in Backlog.
+Concurrency cap (`PACER_CONCURRENCY`, default 1) bounds how many paced turns run at once
+(counting sessions in `STARTING`/`RUNNING`); with slow polling a high cap can overshoot the
+line between ticks. Duplicate-start protection: the pacer books each `(task, step, session)` it
+launches until the turn is observed to start.
 
-## Open questions (before this runs for real)
+## Confirmed against kandev source (`~/repos/ai/kandev`, 2026-07-24)
 
-1. **`/api/v1/agents/usage` response shape** — `parse_windows()` is written against the
-   documented Anthropic `limits[]` shape (`percent`, `resets_at`, a window label) but is
-   unconfirmed. Run `./pacer.py --dump-usage` against a live kandev and pin it. Confirm
-   whether `percent` is consumed or remaining.
-2. **Task step field** — `_step_of()` assumes `workflow_step_id` on the task JSON from
-   `/workflows/:id/tasks`. Confirm the field name.
-3. **Backstop** for the absolute ceiling (`stop_task`) — not yet built.
+- **Launch primitive** `session.launch` over `GET /ws` (`gateway/websocket/setup.go:71`),
+  handler `wsLaunchSession` (`orchestrator/handlers/handlers.go:38`); request
+  `LaunchSessionRequest{task_id, intent, session_id, workflow_step_id}`
+  (`orchestrator/session_launch.go`); a supplied `workflow_step_id` moves the task
+  (`task_operations.go:819` / `:1304`). Envelope `{id, type:"request", action, payload}`
+  (`pkg/websocket/message.go`), response matched on `id`; failures come back as `type:"error"`.
+  `/ws` enforces an Origin check (send `Origin = KANDEV_URL`).
+- **Usage** `GET /api/v1/agents/usage` →
+  `agents[].usage{provider, windows[]{label, utilization_pct, reset_at}}`; `utilization_pct`
+  is *consumed*; labels `"5-hour"`, `"7-day"`, `"7-day (Fable)"`.
+- **Tasks** `GET /api/v1/workflows/:id/tasks` → `{tasks:[…]}`, each with `workflow_step_id`.
+  **Sessions** `GET /api/v1/tasks/:id/sessions` → `{sessions:[…]}` with `state`.
+  **Steps** `GET /api/v1/workflows/:id/workflow/steps` → `{steps:[…]}` with `stage_type`,
+  `events`, `is_start_step`, `position`. `/api/v1` is unauthenticated.
 
 ## Run
 
 ```bash
 ./pacer.py --dump-usage     # inspect live usage payload first
-./pacer.py                  # start the pacing loop
-uv run test_pace.py         # pacing-math tests (no network)
+./pacer.py                  # start the pacing loop (lints the workflow on startup)
+uv run test_pace.py         # pure pacing + classification tests (no network)
 ```
 
-Config via env: `KANDEV_URL`, `PACED_WORKFLOW_ID`, `BACKLOG_STEP_ID`, `ACTIVE_STEP_ID`,
-`PACER_CONCURRENCY`, `PACER_ALPHA`, `PACER_RESUME_MARGIN`, `PACER_INTERVAL`. Defaults are
-the live `gogo` "Paced Kanban" ids.
+**Workflow setup:** remove `on_enter: auto_start_agent` from every work step (the startup lint
+flags any that remain). The live "Paced Kanban" needs only that one change — Backlog already
+parks the queue and In Progress already routes away on completion.
+
+Config via env: `KANDEV_URL`, `KANDEV_WS_URL` (default derives `ws://host/ws`),
+`PACED_WORKFLOW_ID`, `PACER_PROVIDER` (default `anthropic`), `PACER_CONCURRENCY`, `PACER_ALPHA`,
+`PACER_RESUME_MARGIN`, `PACER_BACKSTOP`, `PACER_INTERVAL`, and optional `PACER_ADMISSION_STEP_ID`
+(else the lowest-position work step). Defaults are the live `gogo` "Paced Kanban" ids.
 
 ## Design provenance
 
