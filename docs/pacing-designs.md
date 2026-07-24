@@ -362,3 +362,39 @@ with a cancelled session.
   from Kandev's own protocol; it needs a backend-wide `PATH` shim and paces
   only ACP-mode profiles.
 - Do not use history inference: Kandev does not store step history.
+
+## Side note: pausing fights the prompt cache
+
+To act on later, once a prototype works. This applies to every design above,
+because they all insert waiting time between turns.
+
+Anthropic caches the unchanged beginning of a conversation (the "prefix") for
+a few minutes — 5 by default. A request that reuses a cached prefix pays about
+0.1× the normal token price for it; a request whose cache has expired pays
+about 1.25× to re-read and re-cache the whole prefix. That is roughly a 12.5×
+price difference on the conversation history, and a long-running agent session
+carries 50k–150k tokens of history.
+
+During a turn the agent calls the model every few seconds, so the cache stays
+warm on its own. The pacer only adds delay between turns — exactly where the
+cache clock runs. Every pause longer than the TTL means the next turn re-reads
+the whole history at full price. Because the pacer's gate measures the same
+usage number that cache misses inflate, this cannot make it overspend; it just
+means fewer useful turns per quota window.
+
+Practical consequences, in order of importance:
+
+- Quota pauses are unavoidable misses: they last far longer than the TTL, and
+  keeping the cache warm would cost about as much as the miss. Accept them.
+- Scheduling misses are avoidable: round-robining several tasks makes every
+  task's between-turn gap longer than the TTL. Prefer depth-first scheduling —
+  while the gate is open, run one task's steps back-to-back, then the next.
+  Tasks do not compete for cache space; only elapsed time expires a prefix.
+- React to turn-completed events instead of a slow polling tick, so an open
+  gate releases the next turn within seconds, not minutes.
+- A 1-hour cache TTL exists (2× write price instead of 1.25×) and would
+  survive most quota pauses — but the TTL is chosen by the agent harness, not
+  by Kandev or the pacer. Verify it is configurable before counting on it.
+- To measure the real cost, read `cache_read_input_tokens` and
+  `cache_creation_input_tokens` from the agent's session logs for a paced
+  task.
