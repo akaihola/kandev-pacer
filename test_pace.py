@@ -9,6 +9,7 @@ from pacer import (
     parse_windows, usage_providers, provider_missing,
     is_work_step, work_step_ids, queue_step_id, admission_target,
     lint_workflow, newest_session, is_launchable, launch_target, pick_intent, prune_booked,
+    step_names, named,
 )
 
 # --- pacing math (unchanged) ---
@@ -122,6 +123,14 @@ def test_work_step_ids():
     assert is_work_step(_step("x", "X", otc=["move_to_previous"]))
     assert is_work_step(_step("x", "X", otc=["move_to_step"]))
     assert not is_work_step(_step("x", "X", ots=["move_to_step"]))  # on_turn_start is not routing-away
+
+def test_step_names():
+    names = step_names(CLEAN)
+    assert names["ip"] == "In Progress"
+    assert named("ip", names) == "In Progress"
+    assert named("gone", names) == "gone"            # unknown id stays identifiable in the log
+    assert named(None, names) is None                # no queue/admission step -> prints None
+    assert step_names([{"id": "x"}])["x"] == "x"     # nameless step falls back to its id
 
 def test_queue_and_admission_target():
     assert queue_step_id(CLEAN) == "bk"

@@ -158,6 +158,18 @@ def admission_target(steps, override=None):
         return None
     return min(works, key=lambda s: s.get("position", 0))["id"]
 
+def step_names(steps):
+    """id -> display name, for logging. Steps without a name fall back to their id."""
+    return {s["id"]: s.get("name") or s["id"] for s in steps}
+
+def named(id_, names):
+    """Human-readable label for a step/task id: its name, or the raw id when unknown.
+
+    Falling back to the id matters -- a step that vanished from the workflow, or a task the
+    pacer skipped mid-tick, still has to be identifiable in the log.
+    """
+    return names.get(id_, id_)
+
 def _has_on_enter(step, kind):
     ev = step.get("events") or {}
     return any(a.get("type") == kind for a in (ev.get("on_enter") or []))
@@ -285,6 +297,9 @@ def _req(method, path, body=None):
         raw = resp.read()
         return json.loads(raw) if raw else None
 
+def workflow_name():
+    return (_req("GET", f"/api/v1/workflows/{PACED_WORKFLOW_ID}") or {}).get("name") or PACED_WORKFLOW_ID
+
 def workflow_steps():
     return (_req("GET", f"/api/v1/workflows/{PACED_WORKFLOW_ID}/workflow/steps") or {}).get("steps", [])
 
@@ -324,6 +339,7 @@ _BOOKED = {}             # (task_id, step_id, session_id) -> booked_at (launch i
 _WORK_STEPS = set()
 _QUEUE_STEP = None
 _ADMISSION = None
+_STEP_NAMES = {}         # step id -> name, for logging only
 
 def tick(was_open):
     global _BOOKED
@@ -365,7 +381,8 @@ def tick(was_open):
     # live session now too -- a profile-switch step spawns a fresh one on entry.
     fresh = next((t for t in paced_tasks() if t["id"] == task["id"]), None)
     if fresh is None or fresh.get("workflow_step_id", "") != task.get("workflow_step_id", ""):
-        print(f"headroom={wh:+.3f} open, {task['id']} moved since selection -> skip", flush=True)
+        print(f"headroom={wh:+.3f} open, {task.get('title') or task['id']!r} moved since selection "
+              f"-> skip", flush=True)
         return is_open
     step = fresh.get("workflow_step_id", "")
     sessions = sessions_of(task["id"])
@@ -373,12 +390,13 @@ def tick(was_open):
     target = launch_target(fresh, _WORK_STEPS, _QUEUE_STEP, _ADMISSION)
     ws_launch(task["id"], intent, sid, target)
     _BOOKED[(task["id"], step, sid)] = now
-    print(f"headroom={wh:+.3f} open -> launched {task['id']} intent={intent} target={target} "
+    print(f"headroom={wh:+.3f} open -> launched {fresh.get('title') or task['id']!r} "
+          f"intent={intent} target={named(target, _STEP_NAMES)!r} "
           f"({running + 1}/{CONCURRENCY})", flush=True)
     return is_open
 
 def main():
-    global _WORK_STEPS, _QUEUE_STEP, _ADMISSION
+    global _WORK_STEPS, _QUEUE_STEP, _ADMISSION, _STEP_NAMES
     if "--dump-usage" in sys.argv:
         print(json.dumps(_req("GET", "/api/v1/agents/usage"), indent=2))
         return
@@ -387,11 +405,14 @@ def main():
     _WORK_STEPS = work_step_ids(steps)
     _QUEUE_STEP = queue_step_id(steps)
     _ADMISSION = admission_target(steps, ADMISSION_OVERRIDE)
+    _STEP_NAMES = step_names(steps)
     for w in lint_workflow(steps):
         print(f"lint: {w}", file=sys.stderr, flush=True)
-    print(f"pacing {URL} workflow={PACED_WORKFLOW_ID} every {INTERVAL}s "
+    works = sorted(named(s, _STEP_NAMES) for s in _WORK_STEPS)
+    print(f"pacing {URL} workflow={workflow_name()!r} every {INTERVAL}s "
           f"(alpha={ALPHA}, concurrency={CONCURRENCY}, provider={PROVIDER})\n"
-          f"  work_steps={sorted(_WORK_STEPS)} queue={_QUEUE_STEP} admission={_ADMISSION}", flush=True)
+          f"  work_steps={works} queue={named(_QUEUE_STEP, _STEP_NAMES)!r} "
+          f"admission={named(_ADMISSION, _STEP_NAMES)!r}", flush=True)
 
     was_open = True
     while True:
