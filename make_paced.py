@@ -13,8 +13,11 @@ the database directly. Per step it:
 - strips every `auto_start_agent` action from the step's events, so a finished
   turn parks the task WAITING_FOR_INPUT instead of self-starting past the gate;
 - normalizes `stage_type`: 'work' for steps that route away on turn completion
-  (the same routing-derived rule pacer.py classifies by), 'review' for parked
-  steps named in --review (default: any step named "Review"), 'custom' otherwise.
+  (the same routing-derived rule pacer.py classifies by), 'review'/'approval'
+  for parked steps named in --review/--approval (default: any step named
+  "Review" is 'review'). A parked step that already carries a valid tag
+  ('review', 'approval', 'custom') keeps it; only a missing tag or a wrong
+  'work' tag on a parked step falls back to 'custom'.
 
 Dry run by default (opens the DB read-only); pass --apply to write. The kandev
 server can stay up: the DB runs in WAL mode and steps are re-read on every use,
@@ -53,20 +56,33 @@ def strip_auto_start(events):
             out[trigger] = kept
     return out, removed
 
-def target_stage(step, review_names):
+# stage_type values a parked (non-work) step is allowed to carry. A step
+# already tagged one of these by hand is a hint we keep, not clobber (Design
+# 13: treat a hand-set stage_type as a corroborating hint, never destroy it).
+PARKED_STAGES = frozenset({"custom", "review", "approval"})
+
+def target_stage(step, review_names, approval_names=frozenset()):
     """The stage_type a paced step should carry.
 
     Routing wins: a step that routes away on turn completion is 'work' even if
     its name matches --review (tagging it 'review' would contradict the
-    operative classifier and trip the startup lint).
+    operative classifier and trip the startup lint). For a parked step: an
+    explicit --review/--approval name wins; otherwise we keep whatever valid
+    parked value it already has (so a hand-set 'approval' or 'review' survives),
+    and only fall back to 'custom' when the current value is missing or 'work'
+    (a wrong tag a parked step shouldn't keep).
     """
     if is_work_step(step):
         return "work"
-    if step.get("name", "").strip().lower() in review_names:
+    name = step.get("name", "").strip().lower()
+    if name in review_names:
         return "review"
-    return "custom"
+    if name in approval_names:
+        return "approval"
+    current = (step.get("stage_type") or "").lower()
+    return current if current in PARKED_STAGES else "custom"
 
-def plan_changes(steps, review_names=frozenset({"review"})):
+def plan_changes(steps, review_names=frozenset({"review"}), approval_names=frozenset()):
     """Per-step change records for steps that need edits; already-paced steps are skipped.
 
     steps: dicts with at least id, name, stage_type, and parsed events.
@@ -74,7 +90,7 @@ def plan_changes(steps, review_names=frozenset({"review"})):
     changes = []
     for s in steps:
         events, removed = strip_auto_start(s.get("events"))
-        stage = target_stage({**s, "events": events}, review_names)
+        stage = target_stage({**s, "events": events}, review_names, approval_names)
         if removed or stage != s.get("stage_type"):
             changes.append({"id": s["id"], "name": s.get("name", ""), "events": events,
                             "removed": removed, "stage_from": s.get("stage_type"),
@@ -115,7 +131,16 @@ def load_steps(con, workflow_id):
         " agent_profile_id, prompt, auto_advance_requires_signal"
         " FROM workflow_steps WHERE workflow_id = ? ORDER BY position",
         (workflow_id,)).fetchall()
-    return [{**dict(r), "events": json.loads(r["events"] or "{}")} for r in rows]
+    steps = []
+    for r in rows:
+        try:
+            events = json.loads(r["events"] or "{}")
+        except json.JSONDecodeError as e:
+            # kandev normally writes valid JSON here; a bad cell means the row
+            # is corrupt. Name the step instead of dumping a raw traceback.
+            sys.exit(f"error: step {r['name']!r} ({r['id']}) has invalid events JSON: {e}")
+        steps.append({**dict(r), "events": events})
+    return steps
 
 def apply_changes(con, changes):
     with con:  # one transaction; the server's WAL readers see it atomically
@@ -136,6 +161,9 @@ def main():
     ap.add_argument("--review", action="append", default=[], metavar="NAME",
                     help="additional step name to tag stage_type='review' (repeatable;"
                          " 'Review' is always included)")
+    ap.add_argument("--approval", action="append", default=[], metavar="NAME",
+                    help="step name to tag stage_type='approval' (repeatable). A step"
+                         " already tagged 'approval' by hand is kept without this.")
     ap.add_argument("--apply", action="store_true", help="write the changes (default: dry run)")
     args = ap.parse_args()
 
@@ -148,7 +176,8 @@ def main():
     wf = resolve_workflow(con, args.workflow)
     steps = load_steps(con, wf["id"])
     review_names = {"review"} | {n.strip().lower() for n in args.review}
-    changes = plan_changes(steps, review_names)
+    approval_names = {n.strip().lower() for n in args.approval}
+    changes = plan_changes(steps, review_names, approval_names)
 
     print(f"workflow {wf['name']!r} ({wf['id']})")
     by_id = {c["id"]: c for c in changes}

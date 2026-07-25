@@ -43,9 +43,17 @@ While under the steady-burn curve, the pacer starts the next turn via the WebSoc
 - **In place** for a task already sitting at a work step: `intent: workflow_step` with the
   task's current step id and its newest live session id.
 - **Admission from the parked queue** (the start step, e.g. Backlog): one call both moves the
-  task to the first work step *and* starts it — `intent: start` for a never-run task,
-  `intent: workflow_step` for a re-queued one. A supplied `workflow_step_id` moves the task
+  task to the first work step *and* starts it — `intent: workflow_step` with the task's newest
+  session, whether it was never run or re-queued. A supplied `workflow_step_id` moves the task
   (`moveTaskToWorkflowStep` / `advanceTaskWorkflowStep`), so no separate move API is needed.
+  `intent: start` is reserved for a task with *no* session at all, which in practice doesn't
+  happen — kandev prepares a session when the task is created (see below).
+
+**A never-run task already has a session.** Creating a task provisions its workspace, worktree
+and branch immediately and parks the session in `CREATED` — prepared, agent never started. So
+"never run" does **not** mean "no session", and the pacer treats `CREATED` as launchable
+alongside `WAITING_FOR_INPUT`. Getting this wrong is silent and total: tasks sit in the queue
+forever while the pacer cheerfully logs `nothing to launch` every tick.
 
 **Work-step classification is read from Kandev, not a local list.** A step counts as a *work
 step* when — and only when — its `on_turn_complete` carries a transition action (`move_to_next` |
@@ -88,11 +96,22 @@ launches until the turn is observed to start.
   (`task_operations.go:819` / `:1304`). Envelope `{id, type:"request", action, payload}`
   (`pkg/websocket/message.go`), response matched on `id`; failures come back as `type:"error"`.
   `/ws` enforces an Origin check (send `Origin = KANDEV_URL`).
+- **Sessions are prepared eagerly** (2026-07-25). Creating a task provisions the workspace and
+  leaves the session `CREATED`, with an `executors_running` row at `status='prepared'`. So the
+  pacer's admission call is `intent: workflow_step`, never `intent: start` — `start` routes to
+  `StartTask`, which creates a *second* session, while `workflow_step` reuses the prepared one:
+  `StartSessionForWorkflowStep` (`task_operations.go:1244`) moves the task via
+  `advanceTaskWorkflowStep` (`:1304`), then `ensureSessionRunning` (`:1328`) sees the `CREATED`
+  state plus the `executors_running` row (`:1359`) and calls `startAgentOnPreparedWorkspace`
+  rather than a full relaunch. (`intent: start_created` also starts a prepared session, but
+  `StartCreatedSession` takes no `workflow_step_id`, so it can't admit — it won't move the task.)
 - **Usage** `GET /api/v1/agents/usage` →
   `agents[].usage{provider, windows[]{label, utilization_pct, reset_at}}`; `utilization_pct`
   is *consumed*; labels `"5-hour"`, `"7-day"`, `"7-day (Fable)"`.
 - **Tasks** `GET /api/v1/workflows/:id/tasks` → `{tasks:[…]}`, each with `workflow_step_id`.
-  **Sessions** `GET /api/v1/tasks/:id/sessions` → `{sessions:[…]}` with `state`.
+  **Sessions** `GET /api/v1/tasks/:id/sessions` → `{sessions:[…]}` with `state` and
+  `started_at` — note there is **no** `created_at` on a session, so ordering by recency uses
+  `started_at` (tasks *do* have `created_at`).
   **Steps** `GET /api/v1/workflows/:id/workflow/steps` → `{steps:[…]}` with `stage_type`,
   `events`, `is_start_step`, `position`. `/api/v1` is unauthenticated.
 
@@ -106,12 +125,16 @@ launches until the turn is observed to start.
 ./pacer.py                  # start the pacing loop (lints the workflow on startup)
 uv run test_pace.py         # pure pacing + classification tests (no network)
 uv run test_make_paced.py   # pure workflow-adaptation planning tests
+uv run test_make_paced_db.py  # SQLite round-trip tests (temp db, no server)
 ```
 
 **Workflow setup:** `make_paced.py` adapts an existing workflow in place: it strips every
 `on_enter: auto_start_agent` action and normalizes `stage_type` (`work` for steps that route
-away on `on_turn_complete` — the same classifier the pacer uses — `review` for parked steps
-named Review or listed via `--review`, `custom` otherwise). It edits `~/.kandev/data/kandev.db`
+away on `on_turn_complete` — the same classifier the pacer uses — `review`/`approval` for
+parked steps named via `--review`/`--approval`, with any step named Review defaulting to
+`review`). A parked step that already carries a valid tag by hand (`review`, `approval`,
+`custom`) keeps it; only a missing tag or a stale `work` tag on a parked step falls back to
+`custom`. It edits `~/.kandev/data/kandev.db`
 directly (`--db`/`KANDEV_DB` to override) because `stage_type` has no API/UI/import surface;
 dry run is read-only, and a workflow re-import silently resets `stage_type`, so re-run it after
 any import. The steps it leaves alone still show as `ok` lines, and it prints the same lint

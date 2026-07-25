@@ -35,6 +35,17 @@ def test_target_stage():
     assert target_stage(_step("bk", "Backlog"), review) == "custom"
     # routing wins over the name: a routing step named Review is still 'work'
     assert target_stage(_step("rv", "Review", otc), review) == "work"
+    # a hand-set valid parked tag is kept, not clobbered to 'custom'
+    assert target_stage(_step("ap", "Sign-off", stage="approval"), review) == "approval"
+    assert target_stage(_step("rv", "QA", stage="review"), review) == "review"
+    # but a wrong 'work' tag on a parked step is reset to 'custom'
+    assert target_stage(_step("bk", "Backlog", stage="work"), review) == "custom"
+    # --approval names tag a parked step 'approval'; routing still wins
+    approval = frozenset({"sign-off"})
+    assert target_stage(_step("ap", "Sign-off"), review, approval) == "approval"
+    assert target_stage(_step("ap", "Sign-off", otc), review, approval) == "work"
+    # an explicit --review name overrides a hand-set 'approval'
+    assert target_stage(_step("rv", "Review", stage="approval"), review) == "review"
 
 def test_plan_changes():
     steps = [_step("bk", "Backlog"),
