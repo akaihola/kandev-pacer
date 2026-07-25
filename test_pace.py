@@ -133,8 +133,9 @@ def test_queue_and_admission_target():
 
 # --- launchability ---
 
-def _sess(id, state, created="1"):
-    return {"id": id, "state": state, "created_at": created}
+def _sess(id, state, started="1"):
+    # `started_at` is the real field name in GET /tasks/:id/sessions -- there is no `created_at`.
+    return {"id": id, "state": state, "started_at": started}
 
 WORK = {"ip"}
 
@@ -151,6 +152,24 @@ def test_is_launchable_queue_admission():
     assert is_launchable(at_bk, [], WORK, "bk", booked)                            # new task
     assert is_launchable(at_bk, [_sess("s", "WAITING_FOR_INPUT")], WORK, "bk", booked)  # re-queued
     assert not is_launchable(at_bk, [_sess("s", "RUNNING")], WORK, "bk", booked)
+
+def test_is_launchable_created_session():
+    """Kandev prepares a session at task creation, so a never-run task arrives CREATED.
+
+    That means "workspace prepared, agent never started" -- launchable, exactly like the
+    no-session case. Missing this is why two Backlog tasks sat forever while the pacer
+    reported "nothing to launch". intent:workflow_step handles it: kandev's
+    ensureSessionRunning starts the agent on the already-prepared workspace.
+    """
+    booked = set()
+    at_bk = {"id": "t", "workflow_step_id": "bk"}
+    assert is_launchable(at_bk, [_sess("s", "CREATED")], WORK, "bk", booked)
+    # Same story one step over: a new task dragged straight to a work step is prepared,
+    # not running, and would otherwise be ignored forever.
+    at_ip = {"id": "t", "workflow_step_id": "ip"}
+    assert is_launchable(at_ip, [_sess("s", "CREATED")], WORK, "bk", booked)
+    # The dup-guard still applies to it.
+    assert not is_launchable(at_bk, [_sess("s", "CREATED")], WORK, "bk", {("t", "bk", "s")})
 
 def test_is_launchable_parked_and_booked():
     at_rv = {"id": "t", "workflow_step_id": "rv"}
@@ -170,6 +189,9 @@ def test_pick_intent():
 
 def test_newest_session():
     assert newest_session([]) is None
+    # Must sort on the real payload field. Keying on a field the API doesn't have makes
+    # every key equal, so max() silently returns the FIRST session -- and the pacer then
+    # hands a stale session_id to session.launch once a step spawns a second session.
     assert newest_session([_sess("a", "X", "1"), _sess("b", "X", "3"), _sess("c", "X", "2")])["id"] == "b"
 
 def test_prune_booked():
@@ -194,6 +216,23 @@ def test_prune_booked_never_run_admission():
     # session surfaced -> the None key no longer matches the task's key -> dropped naturally
     surfaced = {"t": [_sess("s2", "RUNNING")]}
     assert prune_booked({("t", "bk", None): 900.0}, at_bk, surfaced, now, ttl) == {}
+
+def test_prune_booked_created_admission():
+    """A CREATED booking must survive under TTL, or accepting CREATED double-launches.
+
+    The launched session doesn't flip out of CREATED instantly, so on the next tick the
+    task still reads (same step, same session, CREATED) and would look launchable again.
+    Unlike the other states, nothing in the key changes when the launch silently fails --
+    so the TTL, not the key, is what eventually lets it retry.
+    """
+    now, ttl = 1000.0, 360.0
+    at_bk = [{"id": "t", "workflow_step_id": "bk"}]
+    created = {"t": [_sess("s", "CREATED")]}
+    assert prune_booked({("t", "bk", "s"): 900.0}, at_bk, created, now, ttl) == {("t", "bk", "s"): 900.0}
+    assert prune_booked({("t", "bk", "s"): 500.0}, at_bk, created, now, ttl) == {}
+    # Turn actually started -> state leaves CREATED -> guard no longer needed.
+    running = {"t": [_sess("s", "RUNNING")]}
+    assert prune_booked({("t", "bk", "s"): 900.0}, at_bk, running, now, ttl) == {}
 
 # --- lint ---
 

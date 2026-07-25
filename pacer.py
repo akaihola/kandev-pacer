@@ -50,6 +50,11 @@ TRANSITION_KINDS = {"move_to_next", "move_to_previous", "move_to_step"}
 RUNNING_STATES = {"STARTING", "RUNNING"}
 # Session state that means the turn is done and the next may be launched.
 READY_STATE = "WAITING_FOR_INPUT"
+# Kandev prepares a session (workspace, worktree, branch) the moment a task is created and
+# leaves it here -- provisioned, agent never started. Not running, and not a finished turn.
+CREATED_STATE = "CREATED"
+# States the pacer may start a turn from: prepared-but-never-run, or waiting after a turn.
+IDLE_STATES = {CREATED_STATE, READY_STATE}
 
 # --- pure pacing math (unit-tested in test_pace.py; unchanged) ---
 
@@ -188,17 +193,28 @@ def lint_workflow(steps):
 # --- launchability (pure) ---
 
 def newest_session(sessions):
-    """The most recently created session, or None."""
+    """The most recently started session, or None.
+
+    Sorts on `started_at` -- the sessions payload has no `created_at`. Keying on a field
+    that isn't there makes every key equal and quietly returns the first session instead,
+    which would hand a stale session_id to session.launch once a step spawns a second one.
+    """
     if not sessions:
         return None
-    return max(sessions, key=lambda s: s.get("created_at", ""))
+    return max(sessions, key=lambda s: s.get("started_at", ""))
 
 def is_launchable(task, sessions, work_steps, queue_step_id_, booked):
     """Can the pacer start a turn for this task now?
 
-    - at a work step: only when its newest session is WAITING_FOR_INPUT (in-place next turn).
-    - at the parked queue (start step): a new task (no session) or a re-queued one (WAITING).
+    - at a work step: only when its newest session is idle -- WAITING_FOR_INPUT (in-place next
+      turn) or CREATED (a fresh task dragged straight onto the step, prepared but never run).
+    - at the parked queue (start step): a task with no session at all, or one whose newest
+      session is idle -- CREATED for a new task, WAITING_FOR_INPUT for a re-queued one.
     Excludes anything already booked for this exact (task, step, session).
+
+    CREATED counts as launchable because kandev prepares a session up front, so "never run"
+    no longer means "no session". Treating it as unlaunchable is what left new tasks parked
+    in the queue forever while the pacer reported "nothing to launch".
     """
     step = task.get("workflow_step_id", "")
     newest = newest_session(sessions)
@@ -207,9 +223,9 @@ def is_launchable(task, sessions, work_steps, queue_step_id_, booked):
         return False
     state = newest["state"] if newest else None
     if step in work_steps:
-        return state == READY_STATE
+        return state in IDLE_STATES
     if step == queue_step_id_:
-        return newest is None or state == READY_STATE
+        return newest is None or state in IDLE_STATES
     return False
 
 def launch_target(task, work_steps, queue_step_id_, admission_step):
@@ -218,7 +234,13 @@ def launch_target(task, work_steps, queue_step_id_, admission_step):
     return step if step in work_steps else admission_step
 
 def pick_intent(sessions):
-    """(intent, session_id): 'start' for a never-run task, else 'workflow_step' + newest session."""
+    """(intent, session_id): 'start' only with no session at all, else 'workflow_step' + newest.
+
+    A prepared-but-never-run (CREATED) session takes the 'workflow_step' route, not 'start'.
+    'start' creates a *new* session, which would leave the task with two; 'workflow_step'
+    reuses the prepared one -- kandev's ensureSessionRunning starts the agent on the
+    already-prepared workspace -- and moves the task in the same call.
+    """
     newest = newest_session(sessions)
     if newest is None:
         return ("start", None)
@@ -227,15 +249,16 @@ def pick_intent(sessions):
 def prune_booked(booked, tasks, task_sessions, now, ttl):
     """Keep a booking (key -> booked_at) only while it still guards against a double start.
 
-    Two retention rules, one per launch shape:
-    - Session already exists (sid set): keep only while it reads WAITING. Once the launched
+    Two retention rules, split by whether the key itself will eventually stop matching:
+    - Session exists and reads WAITING (sid set): keep with no deadline. Once the launched
       turn starts (state leaves WAITING) or the task routes away, the key stops matching and
       is dropped -- bounding memory and self-clearing the guard.
-    - Never-run admission (sid None): the launched session may not have surfaced in the API
-      yet (Kandev launches in a detached goroutine), so the task still reads "at the queue,
-      no session" and would look launchable again. Hold the booking until the session appears
-      (the key stops matching) or `ttl` elapses -- the TTL lets a launch that silently failed
-      retry instead of wedging the task forever.
+    - Nothing in the key will change on its own (sid None, or the session still reads
+      CREATED): keep only until `ttl` elapses. A session launched from CREATED doesn't flip
+      state instantly, and one launched from no-session-at-all may not have surfaced in the
+      API yet (Kandev launches in a detached goroutine) -- in both cases the task reads
+      exactly as it did before the launch and would look launchable again. The TTL is what
+      lets a launch that silently failed retry instead of wedging the task forever.
     """
     keep = {}
     for t in tasks:
@@ -245,7 +268,7 @@ def prune_booked(booked, tasks, task_sessions, now, ttl):
         key = (t["id"], t.get("workflow_step_id", ""), sid)
         if key not in booked:
             continue
-        if sid is None:
+        if sid is None or st == CREATED_STATE:
             if now - booked[key] < ttl:
                 keep[key] = booked[key]
         elif st == READY_STATE:
