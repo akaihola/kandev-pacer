@@ -37,9 +37,10 @@ ALPHA = float(os.environ.get("PACER_ALPHA", "1.0"))          # reserve slope; <1
 RESUME_MARGIN = float(os.environ.get("PACER_RESUME_MARGIN", "0.0"))  # hysteresis reopen threshold
 BACKSTOP = float(os.environ.get("PACER_BACKSTOP", "0.97"))   # absolute cutoff; >=1.0 disables
 INTERVAL = int(os.environ.get("PACER_INTERVAL", "120"))      # seconds between ticks
-# Which order pending tasks are launched in: "auto" follows the sidebar TASKS list when the
-# user has it on the custom (manual, drag-ordered) sort and falls back to FIFO otherwise;
-# "custom" always follows the manual order; "created" is plain FIFO by task creation time.
+# Which order pending tasks are launched in. "auto" layers the sidebar TASKS list drag order
+# over the board's kanban-pull order once the user keeps a view on the custom sort; "custom"
+# always layers it; "board" is pull order alone (most downstream column first, then
+# position -> priority -> created_at -> id).
 ORDER = (os.environ.get("PACER_ORDER") or "auto").lower()
 # How long a never-run admission booking (session not yet visible) is held before it may
 # retry -- long enough to outlast the lag before a just-started session shows up in the API
@@ -55,6 +56,9 @@ WINDOW_DURATIONS = {"5-hour": 5 * 3600, "7-day": 7 * 24 * 3600, "7-day (Fable)":
 
 # Workflow step-event action kinds that move a task off its step.
 TRANSITION_KINDS = {"move_to_next", "move_to_previous", "move_to_step"}
+# Kandev's task priority ordering, lower first -- copied from the WIP-limit pull query
+# (task/repository/sqlite/task.go:504). 'none' and any unknown value tie at the back.
+PRIORITY_RANK = {"critical": 0, "high": 1, "medium": 2, "low": 3, "none": 4}
 # Session states that mean a turn is in flight (counts against concurrency).
 RUNNING_STATES = {"STARTING", "RUNNING"}
 # Session state that means the turn is done and the next may be launched.
@@ -223,6 +227,10 @@ def resolve_scope(entries, restrict=(), override=None):
             admission[wf["id"]] = target
     return scope, work, queues, admission, skipped
 
+def step_ranks(steps):
+    """step id -> board position (column order), for ordering tasks across columns."""
+    return {s["id"]: s.get("position", 0) for s in steps}
+
 def step_names(steps):
     """id -> display name, for logging. Steps without a name fall back to their id."""
     return {s["id"]: s.get("name") or s["id"] for s in steps}
@@ -286,6 +294,37 @@ def lint_workflow(steps, enrolled_only=True):
         warns.append(f"start step {named(queue, step_names(steps))!r} is itself pace-eligible -- "
                      f"the parked queue will execute rather than hold (tasks never wait there)")
     return warns
+
+# --- launch ordering (pure) ---
+
+def priority_rank(task):
+    """Kandev's priority ordering, lower first. Anything unrecognized ranks last, with 'none'."""
+    return PRIORITY_RANK.get((task.get("priority") or "").strip().lower(), PRIORITY_RANK["none"])
+
+def task_order_key(task, ranks):
+    """Sort key deciding which launchable task goes next: downstream column first, then pull order.
+
+    `position` is the manual drag order from the board, but it is scoped to a *workflow step*,
+    not to the workflow -- two tasks in different columns can both sit at position 0, so it is
+    not a total order on its own. We therefore order by column first and only compare positions
+    within one: descending step position, i.e. the rightmost (most downstream) column wins.
+
+    That is kanban pull, and it is what Design 13 needs. A task already at a work step is a turn
+    in flight; admitting a fresh one from the parked queue (the leftmost column) instead would
+    grow WIP without finishing anything. Draining right-to-left also generalizes past the single
+    work step of the live board: a multi-work-step workflow advances tasks already deep in the
+    pipeline before pulling new ones in at the start.
+
+    Within a column, this is kandev's own WIP-limit pull ordering (task.go:504) verbatim:
+    position -> priority -> created_at -> id. The id tiebreak keeps the order total, so the same
+    board state always picks the same task rather than flapping between two equal candidates.
+    """
+    step = task.get("workflow_step_id", "")
+    return (-ranks.get(step, -1),                 # unknown/vanished step sorts last, not first
+            task.get("position") or 0,            # missing or null position == top of the column
+            priority_rank(task),
+            task.get("created_at") or "",
+            task.get("id") or "")
 
 # --- launchability (pure) ---
 
@@ -432,23 +471,30 @@ def visible_task_order(tasks, pinned_ids, ordered_ids, subtask_order=None):
     out.extend(t for t in tasks if t["id"] not in seen)
     return out
 
-def ordered_tasks(tasks, settings, mode):
+def ordered_tasks(tasks, settings, mode, ranks=None):
     """Candidate tasks in launch-priority order.
 
-    mode 'created' (or no settings) is FIFO by creation time -- the pacer's original order,
-    and the fallback whenever the user's list order can't be read. 'auto' follows the manual
-    order once the user keeps a sidebar view on the custom sort; 'custom' always does.
+    The base order is always the board's kanban-pull order (task_order_key): drain the most
+    downstream column first, then position -> priority -> created_at -> id within it. mode
+    'board' stops there -- and so does every mode when the sidebar order can't be read.
 
-    FIFO is the base order in every mode: the manual list is layered on top of it, so tasks
-    the user hasn't placed stay in oldest-first order behind the ones they have.
+    On top of that base, 'auto' (once the user keeps a sidebar view on the custom sort) and
+    'custom' (always) apply the sidebar's manual drag order. The two are layered rather than
+    alternatives: tasks the user placed by hand go first in the order they chose, and
+    everything they did *not* place keeps the board's pull order behind them.
+
+    Layering this way does let an explicit drag override the WIP-pull preference for
+    continuing in-flight work over admitting new work -- dragging a queued task to the top
+    admits it first. That is the point of the feature: an explicit instruction outranks a
+    heuristic. PACER_ORDER=board restores strict pull order.
     """
-    fifo = sorted(tasks, key=lambda t: t.get("created_at", ""))
-    if mode == "created" or not settings:
-        return fifo
+    base = sorted(tasks, key=lambda t: task_order_key(t, ranks or {}))
+    if mode == "board" or not settings:
+        return base
     if mode != "custom" and not has_custom_sort_view(settings):
-        return fifo
+        return base
     prefs = settings.get("sidebar_task_prefs") or {}
-    return visible_task_order(fifo, prefs.get("pinned_task_ids") or [],
+    return visible_task_order(base, prefs.get("pinned_task_ids") or [],
                               prefs.get("ordered_task_ids") or [],
                               prefs.get("subtask_order_by_parent_id") or {})
 
@@ -515,7 +561,7 @@ def user_settings():
     Returns None rather than raising: a failure here only costs the manual order, and
     falling back to FIFO is far better than pausing the whole tick over it.
     """
-    if ORDER == "created":
+    if ORDER == "board":
         return None
     try:
         return (_req("GET", "/api/v1/user/settings") or {}).get("settings") or None
@@ -559,6 +605,7 @@ _QUEUE_STEPS = set()     # each scoped workflow's start step (its parked queue)
 _ADMISSION = {}          # workflow id -> step id to admit a queued task into
 _STEP_NAMES = {}         # step id -> name, for logging only
 _WF_NAMES = {}           # workflow id -> name, for logging only
+_STEP_RANKS = {}         # step id -> board position, for cross-column launch ordering
 
 def tick(was_open):
     global _BOOKED
@@ -586,7 +633,7 @@ def tick(was_open):
         print(f"headroom={wh:+.3f} open, full ({running}/{CONCURRENCY})", flush=True)
         return is_open
 
-    launchable = [t for t in ordered_tasks(tasks, user_settings(), ORDER)
+    launchable = [t for t in ordered_tasks(tasks, user_settings(), ORDER, _STEP_RANKS)
                   if is_launchable(t, task_sessions[t["id"]], _WORK_STEPS, _QUEUE_STEPS, _BOOKED)]
     if not launchable:
         print(f"headroom={wh:+.3f} open, nothing to launch ({running}/{CONCURRENCY} running)", flush=True)
@@ -620,10 +667,13 @@ def tick(was_open):
 
 def resolve_globals(entries):
     """Fill the scope globals from [(workflow, steps)]. Returns the skipped list for reporting."""
-    global _SCOPE, _WORK_STEPS, _QUEUE_STEPS, _ADMISSION, _STEP_NAMES, _WF_NAMES
+    global _SCOPE, _WORK_STEPS, _QUEUE_STEPS, _ADMISSION, _STEP_NAMES, _WF_NAMES, _STEP_RANKS
     _SCOPE, _WORK_STEPS, _QUEUE_STEPS, _ADMISSION, skipped = resolve_scope(
         entries, PACED_WORKFLOWS, ADMISSION_OVERRIDE)
     _STEP_NAMES = {sid: name for _, steps in entries for sid, name in step_names(steps).items()}
+    # Column order per board. Step ids are globally unique, so one flat dict serves every
+    # workflow; the rank is an index within its own board, which is what pull order compares.
+    _STEP_RANKS = {sid: rank for _, steps in entries for sid, rank in step_ranks(steps).items()}
     _WF_NAMES = {wf["id"]: wf.get("name") or wf["id"] for wf, _ in entries}
     return skipped
 
@@ -633,11 +683,14 @@ def _dump_order(entries, skipped):
     settings = user_settings()
     manual = bool(settings) and (ORDER == "custom" or has_custom_sort_view(settings))
     placed = ((settings or {}).get("sidebar_task_prefs") or {}).get("ordered_task_ids") or []
-    print(f"order={ORDER} -> {'manual sidebar order' if manual else 'FIFO by created_at'} "
-          f"({len(placed)} task(s) placed by hand)")
+    # Only report the placed count when the manual order is actually in use -- in board mode the
+    # settings are never fetched, so "0 placed" would read as "you have dragged nothing".
+    print(f"order={ORDER} -> " + ("manual sidebar order over board pull order "
+                                  f"({len(placed)} task(s) placed by hand)" if manual
+                                  else "board pull order (sidebar order not consulted)"))
     print(f"scope: {[named(w, _WF_NAMES) for w in _SCOPE]}")
     tasks = paced_tasks()
-    for i, t in enumerate(ordered_tasks(tasks, settings, ORDER)):
+    for i, t in enumerate(ordered_tasks(tasks, settings, ORDER, _STEP_RANKS)):
         print(f"{i + 1:3}. {t.get('title') or t['id']}")
     # The sidebar list spans every workflow, so a task can be placed high by hand and still be
     # out of scope. Saying nothing about it is what made a top-dragged task look lost.
@@ -658,7 +711,7 @@ def main():
     if "--dump-usage" in sys.argv:
         print(json.dumps(_req("GET", "/api/v1/agents/usage"), indent=2))
         return
-    if ORDER not in ("auto", "custom", "created"):
+    if ORDER not in ("auto", "custom", "board"):
         print(f"lint: PACER_ORDER={ORDER!r} unknown -> treating it as 'auto'",
               file=sys.stderr, flush=True)
 

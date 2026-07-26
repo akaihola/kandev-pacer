@@ -90,19 +90,27 @@ work-shaped-but-untagged steps (the "why is this never paced" case), `stage_type
 disagreement, and a **start step that is itself pace-eligible** — which leaves the design no
 holding area at all, so the backlog executes instead of queueing.
 
-## Launch order: you dictate it from the sidebar
+## Which task goes next
 
-Which pending task goes next is **the order of your Kandev `TASKS` sidebar list**. Put a
-sidebar view on **sort `custom`, group `none`**, drag the tasks into the order you want, and
-the pacer works down that order — no pacer-side priority field to maintain.
+When more than one task is launchable and the gate is open, two orderings decide, layered:
+
+1. **What you placed by hand** — the order of your Kandev `TASKS` sidebar list, if you keep one.
+2. **Everything else** — the board's own kanban-pull order (below).
+
+An explicit drag outranks the pull heuristic; anything you have *not* dragged keeps pull order.
+
+### The overlay: your sidebar drag order
+
+Put a sidebar view on **sort `custom`, group `none`**, drag the tasks into the order you want,
+and the pacer works down that order — no pacer-side priority field to maintain.
 
 - **Placed tasks first**, in your drag order. **Pinned tasks float above them** (pinning is a
   visible re-ordering, so honoring it keeps "the pacer runs the top-most task" true).
 - **Subtasks follow their parent**, in their own stored order — the sidebar nests them there.
-- **Tasks you never dragged run last, oldest-first.** "Not placed" means "not prioritized", so
-  they keep the pacer's original FIFO order behind everything you did place. Note this is a
-  *deliberate* divergence from the sidebar, which floats unplaced tasks to the *top* by newest
-  `created_at`: copying that would let merely *creating* a task jump an order you set by hand.
+- **Tasks you never dragged sit behind the placed ones**, in the board's pull order. "Not
+  placed" means "not prioritized". Note this is a *deliberate* divergence from the sidebar,
+  which floats unplaced tasks to the *top* by newest `created_at`: copying that would let
+  merely *creating* a task jump an order you set by hand.
 - Re-read **every tick**, so a drag re-prioritizes the queue without restarting the pacer.
 - The sidebar list spans **every** workflow while the pacer only sees enrolled ones, so a task
   can sit high in your manual order and still be out of scope. `--dump-order` names those
@@ -112,9 +120,9 @@ the pacer works down that order — no pacer-side priority field to maintain.
 
 | value | behavior |
 | --- | --- |
-| `auto` (default) | Follow the manual order once **any** saved sidebar view uses sort `custom`; plain FIFO otherwise. |
-| `custom` | Always follow the manual order, whatever the sidebar's current sort. |
-| `created` | Plain FIFO by `created_at` — the pre-feature behavior; skips the settings fetch entirely. |
+| `auto` (default) | Layer the manual order over pull order once **any** saved sidebar view uses sort `custom`; pull order alone otherwise. |
+| `custom` | Always layer the manual order, whatever the sidebar's current sort. |
+| `board` | Pull order alone — ignores the sidebar and skips the settings fetch entirely. |
 
 **Why "any saved view" and not the active one?** The manual order (`ordered_task_ids`) is
 stored **once per user, not per view**. So a saved "Prioritize" view still expresses your
@@ -123,10 +131,15 @@ view would silently flip the pacer back to FIFO the moment you switched views fo
 reason. The in-flight *draft* counts too: dragging a task flips the sort to `custom` in the
 draft before it is ever saved to the view.
 
-**Fails soft, never sideways.** FIFO is the base order in every mode and the manual list is
+**Fails soft, never sideways.** Pull order is the base in every mode and the manual list is
 layered on top, so anything missing degenerates cleanly: settings unreadable (logged, pacing
 continues — an HTTP hiccup here must not pause the gate), nothing dragged yet, or a task whose
-parent chain is cyclic all fall back to oldest-first rather than to an arbitrary order.
+parent chain is cyclic all fall back to the board order rather than to an arbitrary one.
+
+**The trade-off this layering makes.** Pull order deliberately prefers finishing in-flight work
+over admitting new work; dragging a queued task to the top overrides that and admits it first.
+That is the point — an explicit instruction beats a heuristic — but if you would rather the WIP
+preference always win, use `PACER_ORDER=board`.
 
 `./pacer.py --dump-order` prints the queue the pacer would work down, so a drag is checkable
 without waiting a tick — or spending quota — to see which task it picks.
@@ -145,6 +158,43 @@ still paces normally.
 pacer withholds *all* launches (including admissions). A hard mid-turn lockout on an
 already-running turn is **not** preventable here — halting a live turn needs a WebSocket
 `stop_task`, which is preemption and out of scope for this admission-control pacer.
+
+### The base: the board's pull order
+
+Whatever the overlay does not place, the pacer picks by **column first, then the board's own
+pull order**:
+
+```
+descending workflow-step position   (rightmost / most downstream column first)
+  -> task position ASC              (the manual drag order within that column)
+  -> priority     (critical, high, medium, low, then none/unknown)
+  -> created_at ASC
+  -> id ASC
+```
+
+Everything after the first line is kandev's WIP-limit pull ordering copied verbatim
+(`task/repository/sqlite/task.go:504`, documented at `docs/public/tasks-and-workflows.md:187`),
+so dragging a card up the *board* moves it up the pacer's queue too — `position` outranks both
+priority and age, because a drag is an explicit human decision and the other two are defaults.
+The `id` tiebreak keeps the order total, so a fully tied pair always resolves the same way
+instead of flapping between ticks.
+
+**Why a column ordering comes first.** A task's `position` is scoped to a *workflow step*, not
+to the workflow — `MoveTask` never looks at repositories, and two tasks in different columns can
+both sit at `position = 0`, so `position` alone is not a total order and comparing it across
+columns is meaningless. The pacer therefore ranks columns first and only compares positions
+*within* one. It ranks them right-to-left (highest step position first) because that is kanban
+pull, and it is what Design 13 needs: a task already at a work step is a turn in flight, and
+admitting a fresh one from the parked queue instead would grow WIP without finishing anything.
+Draining right-to-left also generalizes past the single work step of the live board — in a
+multi-work-step workflow, tasks deepest in the pipeline advance before new ones are pulled in.
+A step id that no longer exists in the workflow sorts last, not first.
+
+`position` reaches the pacer already: `GET /api/v1/workflows/:id/tasks` returns it on every task
+(`dto.TaskDTO.Position`, `task/dto/dto.go:146`), as do the WS `task.*` events
+(`task/service/service_events.go:352`). A task with a missing or null `position` is read as `0` —
+top of its column, not last — so an older payload or an un-dragged board degrades to plain
+`created_at` ordering rather than sorting the task to the back.
 
 Concurrency cap (`PACER_CONCURRENCY`, default 1) bounds how many paced turns run at once
 (counting sessions in `STARTING`/`RUNNING`); with slow polling a high cap can overshoot the
@@ -182,7 +232,11 @@ launches until the turn is observed to start.
 - **Usage** `GET /api/v1/agents/usage` →
   `agents[].usage{provider, windows[]{label, utilization_pct, reset_at}}`; `utilization_pct`
   is *consumed*; labels `"5-hour"`, `"7-day"`, `"7-day (Fable)"`.
-- **Tasks** `GET /api/v1/workflows/:id/tasks` → `{tasks:[…]}`, each with `workflow_step_id`.
+- **Tasks** `GET /api/v1/workflows/:id/tasks` → `{tasks:[…]}`, each with `workflow_step_id`,
+  and — via `dto.FromTask` — the `position`, `priority` and `created_at` the launch ordering
+  above needs. `position` is the board drag order **scoped to a workflow step**, `priority` is
+  a free-standing `critical|high|medium|low` attribute (default `medium`); neither is scoped to
+  a repository, so one column mixes and orders tasks from every repo in the workspace.
   **Sessions** `GET /api/v1/tasks/:id/sessions` → `{sessions:[…]}` with `state` and
   `started_at` — note there is **no** `created_at` on a session, so ordering by recency uses
   `started_at` (tasks *do* have `created_at`).
@@ -220,8 +274,16 @@ Config via env: `KANDEV_URL`, `KANDEV_WS_URL` (default derives `ws://host/ws`),
 `PACED_WORKFLOW_ID` (comma-separated ids or names; unset = every enrolled workflow),
 `PACER_PROVIDER` (default `anthropic`), `PACER_CONCURRENCY`, `PACER_ALPHA`,
 `PACER_RESUME_MARGIN`, `PACER_BACKSTOP`, `PACER_INTERVAL`, `PACER_ORDER`
-(`auto` | `custom` | `created`, default `auto`), and optional `PACER_ADMISSION_STEP_ID`
+(`auto` | `custom` | `board`, default `auto`), and optional `PACER_ADMISSION_STEP_ID`
 (else the lowest-position pace-eligible step; applies only to the workflow that owns it).
+
+## Packaging as a kandev plugin
+
+Assessed and rejected as a *native* plugin: kandev's plugin Host API has no session-launch
+call, no usage/quota reader, no `workflow_step_id` on its `Task`, and no step routing on its
+`WorkflowStep` — so the pacing loop would still run on `/api/v1` + `/ws` exactly as it does
+today. Viable only as a lifecycle/config/UI wrapper. See
+[`docs/kandev-plugin-feasibility.md`](docs/kandev-plugin-feasibility.md).
 
 ## Design provenance
 
