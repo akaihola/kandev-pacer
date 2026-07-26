@@ -11,6 +11,7 @@ from pacer import (
     lint_workflow, newest_session, is_launchable, launch_target, pick_intent, prune_booked,
     step_names, named, step_ranks, priority_rank, task_order_key,
     effective_sidebar_view, has_custom_sort_view, visible_task_order, ordered_tasks,
+    is_drainable, select_action,
 )
 
 # --- pacing math (unchanged) ---
@@ -217,6 +218,11 @@ def _task(id, step="ip", pos=0, prio="medium", created="2026-01-01T00:00:00Z", p
         t["parent_id"] = parent
     return t
 
+def _ord(tasks):
+    """Fixtures in launch-priority order, board mode -- select_action no longer sorts itself,
+    so route them through the real ordering pipeline rather than hand-sorting here."""
+    return ordered_tasks(tasks, None, "board", RANKS)
+
 def _order(tasks, ranks=RANKS):
     return [t["id"] for t in sorted(tasks, key=lambda t: task_order_key(t, ranks))]
 
@@ -362,6 +368,80 @@ def test_launch_target_is_per_workflow():
     # rather than launching in place, which would start a turn on a parked queue step.
     assert launch_target({"workflow_step_id": "bk", "workflow_id": "wf3"}, WORK, admit) is None
 
+# --- queued-prompt release ---
+
+def test_is_drainable_parked_step():
+    """The whole point: a prompt queued at Review/Done must be releasable.
+
+    Those steps are not launchable, and kandev fires no event on them either, so without this
+    a queued prompt there is never delivered at all.
+    """
+    at_rv = {"id": "t", "workflow_step_id": "rv"}
+    assert is_drainable(at_rv, [_sess("s", "WAITING_FOR_INPUT")], {"s": 1}, set())
+    at_dn = {"id": "t", "workflow_step_id": "dn"}
+    assert is_drainable(at_dn, [_sess("s", "WAITING_FOR_INPUT")], {"s": 3}, set())
+
+def test_is_drainable_requires_queue_and_idle_session():
+    at_rv = {"id": "t", "workflow_step_id": "rv"}
+    assert not is_drainable(at_rv, [_sess("s", "WAITING_FOR_INPUT")], {}, set())          # empty queue
+    assert not is_drainable(at_rv, [_sess("s", "WAITING_FOR_INPUT")], {"s": 0}, set())    # counted zero
+    assert not is_drainable(at_rv, [_sess("s", "RUNNING")], {"s": 1}, set())              # turn in flight
+    assert not is_drainable(at_rv, [], {"s": 1}, set())                                   # no session
+    # CREATED is prepared-but-never-run: launchable, but NOT promptable -- kandev answers
+    # session_not_promptable, so its queued prompt must wait for the admission turn.
+    assert not is_drainable(at_rv, [_sess("s", "CREATED")], {"s": 1}, set())
+    # Counts are keyed by session, so a queue on an older session doesn't license a drain.
+    assert not is_drainable(at_rv, [_sess("old", "WAITING_FOR_INPUT", "1"),
+                                    _sess("new", "WAITING_FOR_INPUT", "2")], {"old": 1}, set())
+    # Dup-guard, same shape as the launch path.
+    assert not is_drainable(at_rv, [_sess("s", "WAITING_FOR_INPUT")], {"s": 1}, {("t", "rv", "s")})
+
+def test_select_action_prefers_drain():
+    """Draining first is what keeps a queued prompt to one turn.
+
+    Launch the step turn instead and the entry survives it, then kandev's on-step-entry drain
+    flushes it on arrival at the next step -- a second turn that never passed the gate.
+    """
+    at_ip = {"id": "t", "workflow_step_id": "ip", "created_at": "1"}
+    sessions = {"t": [_sess("s", "WAITING_FOR_INPUT")]}
+    # Same task is both launchable (work step, idle) and drainable (queue non-empty) -> drain.
+    kind, chosen = select_action(_ord([at_ip]), sessions, {"s": 1}, WORK, QUEUE, set())
+    assert (kind, chosen["id"]) == ("drain", "t")
+    # Empty queue -> falls through to the launch path unchanged.
+    assert select_action(_ord([at_ip]), sessions, {}, WORK, QUEUE, set())[0] == "launch"
+    # Kind beats column: the drainable task sits in the LEFTMOST column, which pull ordering
+    # would rank last, and it still wins over a launchable task further downstream.
+    at_bk = {"id": "u", "workflow_step_id": "bk", "created_at": "9"}
+    kind, chosen = select_action(_ord([at_ip, at_bk]), {"t": [_sess("a", "WAITING_FOR_INPUT")],
+                                                 "u": [_sess("b", "WAITING_FOR_INPUT")]},
+                                {"b": 1}, WORK, QUEUE, set())
+    assert (kind, chosen["id"]) == ("drain", "u")
+
+def test_select_action_uses_board_pull_order():
+    """Within a kind, selection follows task_order_key -- not insertion or creation order."""
+    old = {"id": "old", "workflow_step_id": "ip", "created_at": "1"}
+    new = {"id": "new", "workflow_step_id": "ip", "created_at": "2"}
+    sessions = {"old": [_sess("a", "WAITING_FOR_INPUT")], "new": [_sess("b", "WAITING_FOR_INPUT")]}
+    # Same column and position -> falls through to created_at, so the older one goes first.
+    assert select_action(_ord([new, old]), sessions, {}, WORK, QUEUE, set())[1]["id"] == "old"
+    assert select_action(_ord([new, old]), sessions, {"a": 1, "b": 1}, WORK, QUEUE, set())[1]["id"] == "old"
+    # A drag outranks age: position 0 wins even though it was created later.
+    dragged = dict(new, position=0)
+    aged = dict(old, position=1)
+    assert select_action(_ord([aged, dragged]), sessions, {"a": 1, "b": 1},
+                         WORK, QUEUE, set())[1]["id"] == "new"
+    # Rightmost column first: a queued prompt at Review beats one still in Backlog.
+    at_rv = {"id": "rv1", "workflow_step_id": "rv", "created_at": "5"}
+    at_bk = {"id": "bk1", "workflow_step_id": "bk", "created_at": "1"}
+    both = {"rv1": [_sess("x", "WAITING_FOR_INPUT")], "bk1": [_sess("y", "WAITING_FOR_INPUT")]}
+    assert select_action(_ord([at_bk, at_rv]), both, {"x": 1, "y": 1},
+                         WORK, QUEUE, set())[1]["id"] == "rv1"
+    # Nothing to do at all.
+    assert select_action([], {}, {}, WORK, QUEUE, set()) == (None, None)
+    # Parked, nothing queued -> not actionable (today's behaviour, unchanged).
+    assert select_action([at_rv], {"rv1": [_sess("s", "WAITING_FOR_INPUT")]},
+                         {}, WORK, QUEUE, set()) == (None, None)
+
 def test_pick_intent():
     assert pick_intent([]) == ("start", None)
     assert pick_intent([_sess("a", "WAITING_FOR_INPUT", "1"),
@@ -494,6 +574,21 @@ def test_visible_task_order_orphans_and_cycles_still_appear():
     cyc = [_task("x", parent="y"), _task("y", parent="x"), _task("r")]
     assert sorted(t["id"] for t in visible_task_order(cyc, [], ["r"], {})) == ["r", "x", "y"]
     assert visible_task_order(cyc, [], ["r"], {})[0]["id"] == "r"
+
+def test_sidebar_order_reaches_drain_selection():
+    """The overlay must order drains, not just launches. select_action takes a pre-ordered list
+    precisely so one ordering governs both; sorting inside it again would ignore the sidebar."""
+    a = _task("a", step="ip")
+    b = _task("b", step="ip")
+    sessions = {"a": [_sess("sa", "WAITING_FOR_INPUT")], "b": [_sess("sb", "WAITING_FOR_INPUT")]}
+    queued = {"sa": 1, "sb": 1}                      # both have a prompt parked
+    dragged = _settings(ordered=["b"])               # user put b on top
+    ordered = ordered_tasks([a, b], dragged, "auto", RANKS)
+    kind, chosen = select_action(ordered, sessions, queued, WORK, QUEUE, set())
+    assert (kind, chosen["id"]) == ("drain", "b")
+    # Without the drag, pull order decides (equal here -> id tiebreak keeps it total).
+    kind, chosen = select_action(_ord([a, b]), sessions, queued, WORK, QUEUE, set())
+    assert (kind, chosen["id"]) == ("drain", "a")
 
 def test_ordered_tasks_layers_manual_over_board_pull_order():
     """The two orderings compose: hand-placed tasks first in the user's order, everything

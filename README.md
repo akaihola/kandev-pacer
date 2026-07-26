@@ -49,6 +49,15 @@ While under the steady-burn curve, the pacer starts the next turn via the WebSoc
   `intent: start` is reserved for a task with *no* session at all, which in practice doesn't
   happen — kandev prepares a session when the task is created (see below).
 
+**Queued user prompts are released the same way.** A follow-up typed into Kandev's composer
+normally fires a turn on the spot. Parked on the session's message queue instead
+(`message.queue.add`, e.g. via [`userscript/kandev-queue-button.user.js`](userscript/kandev-queue-button.user.js)),
+it waits, and the pacer releases it with `message.queue.drain` when the gate opens — **drain
+first, launch second**, since launching a task that has a prompt queued spends the turn on the
+step prompt and lets the queued entry leak out un-paced afterwards. A drainable task counts at
+*any* step, including parked ones like Review where a launch never applies. Full derivation and
+the verified Kandev drain triggers: [`docs/queueing-user-prompts.md`](docs/queueing-user-prompts.md).
+
 **A never-run task already has a session.** Creating a task provisions its workspace, worktree
 and branch immediately and parks the session in `CREATED` — prepared, agent never started. So
 "never run" does **not** mean "no session", and the pacer treats `CREATED` as launchable
@@ -190,6 +199,12 @@ Draining right-to-left also generalizes past the single work step of the live bo
 multi-work-step workflow, tasks deepest in the pipeline advance before new ones are pulled in.
 A step id that no longer exists in the workflow sorts last, not first.
 
+**Releases outrank launches.** This ordering decides *which* task goes next; the *kind* of turn
+is decided first. A task with a queued user prompt is drained before any launch, whatever column
+it sits in — see [`docs/queueing-user-prompts.md`](docs/queueing-user-prompts.md) for why the
+other order leaks a second, un-gated turn. Within each kind the pull order above applies
+unchanged, so dragging a card up its column moves its queued prompt up the release queue too.
+
 `position` reaches the pacer already: `GET /api/v1/workflows/:id/tasks` returns it on every task
 (`dto.TaskDTO.Position`, `task/dto/dto.go:146`), as do the WS `task.*` events
 (`task/service/service_events.go:352`). A task with a missing or null `position` is read as `0` —
@@ -229,6 +244,13 @@ launches until the turn is observed to start.
   `applyView` (`web/lib/sidebar/apply-view.ts`): sort → group → subtask order → pinned float,
   where the pin float applies to root tasks only. `custom` ignores sort `direction` (reversing
   a manual drag has no meaning). Tasks carry `parent_id` (`task/models/models.go:446`).
+- **Message queue** (WebSocket only, no `/api/v1` route): `message.queue.add` / `.get` /
+  `.drain` / `.update` / `.remove` / `.cancel` (`pkg/websocket/actions.go:114`), handlers in
+  `orchestrator/handlers/queue_handlers.go`. `.get` → `{entries, count, max}`; `.drain` →
+  `{session_id, drained}` where `drained: false` means the queue was already empty.
+  `DrainQueuedMessage` requires a promptable session (`checkSessionPromptable`) — `CREATED` is
+  not one. Entries persist in the `queued_messages` table, and `.add` does **not** validate
+  `session_id`. Cap 10/session (`KANDEV_QUEUE_MAX_PER_SESSION`), over-cap → `queue_full`.
 - **Usage** `GET /api/v1/agents/usage` →
   `agents[].usage{provider, windows[]{label, utilization_pct, reset_at}}`; `utilization_pct`
   is *consumed*; labels `"5-hour"`, `"7-day"`, `"7-day (Fable)"`.
@@ -255,6 +277,7 @@ launches until the turn is observed to start.
 uv run test_pace.py         # pure pacing + classification tests (no network)
 uv run test_make_paced.py   # pure workflow-adaptation planning tests
 uv run test_make_paced_db.py  # SQLite round-trip tests (temp db, no server)
+uv run test_drain_io.py     # queued-prompt release vs a fake kandev (loopback, no quota)
 ```
 
 **Workflow setup:** `make_paced.py` adapts an existing workflow in place: it strips every

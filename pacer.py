@@ -68,6 +68,11 @@ READY_STATE = "WAITING_FOR_INPUT"
 CREATED_STATE = "CREATED"
 # States the pacer may start a turn from: prepared-but-never-run, or waiting after a turn.
 IDLE_STATES = {CREATED_STATE, READY_STATE}
+# States kandev will accept a *queued* prompt for. checkSessionPromptable also allows
+# COMPLETED and IDLE, but the pacer never selects those. It does NOT allow CREATED, so a
+# never-run task's queued prompt has to wait for that task's admission turn -- draining it
+# would come straight back as `session_not_promptable`.
+DRAINABLE_STATES = {READY_STATE}
 
 # --- pure pacing math (unit-tested in test_pace.py; unchanged) ---
 
@@ -364,6 +369,46 @@ def is_launchable(task, sessions, work_steps, queue_steps, booked):
         return newest is None or state in IDLE_STATES
     return False
 
+def is_drainable(task, sessions, queued, booked):
+    """Is a user-queued prompt parked on this task, releasable as its next turn?
+
+    Deliberately ignores the workflow step. A prompt queued while the task sits at Review or
+    Done is exactly the case to serve, and those steps are never launchable -- without this,
+    such a prompt is never released at all, because kandev fires no event on a parked step
+    either (its on_enter already ran, and there is no next transition without a turn).
+
+    What it does require is a session kandev will take a prompt for (DRAINABLE_STATES), and a
+    non-empty queue as counted this tick.
+    """
+    newest = newest_session(sessions)
+    if newest is None or newest.get("state") not in DRAINABLE_STATES:
+        return False
+    if queued.get(newest["id"], 0) <= 0:
+        return False
+    return (task["id"], task.get("workflow_step_id", ""), newest["id"]) not in booked
+
+def select_action(ordered, task_sessions, queued, work_steps, queue_steps, booked):
+    """('drain'|'launch', task) for the one turn this tick may spend, else (None, None).
+
+    `ordered` is the caller's launch-priority order (ordered_tasks), applied to *both* kinds --
+    so dragging a card up the sidebar or up its column moves its queued prompt up too, and a
+    prompt parked in a downstream column is released before one further left. The ordering is
+    the caller's business because only it knows the user's sidebar settings; this stays pure.
+
+    Drain outranks launch for a reason: launching a task that has a prompt queued spends the
+    turn on the *step* prompt and leaves the queued entry behind, where kandev's own
+    on-step-entry drain flushes it after the turn completes -- a second turn that never passed
+    the gate, carrying text written for the previous step. Releasing the queued prompt first
+    keeps it at one turn per admitted decision.
+    """
+    for t in ordered:
+        if is_drainable(t, task_sessions.get(t["id"], []), queued, booked):
+            return ("drain", t)
+    for t in ordered:
+        if is_launchable(t, task_sessions.get(t["id"], []), work_steps, queue_steps, booked):
+            return ("launch", t)
+    return (None, None)
+
 def launch_target(task, work_steps, admission):
     """Which step id to launch at: the current step in place, or the admission step to move to.
 
@@ -572,29 +617,82 @@ def user_settings():
 def sessions_of(task_id):
     return (_req("GET", f"/api/v1/tasks/{task_id}/sessions") or {}).get("sessions", [])
 
-def ws_launch(task_id, intent, session_id, workflow_step_id, req_id="pace-1"):
-    """Send one session.launch over the WebSocket and wait for the matching response."""
+def _ws_connect():
     import websocket  # lazy: keeps the test env (no network) dependency-free
+    # /ws enforces an Origin check, so present the server's own URL as the origin.
+    return websocket.create_connection(WS_URL, timeout=30, origin=URL)
+
+def _ws_call(conn, action, payload, req_id):
+    """One request/response round trip on an open connection, matched on `id`."""
+    conn.send(json.dumps({"id": req_id, "type": "request", "action": action, "payload": payload}))
+    while True:
+        raw = conn.recv()
+        if not raw:
+            continue
+        m = json.loads(raw)
+        if m.get("id") != req_id:
+            continue  # skip unrelated pushed events
+        p = m.get("payload") or {}
+        if m.get("type") == "error" or p.get("success") is False:
+            raise RuntimeError(f"{action} failed: {p.get('message') or m}")
+        return p
+
+def ws_request(action, payload, req_id="pace-1"):
+    """One WebSocket request on its own short-lived connection."""
+    conn = _ws_connect()
+    try:
+        return _ws_call(conn, action, payload, req_id)
+    finally:
+        conn.close()
+
+def ws_launch(task_id, intent, session_id, workflow_step_id, req_id="pace-1"):
     payload = {"task_id": task_id, "intent": intent, "workflow_step_id": workflow_step_id}
     if session_id:
         payload["session_id"] = session_id
-    msg = {"id": req_id, "type": "request", "action": "session.launch", "payload": payload}
-    conn = websocket.create_connection(WS_URL, timeout=30, origin=URL)
+    return ws_request("session.launch", payload, req_id)
+
+def ws_drain(session_id, req_id="drain-1"):
+    """Release the head queued prompt as this session's next turn.
+
+    Returns kandev's payload; `drained` is False when the queue turned out to be empty (the
+    UI's own "Send now" got there first), which spends no turn.
+    """
+    return ws_request("message.queue.drain", {"session_id": session_id}, req_id)
+
+def queued_counts(task_sessions):
+    """{session_id: pending queue entries} for every session a drain could target.
+
+    One connection for the whole tick, and only sessions kandev would accept a prompt for are
+    asked about -- a board of running or never-run tasks costs nothing. A failure degrades to
+    "nothing queued" rather than killing the tick: the pacer then behaves exactly as it did
+    before queue support (launch only), which loses pacing on a queued prompt but keeps the
+    gate working. Halting all pacing over an unreadable queue would be the worse trade.
+    """
+    targets = []
+    for sessions in task_sessions.values():
+        newest = newest_session(sessions)
+        if newest is not None and newest.get("state") in DRAINABLE_STATES:
+            targets.append(newest["id"])
+    if not targets:
+        return {}
     try:
-        conn.send(json.dumps(msg))
-        while True:
-            raw = conn.recv()
-            if not raw:
-                continue
-            m = json.loads(raw)
-            if m.get("id") != req_id:
-                continue  # skip unrelated pushed events
-            p = m.get("payload") or {}
-            if m.get("type") == "error" or p.get("success") is False:
-                raise RuntimeError(f"session.launch failed: {p.get('message') or m}")
-            return p
+        conn = _ws_connect()
+    except Exception as e:
+        print(f"queue status unavailable ({e}) -> treating every queue as empty",
+              file=sys.stderr, flush=True)
+        return {}
+    counts = {}
+    try:
+        for i, sid in enumerate(targets):
+            try:
+                p = _ws_call(conn, "message.queue.get", {"session_id": sid}, f"q{i}") or {}
+                counts[sid] = int(p.get("count") or 0)
+            except Exception as e:
+                print(f"queue status failed for session {sid} ({e}) -> treating as empty",
+                      file=sys.stderr, flush=True)
     finally:
         conn.close()
+    return counts
 
 # --- pacing loop ---
 
@@ -633,13 +731,13 @@ def tick(was_open):
         print(f"headroom={wh:+.3f} open, full ({running}/{CONCURRENCY})", flush=True)
         return is_open
 
-    launchable = [t for t in ordered_tasks(tasks, user_settings(), ORDER, _STEP_RANKS)
-                  if is_launchable(t, task_sessions[t["id"]], _WORK_STEPS, _QUEUE_STEPS, _BOOKED)]
-    if not launchable:
+    ordered = ordered_tasks(tasks, user_settings(), ORDER, _STEP_RANKS)
+    kind, task = select_action(ordered, task_sessions, queued_counts(task_sessions),
+                               _WORK_STEPS, _QUEUE_STEPS, _BOOKED)
+    if kind is None:
         print(f"headroom={wh:+.3f} open, nothing to launch ({running}/{CONCURRENCY} running)", flush=True)
         return is_open
 
-    task = launchable[0]
     # Re-read the task's current step immediately before launching. The workflow_step_id we
     # pass is an unvalidated move, so acting on the top-of-tick snapshot could drag a task
     # that was moved in between (human board edit, another agent's move_task) back to a stale
@@ -651,12 +749,48 @@ def tick(was_open):
               f"-> skip", flush=True)
         return is_open
     step = fresh.get("workflow_step_id", "")
+    sessions = sessions_of(task["id"])
+
+    if kind == "drain":
+        # The re-read above only re-checked the step. The session must still be the one whose
+        # queue we counted and still idle, or the drain would target a stale session or race a
+        # turn that started since selection (kandev would reject it, but skipping is quieter).
+        newest = newest_session(sessions)
+        if newest is None or newest.get("state") not in DRAINABLE_STATES:
+            print(f"headroom={wh:+.3f} open, {fresh.get('title') or task['id']!r} no longer idle "
+                  f"-> skip drain", flush=True)
+            return is_open
+        # Handle a rejected drain here rather than letting it reach the loop's catch-all,
+        # which would pause the gate for a tick. session_busy / session_not_promptable is a
+        # benign race (a turn started since we counted), not a reason to stop pacing.
+        # Caveat: drain outranks launch, so an entry that somehow fails every attempt would
+        # keep this task selected and starve launches. The log names the task and kandev's
+        # reason; removing the entry from the UI's queue panel clears it.
+        try:
+            drained = bool((ws_drain(newest["id"]) or {}).get("drained"))
+        except Exception as e:
+            print(f"headroom={wh:+.3f} open, drain rejected for "
+                  f"{fresh.get('title') or task['id']!r} ({e}) -> skip", file=sys.stderr, flush=True)
+            return is_open
+        if not drained:
+            # Queue emptied between the count and the take (the UI's "Send now", or another
+            # client). No turn was spent, so don't book -- the task stays eligible.
+            print(f"headroom={wh:+.3f} open, queue for {fresh.get('title') or task['id']!r} "
+                  f"already empty -> no turn spent", flush=True)
+            return is_open
+        _BOOKED[(task["id"], step, newest["id"])] = now
+        print(f"headroom={wh:+.3f} open -> drained queued prompt for "
+              f"{fresh.get('title') or task['id']!r} at {named(step, _STEP_NAMES)!r} "
+              f"({running + 1}/{CONCURRENCY})", flush=True)
+        return is_open
+
+    # Resolved here, not before the drain branch: a drain needs no launch target, so a workflow
+    # without one must not block draining a prompt parked in it.
     target = launch_target(fresh, _WORK_STEPS, _ADMISSION)
     if target is None:
         print(f"headroom={wh:+.3f} open, {task.get('title') or task['id']!r} has no admission "
               f"target in workflow {named(fresh.get('workflow_id'), _WF_NAMES)!r} -> skip", flush=True)
         return is_open
-    sessions = sessions_of(task["id"])
     intent, sid = pick_intent(sessions)
     ws_launch(task["id"], intent, sid, target)
     _BOOKED[(task["id"], step, sid)] = now
