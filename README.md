@@ -49,6 +49,15 @@ While under the steady-burn curve, the pacer starts the next turn via the WebSoc
   `intent: start` is reserved for a task with *no* session at all, which in practice doesn't
   happen — kandev prepares a session when the task is created (see below).
 
+**Queued user prompts are released the same way.** A follow-up typed into Kandev's composer
+normally fires a turn on the spot. Parked on the session's message queue instead
+(`message.queue.add`, e.g. via [`userscript/kandev-queue-button.user.js`](userscript/kandev-queue-button.user.js)),
+it waits, and the pacer releases it with `message.queue.drain` when the gate opens — **drain
+first, launch second**, since launching a task that has a prompt queued spends the turn on the
+step prompt and lets the queued entry leak out un-paced afterwards. A drainable task counts at
+*any* step, including parked ones like Review where a launch never applies. Full derivation and
+the verified Kandev drain triggers: [`docs/queueing-user-prompts.md`](docs/queueing-user-prompts.md).
+
 **A never-run task already has a session.** Creating a task provisions its workspace, worktree
 and branch immediately and parks the session in `CREATED` — prepared, agent never started. So
 "never run" does **not** mean "no session", and the pacer treats `CREATED` as launchable
@@ -105,6 +114,13 @@ launches until the turn is observed to start.
   state plus the `executors_running` row (`:1359`) and calls `startAgentOnPreparedWorkspace`
   rather than a full relaunch. (`intent: start_created` also starts a prepared session, but
   `StartCreatedSession` takes no `workflow_step_id`, so it can't admit — it won't move the task.)
+- **Message queue** (WebSocket only, no `/api/v1` route): `message.queue.add` / `.get` /
+  `.drain` / `.update` / `.remove` / `.cancel` (`pkg/websocket/actions.go:114`), handlers in
+  `orchestrator/handlers/queue_handlers.go`. `.get` → `{entries, count, max}`; `.drain` →
+  `{session_id, drained}` where `drained: false` means the queue was already empty.
+  `DrainQueuedMessage` requires a promptable session (`checkSessionPromptable`) — `CREATED` is
+  not one. Entries persist in the `queued_messages` table, and `.add` does **not** validate
+  `session_id`. Cap 10/session (`KANDEV_QUEUE_MAX_PER_SESSION`), over-cap → `queue_full`.
 - **Usage** `GET /api/v1/agents/usage` →
   `agents[].usage{provider, windows[]{label, utilization_pct, reset_at}}`; `utilization_pct`
   is *consumed*; labels `"5-hour"`, `"7-day"`, `"7-day (Fable)"`.
@@ -126,6 +142,7 @@ launches until the turn is observed to start.
 uv run test_pace.py         # pure pacing + classification tests (no network)
 uv run test_make_paced.py   # pure workflow-adaptation planning tests
 uv run test_make_paced_db.py  # SQLite round-trip tests (temp db, no server)
+uv run test_drain_io.py     # queued-prompt release vs a fake kandev (loopback, no quota)
 ```
 
 **Workflow setup:** `make_paced.py` adapts an existing workflow in place: it strips every

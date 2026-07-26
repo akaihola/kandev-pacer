@@ -9,7 +9,7 @@ from pacer import (
     parse_windows, usage_providers, provider_missing,
     is_work_step, work_step_ids, queue_step_id, admission_target,
     lint_workflow, newest_session, is_launchable, launch_target, pick_intent, prune_booked,
-    step_names, named,
+    step_names, named, is_drainable, select_action,
 )
 
 # --- pacing math (unchanged) ---
@@ -190,6 +190,68 @@ def test_is_launchable_parked_and_booked():
 def test_launch_target():
     assert launch_target({"workflow_step_id": "ip"}, WORK, "bk", "ip") == "ip"    # in place
     assert launch_target({"workflow_step_id": "bk"}, WORK, "bk", "ip") == "ip"    # admit to target
+
+# --- queued-prompt release ---
+
+def test_is_drainable_parked_step():
+    """The whole point: a prompt queued at Review/Done must be releasable.
+
+    Those steps are not launchable, and kandev fires no event on them either, so without this
+    a queued prompt there is never delivered at all.
+    """
+    at_rv = {"id": "t", "workflow_step_id": "rv"}
+    assert is_drainable(at_rv, [_sess("s", "WAITING_FOR_INPUT")], {"s": 1}, set())
+    at_dn = {"id": "t", "workflow_step_id": "dn"}
+    assert is_drainable(at_dn, [_sess("s", "WAITING_FOR_INPUT")], {"s": 3}, set())
+
+def test_is_drainable_requires_queue_and_idle_session():
+    at_rv = {"id": "t", "workflow_step_id": "rv"}
+    assert not is_drainable(at_rv, [_sess("s", "WAITING_FOR_INPUT")], {}, set())          # empty queue
+    assert not is_drainable(at_rv, [_sess("s", "WAITING_FOR_INPUT")], {"s": 0}, set())    # counted zero
+    assert not is_drainable(at_rv, [_sess("s", "RUNNING")], {"s": 1}, set())              # turn in flight
+    assert not is_drainable(at_rv, [], {"s": 1}, set())                                   # no session
+    # CREATED is prepared-but-never-run: launchable, but NOT promptable -- kandev answers
+    # session_not_promptable, so its queued prompt must wait for the admission turn.
+    assert not is_drainable(at_rv, [_sess("s", "CREATED")], {"s": 1}, set())
+    # Counts are keyed by session, so a queue on an older session doesn't license a drain.
+    assert not is_drainable(at_rv, [_sess("old", "WAITING_FOR_INPUT", "1"),
+                                    _sess("new", "WAITING_FOR_INPUT", "2")], {"old": 1}, set())
+    # Dup-guard, same shape as the launch path.
+    assert not is_drainable(at_rv, [_sess("s", "WAITING_FOR_INPUT")], {"s": 1}, {("t", "rv", "s")})
+
+def test_select_action_prefers_drain():
+    """Draining first is what keeps a queued prompt to one turn.
+
+    Launch the step turn instead and the entry survives it, then kandev's on-step-entry drain
+    flushes it on arrival at the next step -- a second turn that never passed the gate.
+    """
+    at_ip = {"id": "t", "workflow_step_id": "ip", "created_at": "1"}
+    sessions = {"t": [_sess("s", "WAITING_FOR_INPUT")]}
+    # Same task is both launchable (work step, idle) and drainable (queue non-empty) -> drain.
+    kind, chosen = select_action([at_ip], sessions, {"s": 1}, WORK, "bk", set())
+    assert (kind, chosen["id"]) == ("drain", "t")
+    # Empty queue -> falls through to the launch path unchanged.
+    assert select_action([at_ip], sessions, {}, WORK, "bk", set())[0] == "launch"
+    # A drainable task at a parked step outranks a launchable one, even when it is newer.
+    at_rv = {"id": "u", "workflow_step_id": "rv", "created_at": "9"}
+    kind, chosen = select_action([at_ip, at_rv], {"t": [_sess("a", "WAITING_FOR_INPUT")],
+                                                 "u": [_sess("b", "WAITING_FOR_INPUT")]},
+                                {"b": 1}, WORK, "bk", set())
+    assert (kind, chosen["id"]) == ("drain", "u")
+
+def test_select_action_oldest_first_and_empty():
+    old = {"id": "old", "workflow_step_id": "ip", "created_at": "1"}
+    new = {"id": "new", "workflow_step_id": "ip", "created_at": "2"}
+    sessions = {"old": [_sess("a", "WAITING_FOR_INPUT")], "new": [_sess("b", "WAITING_FOR_INPUT")]}
+    assert select_action([new, old], sessions, {}, WORK, "bk", set())[1]["id"] == "old"
+    # Both queued -> still oldest first.
+    assert select_action([new, old], sessions, {"a": 1, "b": 1}, WORK, "bk", set())[1]["id"] == "old"
+    # Nothing to do at all.
+    assert select_action([], {}, {}, WORK, "bk", set()) == (None, None)
+    # Parked, nothing queued -> not actionable (today's behaviour, unchanged).
+    at_rv = {"id": "t", "workflow_step_id": "rv", "created_at": "1"}
+    assert select_action([at_rv], {"t": [_sess("s", "WAITING_FOR_INPUT")]},
+                         {}, WORK, "bk", set()) == (None, None)
 
 def test_pick_intent():
     assert pick_intent([]) == ("start", None)
