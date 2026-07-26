@@ -4,11 +4,18 @@
 # dependencies = []
 # ///
 """Pure pacing + classification tests (no network). Run: uv run test_pace.py"""
+import json
+import tempfile
+from pathlib import Path
+
+import pacer
 from pacer import (
     clamp01, elapsed_frac, headroom, worst_headroom, gate_open, ceiling_breached,
     parse_windows, usage_providers, provider_missing,
     is_work_step, work_step_ids, queue_step_id, admission_target,
     lint_workflow, newest_session, is_launchable, launch_target, pick_intent, prune_booked,
+    window_records, binding_label, tick_record, sessions_snapshot, diff_sessions,
+    detect_resets, log_event,
 )
 
 # --- pacing math (unchanged) ---
@@ -92,6 +99,85 @@ def test_provider_guard():
     assert provider_missing(USAGE, "claude")            # typo -> present providers, ours absent -> guard fires
     assert not provider_missing(USAGE, "anthropic")     # ours is present -> fine
     assert not provider_missing({"agents": []}, "anthropic")  # empty payload -> can't tell -> don't withhold
+
+# --- structured log records ---
+
+def test_parse_windows_carries_label():
+    """The log names the binding window and matches windows across ticks -- both need the label."""
+    assert [w["label"] for w in parse_windows(USAGE, provider="anthropic")] == [
+        "5-hour", "7-day", "7-day (Fable)"]
+
+def test_window_records_keep_duration():
+    """h alone is not comparable across windows; the duration is what converts it to seconds."""
+    now = 0.0
+    ws = [{"label": "5-hour", "consumed_frac": 0.2, "resets_at": 9000, "duration_s": 18000},
+          {"label": "7-day", "consumed_frac": 0.9, "resets_at": 302400, "duration_s": 604800}]
+    recs = window_records(ws, now)
+    assert [r["e"] for r in recs] == [0.5, 0.5]
+    assert [r["h"] for r in recs] == [0.3, -0.4]
+    assert [r["d"] for r in recs] == [18000, 604800]
+    assert binding_label(recs) == "7-day"          # the window the gate is reacting to
+    assert binding_label([]) is None
+
+def test_tick_record_separates_gate_from_action():
+    """gate=open + action=nothing + launchable>0 is the 'quota going unspent' signature."""
+    recs = window_records([{"label": "5-hour", "consumed_frac": 0.1,
+                            "resets_at": 9000, "duration_s": 18000}], now=0.0)
+    r = tick_record(1234.5, "open", "nothing", recs, running=0, launchable=3,
+                    cap=1, booked=0)
+    assert (r["kind"], r["gate"], r["action"]) == ("tick", "open", "nothing")
+    assert r["wh"] == 0.4 and r["bind"] == "5-hour"
+    assert (r["running"], r["launchable"], r["cap"]) == (0, 3, 1)
+    assert r["launched"] is None
+    # No windows at all (blind tick): still a valid record, no crash on min() of empty.
+    assert tick_record(1.0, "blind", "withheld", [], 0, 0, 1, 0)["wh"] == 1.0
+
+def test_diff_sessions():
+    prev = {"t1": {"s1": "RUNNING"}}
+    cur = {"t1": {"s1": "WAITING_FOR_INPUT"}, "t2": {"s9": "CREATED"}}
+    evs = diff_sessions(prev, cur, now=5.0)
+    assert [(e["task"], e["from"], e["to"]) for e in evs] == [
+        ("t1", "RUNNING", "WAITING_FOR_INPUT"),   # turn ended
+        ("t2", None, "CREATED"),                  # session surfaced
+    ]
+    assert diff_sessions(cur, cur, now=5.0) == []     # steady state is silent
+    assert diff_sessions(None, cur, now=5.0) == []    # first tick has no baseline to diff
+
+def test_sessions_snapshot():
+    assert sessions_snapshot({"t": [_sess("a", "RUNNING"), _sess("b", "CREATED")]}) == {
+        "t": {"a": "RUNNING", "b": "CREATED"}}
+
+def test_detect_resets():
+    """final_c is only observable at the roll -- after it, the old number is gone for good."""
+    prev = [{"label": "5-hour", "consumed_frac": 0.83, "resets_at": 1000, "duration_s": 18000}]
+    cur = [{"label": "5-hour", "consumed_frac": 0.02, "resets_at": 19000, "duration_s": 18000}]
+    evs = detect_resets(prev, cur, now=1001.0)
+    assert len(evs) == 1
+    assert evs[0]["label"] == "5-hour" and evs[0]["final_c"] == 0.83   # ended with 17% unspent
+    assert detect_resets(prev, prev, now=1.0) == []    # same reset time -> no rollover
+    assert detect_resets([], cur, now=1.0) == []       # no baseline -> nothing to close
+
+def test_log_event_roundtrip_and_never_raises():
+    with tempfile.TemporaryDirectory() as d:
+        original = pacer.LOG_PATH
+        try:
+            pacer.LOG_PATH = str(Path(d) / "sub" / "pacer.jsonl")   # parent is created on demand
+            log_event({"kind": "tick", "gate": "open"})
+            log_event({"kind": "session", "to": "RUNNING"})
+            lines = Path(pacer.LOG_PATH).read_text().splitlines()
+            assert [json.loads(x)["kind"] for x in lines] == ["tick", "session"]
+            # A log we cannot write must not take the pacing loop down with it: here the
+            # parent of the log path is an existing *file*, so mkdir raises NotADirectoryError.
+            blocker = Path(d) / "blocker"
+            blocker.write_text("")
+            pacer.LOG_PATH = str(blocker / "pacer.jsonl")
+            pacer._log_failed = False
+            log_event({"kind": "tick"})
+            assert pacer._log_failed                                 # warned once, did not raise
+            pacer.LOG_PATH = ""                                      # disabled -> no-op
+            log_event({"kind": "tick"})
+        finally:
+            pacer.LOG_PATH, pacer._log_failed = original, False
 
 # --- workflow step fixtures ---
 

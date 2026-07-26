@@ -22,6 +22,7 @@ import sys
 import time
 import urllib.request
 from datetime import datetime
+from pathlib import Path
 
 # --- config (env-overridable; defaults are the live "Paced Kanban" on gogo) ---
 URL = os.environ.get("KANDEV_URL", "http://127.0.0.1:38429").rstrip("/")
@@ -38,6 +39,9 @@ INTERVAL = int(os.environ.get("PACER_INTERVAL", "120"))      # seconds between t
 # that a launch that silently failed still gets another shot instead of wedging forever.
 BOOKING_TTL = 3 * INTERVAL
 ADMISSION_OVERRIDE = os.environ.get("PACER_ADMISSION_STEP_ID") or None
+# Structured tick/event log (JSONL, append-only). Set PACER_LOG='' to disable.
+LOG_PATH = os.environ.get(
+    "PACER_LOG", str(Path.home() / ".local" / "state" / "kandev-pacer" / "pacer.jsonl"))
 WS_URL = os.environ.get("KANDEV_WS_URL") or (
     URL.replace("https://", "wss://").replace("http://", "ws://") + "/ws")
 
@@ -90,6 +94,108 @@ def ceiling_breached(windows, backstop):
         return False
     return any(w["consumed_frac"] > backstop for w in windows)
 
+# --- structured log records (pure; unit-tested in test_pace.py) ---
+#
+# The human-readable stdout lines answer "what is the pacer doing right now"; these
+# records answer "what did it do over the last week", which is the only way to size
+# concurrency. Every question we need to settle is a time derivative (does headroom
+# trend up while work is queued? how long after a launch does utilization_pct move?)
+# or a per-window breakdown (which window binds, and how much absolute slack is that),
+# and neither survives in a formatted line with no timestamp.
+
+def window_records(windows, now, alpha=1.0):
+    """Per-window detail for one observation: consumed, elapsed, headroom, duration.
+
+    Logged per window rather than collapsed to min() because headroom is in
+    window-fraction units, which are NOT comparable across windows for sizing:
+    h=0.1 is 30 minutes of slack on the 5-hour window and 16.8 hours on the 7-day.
+    Recovering the absolute slack later needs the duration alongside the fraction.
+    """
+    out = []
+    for w in windows:
+        e = elapsed_frac(now, w["resets_at"], w["duration_s"])
+        out.append({"label": w.get("label"), "c": round(w["consumed_frac"], 4),
+                    "e": round(e, 4), "h": round(headroom(w["consumed_frac"], e, alpha), 4),
+                    "d": w["duration_s"], "resets_at": w["resets_at"]})
+    return out
+
+def binding_label(window_recs):
+    """Label of the least-headroom window -- the one the gate is actually reacting to."""
+    return min(window_recs, key=lambda w: w["h"])["label"] if window_recs else None
+
+def tick_record(now, gate, action, window_recs, running, launchable, cap, booked, launched=None):
+    """One record per tick, written in every branch.
+
+    `gate` is the quota verdict (open/paused/ceiling/blind); `action` is what the pacer
+    did about it (launched/full/nothing/skipped/withheld). They are separate because the
+    decisive question -- is quota going unspent while work waits? -- is exactly the
+    gate=open + action=nothing + launchable>0 combination, which one merged field hides.
+    """
+    return {"t": round(now, 3), "kind": "tick", "gate": gate, "action": action,
+            "wh": min((w["h"] for w in window_recs), default=1.0),
+            "bind": binding_label(window_recs), "windows": window_recs,
+            "running": running, "launchable": launchable, "cap": cap, "booked": booked,
+            "launched": launched}
+
+def sessions_snapshot(task_sessions):
+    """{task_id: {session_id: state}} -- the shape diff_sessions compares."""
+    return {tid: {s["id"]: s.get("state") for s in sess} for tid, sess in task_sessions.items()}
+
+def diff_sessions(prev, cur, now):
+    """Session state transitions between two snapshots. prev=None (first tick) -> no events.
+
+    Turn boundaries can't be derived from launch records alone: kandev starts the agent in
+    a detached goroutine, so the launch call returns well before STARTING/RUNNING appears,
+    and nothing at all is recorded when a turn *ends*. Both timestamps are needed to measure
+    how stale utilization_pct is, which sets the safety margin any concurrency rule needs.
+    """
+    if prev is None:
+        return []
+    events = []
+    for tid, sess in sorted(cur.items()):
+        old = prev.get(tid, {})
+        for sid, state in sorted(sess.items()):
+            if old.get(sid) != state:
+                events.append({"t": round(now, 3), "kind": "session", "task": tid,
+                               "session": sid, "from": old.get(sid), "to": state})
+    return events
+
+def detect_resets(prev_windows, cur_windows, now):
+    """Windows whose reset time moved forward have rolled over; record what they closed at.
+
+    `final_c` -- the last consumed fraction observed before the roll -- answers "did the
+    window end with quota unspent?". That is the single datum that decides whether more
+    concurrency is worth anything at all, and no other record preserves it: after the roll
+    the endpoint reports the new window and the old number is gone for good.
+    """
+    prev = {w.get("label"): w for w in prev_windows}
+    events = []
+    for w in cur_windows:
+        p = prev.get(w.get("label"))
+        if p and w["resets_at"] > p["resets_at"]:
+            events.append({"t": round(now, 3), "kind": "window_reset", "label": w.get("label"),
+                           "final_c": round(p["consumed_frac"], 4), "d": w["duration_s"]})
+    return events
+
+# --- log writer (IO) ---
+
+_log_failed = False
+
+def log_event(rec):
+    """Append one JSONL record. Never raises -- a broken log must not stop the pacing loop."""
+    global _log_failed
+    if not LOG_PATH:
+        return
+    try:
+        path = Path(LOG_PATH)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.open("a") as f:
+            f.write(json.dumps(rec, separators=(",", ":")) + "\n")
+    except OSError as e:
+        if not _log_failed:  # warn once; a full disk shouldn't spam every tick
+            print(f"log: {e} (continuing unlogged)", file=sys.stderr, flush=True)
+            _log_failed = True
+
 # --- usage parsing ---
 
 def _epoch(ts):
@@ -101,6 +207,9 @@ def parse_windows(usage, provider=None):
 
     Real shape: {agents:[{usage:{provider, windows:[{label, utilization_pct, reset_at}]}}]}.
     Windows with an unknown label or no reset time are skipped.
+
+    The label is carried through (the pacing math ignores it) so the log can name which
+    window bound a decision and match windows across ticks to spot a rollover.
     """
     provider = PROVIDER if provider is None else provider
     out = []
@@ -113,7 +222,7 @@ def parse_windows(usage, provider=None):
             ra = w.get("reset_at")
             if dur is None or not ra:
                 continue
-            out.append({"consumed_frac": w["utilization_pct"] / 100.0,
+            out.append({"label": w.get("label"), "consumed_frac": w["utilization_pct"] / 100.0,
                         "resets_at": _epoch(ra), "duration_s": dur})
     return out
 
@@ -324,37 +433,63 @@ _BOOKED = {}             # (task_id, step_id, session_id) -> booked_at (launch i
 _WORK_STEPS = set()
 _QUEUE_STEP = None
 _ADMISSION = None
+_PREV_SESSIONS = None    # {task_id: {session_id: state}} from the previous tick; None = no baseline
+_PREV_WINDOWS = []       # parse_windows() output from the previous tick (rollover detection)
 
 def tick(was_open):
-    global _BOOKED
+    global _BOOKED, _PREV_SESSIONS, _PREV_WINDOWS
     usage = _req("GET", "/api/v1/agents/usage")
     now = time.time()
     windows = parse_windows(usage)
+
+    # Observe the whole board first, decide second. The old order returned early when the
+    # gate was shut, so nothing was recorded for exactly the period that matters most:
+    # turns keep running (and burning) after the gate closes, and that is when the line
+    # gets crossed. Costs one extra tasks call plus one sessions call per task per tick,
+    # against a local server.
+    tasks = paced_tasks()
+    task_sessions = {t["id"]: sessions_of(t["id"]) for t in tasks}
+    snapshot = sessions_snapshot(task_sessions)
+    for ev in diff_sessions(_PREV_SESSIONS, snapshot, now):
+        log_event(ev)
+    for ev in detect_resets(_PREV_WINDOWS, windows, now):
+        log_event(ev)
+    _PREV_SESSIONS, _PREV_WINDOWS = snapshot, windows
+
+    _BOOKED = prune_booked(_BOOKED, tasks, task_sessions, now, BOOKING_TTL)
+    running = sum(1 for t in tasks for s in task_sessions[t["id"]] if s.get("state") in RUNNING_STATES)
+    launchable = [t for t in sorted(tasks, key=lambda t: t.get("created_at", ""))
+                  if is_launchable(t, task_sessions[t["id"]], _WORK_STEPS, _QUEUE_STEP, _BOOKED)]
+    wrecs = window_records(windows, now, ALPHA)
+
+    def emit(gate, action, launched=None):
+        log_event(tick_record(now, gate, action, wrecs, running, len(launchable),
+                              CONCURRENCY, len(_BOOKED), launched))
+
     if not windows and provider_missing(usage, PROVIDER):
         print(f"provider {PROVIDER!r} not in usage {sorted(usage_providers(usage))} "
               f"-> WITHHOLDING (check PACER_PROVIDER)", flush=True)
+        emit("blind", "withheld")
         return False  # fail closed: never pace freely against a quota we can't see
     wh = worst_headroom(windows, now, ALPHA)
     if ceiling_breached(windows, BACKSTOP):
         print(f"headroom={wh:+.3f} CEILING (consumed>{BACKSTOP:.2f}) -> withholding", flush=True)
+        emit("ceiling", "withheld")
         return False
     is_open = gate_open(wh, was_open, RESUME_MARGIN)
     if not is_open:
-        print(f"headroom={wh:+.3f} PAUSED", flush=True)
+        print(f"headroom={wh:+.3f} PAUSED ({running} running)", flush=True)
+        emit("paused", "withheld")
         return is_open
 
-    tasks = paced_tasks()
-    task_sessions = {t["id"]: sessions_of(t["id"]) for t in tasks}
-    _BOOKED = prune_booked(_BOOKED, tasks, task_sessions, now, BOOKING_TTL)
-    running = sum(1 for t in tasks for s in task_sessions[t["id"]] if s.get("state") in RUNNING_STATES)
     if running >= CONCURRENCY:
         print(f"headroom={wh:+.3f} open, full ({running}/{CONCURRENCY})", flush=True)
+        emit("open", "full")
         return is_open
 
-    launchable = [t for t in sorted(tasks, key=lambda t: t.get("created_at", ""))
-                  if is_launchable(t, task_sessions[t["id"]], _WORK_STEPS, _QUEUE_STEP, _BOOKED)]
     if not launchable:
         print(f"headroom={wh:+.3f} open, nothing to launch ({running}/{CONCURRENCY} running)", flush=True)
+        emit("open", "nothing")
         return is_open
 
     task = launchable[0]
@@ -366,6 +501,7 @@ def tick(was_open):
     fresh = next((t for t in paced_tasks() if t["id"] == task["id"]), None)
     if fresh is None or fresh.get("workflow_step_id", "") != task.get("workflow_step_id", ""):
         print(f"headroom={wh:+.3f} open, {task['id']} moved since selection -> skip", flush=True)
+        emit("open", "skipped")
         return is_open
     step = fresh.get("workflow_step_id", "")
     sessions = sessions_of(task["id"])
@@ -375,12 +511,39 @@ def tick(was_open):
     _BOOKED[(task["id"], step, sid)] = now
     print(f"headroom={wh:+.3f} open -> launched {task['id']} intent={intent} target={target} "
           f"({running + 1}/{CONCURRENCY})", flush=True)
+    emit("open", "launched",
+         {"task": task["id"], "intent": intent, "session": sid, "target": target})
     return is_open
+
+def watch_usage(interval):
+    """Poll usage on its own cadence and append `usage` records. Read-only; no launching.
+
+    Run alongside the pacer to time how long after a turn starts utilization_pct actually
+    moves. That dead time is what bounds any concurrency rule -- N parallel turns overshoot
+    by N x burn_rate x dead_time -- and PACER_INTERVAL (120s) is far too coarse to resolve
+    it. Separate process so the measurement cadence never perturbs the control loop.
+    """
+    print(f"watching {URL} usage every {interval}s -> {LOG_PATH or '(logging disabled)'}", flush=True)
+    while True:
+        now = time.time()
+        try:
+            wrecs = window_records(parse_windows(_req("GET", "/api/v1/agents/usage")), now, ALPHA)
+            log_event({"t": round(now, 3), "kind": "usage", "windows": wrecs})
+            print(f"{datetime.fromtimestamp(now):%H:%M:%S} "
+                  + " ".join(f"{w['label']}={w['c']:.2f}" for w in wrecs), flush=True)
+        except Exception as e:
+            log_event({"t": round(now, 3), "kind": "error", "where": "watch_usage", "msg": str(e)})
+            print(f"watch error: {e}", file=sys.stderr, flush=True)
+        time.sleep(interval)
 
 def main():
     global _WORK_STEPS, _QUEUE_STEP, _ADMISSION
     if "--dump-usage" in sys.argv:
         print(json.dumps(_req("GET", "/api/v1/agents/usage"), indent=2))
+        return
+    if "--watch-usage" in sys.argv:
+        i = sys.argv.index("--watch-usage") + 1
+        watch_usage(int(sys.argv[i]) if len(sys.argv) > i else 30)
         return
 
     steps = workflow_steps()
@@ -391,7 +554,12 @@ def main():
         print(f"lint: {w}", file=sys.stderr, flush=True)
     print(f"pacing {URL} workflow={PACED_WORKFLOW_ID} every {INTERVAL}s "
           f"(alpha={ALPHA}, concurrency={CONCURRENCY}, provider={PROVIDER})\n"
-          f"  work_steps={sorted(_WORK_STEPS)} queue={_QUEUE_STEP} admission={_ADMISSION}", flush=True)
+          f"  work_steps={sorted(_WORK_STEPS)} queue={_QUEUE_STEP} admission={_ADMISSION}\n"
+          f"  log={LOG_PATH or '(disabled)'}", flush=True)
+    log_event({"t": round(time.time(), 3), "kind": "start", "url": URL,
+               "workflow": PACED_WORKFLOW_ID, "interval": INTERVAL, "alpha": ALPHA,
+               "cap": CONCURRENCY, "backstop": BACKSTOP, "resume_margin": RESUME_MARGIN,
+               "provider": PROVIDER})
 
     was_open = True
     while True:
@@ -399,6 +567,7 @@ def main():
             was_open = tick(was_open)
         except Exception as e:  # keep pacing across transient errors; fail closed for this tick
             print(f"tick error: {e} -> pausing this tick", file=sys.stderr, flush=True)
+            log_event({"t": round(time.time(), 3), "kind": "error", "where": "tick", "msg": str(e)})
             was_open = False
         time.sleep(INTERVAL)
 

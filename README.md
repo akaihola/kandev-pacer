@@ -123,6 +123,7 @@ launches until the turn is observed to start.
 ./make_paced.py 'Paced Kanban' --apply  # write them (server can stay up; WAL)
 ./pacer.py --dump-usage     # inspect live usage payload first
 ./pacer.py                  # start the pacing loop (lints the workflow on startup)
+./pacer.py --watch-usage 30 # read-only usage sampler, 30s cadence (run alongside)
 uv run test_pace.py         # pure pacing + classification tests (no network)
 uv run test_make_paced.py   # pure workflow-adaptation planning tests
 uv run test_make_paced_db.py  # SQLite round-trip tests (temp db, no server)
@@ -142,8 +143,49 @@ warnings the pacer would.
 
 Config via env: `KANDEV_URL`, `KANDEV_WS_URL` (default derives `ws://host/ws`),
 `PACED_WORKFLOW_ID`, `PACER_PROVIDER` (default `anthropic`), `PACER_CONCURRENCY`, `PACER_ALPHA`,
-`PACER_RESUME_MARGIN`, `PACER_BACKSTOP`, `PACER_INTERVAL`, and optional `PACER_ADMISSION_STEP_ID`
-(else the lowest-position work step). Defaults are the live `gogo` "Paced Kanban" ids.
+`PACER_RESUME_MARGIN`, `PACER_BACKSTOP`, `PACER_INTERVAL`, `PACER_LOG`, and optional
+`PACER_ADMISSION_STEP_ID` (else the lowest-position work step). Defaults are the live `gogo`
+"Paced Kanban" ids.
+
+## Logging
+
+The stdout lines say what the pacer is doing *now*; the JSONL log at `PACER_LOG` (default
+`~/.local/state/kandev-pacer/pacer.jsonl`, `PACER_LOG=''` disables) says what it did over the
+last week. That history is what any change to the concurrency cap has to be argued from —
+every such question is either a time derivative (does headroom trend up while work is queued?
+how long after a launch does `utilization_pct` move?) or a per-window breakdown, and neither
+survives in a formatted line with no timestamp.
+
+Four record kinds, append-only, ~300 KB/day at the default 120s tick:
+
+- `tick` — one per tick, **in every branch**. Carries `gate` (the quota verdict:
+  `open`/`paused`/`ceiling`/`blind`) and `action` (what was done: `launched`/`full`/`nothing`/
+  `skipped`/`withheld`) as separate fields, plus `running`, `launchable`, `cap`, `booked`, and
+  the full per-window breakdown `{label, c, e, h, d, resets_at}`. Gate and action are split
+  because the decisive question — is quota going unspent while work waits? — is exactly the
+  `gate=open, action=nothing, launchable>0` combination, which one merged field hides.
+  Windows are logged individually rather than collapsed to `min(h)` because headroom is in
+  *window-fraction* units, which are not comparable across windows: `h=0.1` is 30 minutes of
+  slack on the 5-hour window and 16.8 hours on the 7-day. `d` is what converts back to seconds.
+- `session` — an observed `{from → to}` state transition. Turn boundaries can't be derived
+  from launch records: kandev starts the agent in a detached goroutine, so the launch call
+  returns before `STARTING` appears, and nothing at all is recorded when a turn *ends*.
+- `window_reset` — a window rolled over, with `final_c`: what it *closed* at. Answers "did the
+  window end with quota unspent?", and is unrecoverable after the fact — once the endpoint
+  reports the new window, the old number is gone.
+- `start` / `error` — run configuration (so analysis can segment by `cap`, `alpha`, …) and
+  failures.
+
+To make this uniform the pacer now reads tasks and sessions on **every** tick, including
+paused ones — previously it returned early when the gate was shut, leaving no record for
+precisely the period that matters most, since running turns keep burning after the gate
+closes. Cost is one tasks call plus one sessions call per task per tick, against a local server.
+
+`--watch-usage N` is a separate read-only mode that polls usage every `N` seconds and appends
+`usage` records to the same log. Run it alongside the pacer to time how long after a turn
+starts `utilization_pct` actually moves: that dead time bounds any concurrency rule (N parallel
+turns overshoot by N × burn_rate × dead_time), and the 120s control tick is far too coarse to
+resolve it. Separate process, so the measurement cadence never perturbs the control loop.
 
 ## Design provenance
 
