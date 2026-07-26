@@ -11,7 +11,8 @@ auto-start disabled, so a finished turn lands the task on its correct next step
 (any branch/loop) and waits there `WAITING_FOR_INPUT`. While under the steady-burn
 curve, the pacer starts the next turn via the WebSocket `session.launch` primitive
 -- in place for a task already at a work step, or by admitting one from the parked
-queue (the start step) with a single call that both moves and launches it.
+queue (the start step) with a single call that both moves and launches it. Which task
+goes next is the user's own drag order in the Kandev TASKS sidebar (see PACER_ORDER).
 
 See docs/pacing-designs.md (Design 13) and README.md for the full derivation and
 the confirmed kandev source behavior.
@@ -23,15 +24,23 @@ import time
 import urllib.request
 from datetime import datetime
 
-# --- config (env-overridable; defaults are the live "Paced Kanban" on gogo) ---
+# --- config (env-overridable) ---
 URL = os.environ.get("KANDEV_URL", "http://127.0.0.1:38429").rstrip("/")
-PACED_WORKFLOW_ID = os.environ.get("PACED_WORKFLOW_ID", "1a47b559-2178-4f81-9ea7-c518e97a2a45")
+# Which workflows to pace: comma-separated ids or names. Unset (the default) paces EVERY
+# enrolled workflow -- one whose steps carry the stage_type=work tag, which only
+# make_paced.py writes. Enrollment, not this variable, is the normal way to opt a workflow in.
+PACED_WORKFLOWS = [w.strip() for w in (os.environ.get("PACED_WORKFLOW_ID") or "").split(",")
+                   if w.strip()]
 PROVIDER = os.environ.get("PACER_PROVIDER", "anthropic")     # usage agent to gate on
 CONCURRENCY = int(os.environ.get("PACER_CONCURRENCY", "1"))  # max in-flight paced turns
 ALPHA = float(os.environ.get("PACER_ALPHA", "1.0"))          # reserve slope; <1 keeps quota to spare
 RESUME_MARGIN = float(os.environ.get("PACER_RESUME_MARGIN", "0.0"))  # hysteresis reopen threshold
 BACKSTOP = float(os.environ.get("PACER_BACKSTOP", "0.97"))   # absolute cutoff; >=1.0 disables
 INTERVAL = int(os.environ.get("PACER_INTERVAL", "120"))      # seconds between ticks
+# Which order pending tasks are launched in: "auto" follows the sidebar TASKS list when the
+# user has it on the custom (manual, drag-ordered) sort and falls back to FIFO otherwise;
+# "custom" always follows the manual order; "created" is plain FIFO by task creation time.
+ORDER = (os.environ.get("PACER_ORDER") or "auto").lower()
 # How long a never-run admission booking (session not yet visible) is held before it may
 # retry -- long enough to outlast the lag before a just-started session shows up in the API
 # (Kandev starts it in a background goroutine, detached from our launch call), short enough
@@ -139,8 +148,26 @@ def is_work_step(step):
     ev = step.get("events") or {}
     return any(a.get("type") in TRANSITION_KINDS for a in (ev.get("on_turn_complete") or []))
 
-def work_step_ids(steps):
-    return {s["id"] for s in steps if is_work_step(s)}
+def is_paced_step(step):
+    """A step the pacer may start a turn on: tagged `stage_type=work` AND routing away on
+    turn completion. Both halves are load-bearing, for different reasons.
+
+    The tag is the *enrollment* marker. Kandev defaults the column to 'custom' and has no
+    API/UI/import surface for it, so the only thing that ever writes 'work' is
+    make_paced.py's direct SQLite write -- which is also what strips the `auto_start_agent`
+    that would bypass the gate. So "tagged work" means "deliberately prepared for pacing",
+    which is exactly the signal needed to decide, unattended, whether a workflow the pacer
+    merely *discovered* is fair game.
+
+    The routing half is the *safety* property, and it is not optional. It buys the guarantee
+    that a task still sitting on the step has an unfinished turn -- without it a step that
+    never routes away would read as idle after every turn and be relaunched forever, an
+    infinite prompt loop billed to the quota this program exists to protect.
+    """
+    return (step.get("stage_type") or "").lower() == "work" and is_work_step(step)
+
+def paced_step_ids(steps):
+    return {s["id"] for s in steps if is_paced_step(s)}
 
 def queue_step_id(steps):
     """The parked queue is the workflow's start step (where new/re-queued tasks wait)."""
@@ -150,13 +177,51 @@ def queue_step_id(steps):
     return None
 
 def admission_target(steps, override=None):
-    """The step to admit a queued task into: the lowest-position work step, or an override."""
+    """The step to admit a queued task into: the lowest-position paced step, or an override."""
     if override:
         return override
-    works = [s for s in steps if is_work_step(s)]
+    works = [s for s in steps if is_paced_step(s)]
     if not works:
         return None
     return min(works, key=lambda s: s.get("position", 0))["id"]
+
+def resolve_scope(entries, restrict=(), override=None):
+    """Work out which workflows to pace, from [(workflow, steps)] pairs.
+
+    Returns (scope, work_steps, queue_steps, admission, skipped):
+      scope       [workflow_id] -- every enrolled workflow, in payload order
+      work_steps  {step_id} -- pace-eligible steps, unioned across the scope (kandev step
+                  ids are globally unique, so one flat set stays unambiguous)
+      queue_steps {step_id} -- each scoped workflow's start step
+      admission   {workflow_id: step_id} -- per workflow: a queued task must be admitted
+                  into a step of *its own* workflow, so this cannot be one global value
+      skipped     [(workflow, reason)] -- reported, never silently dropped: a workflow
+                  quietly out of scope is how a task the user dragged to the top goes
+                  missing with no explanation.
+    """
+    want = [r.lower() for r in restrict]
+    scope, work, queues, admission, skipped = [], set(), set(), {}, []
+    for wf, steps in entries:
+        if want and wf["id"].lower() not in want and (wf.get("name") or "").lower() not in want:
+            skipped.append((wf, "not named in PACED_WORKFLOW_ID"))
+            continue
+        eligible = paced_step_ids(steps)
+        if not eligible:
+            skipped.append((wf, "not enrolled: no step is tagged stage_type=work *and* routes "
+                                "on turn complete -- run make_paced.py to enroll it"))
+            continue
+        scope.append(wf["id"])
+        work |= eligible
+        queue = queue_step_id(steps)
+        if queue:
+            queues.add(queue)
+        # An override names a step in one specific workflow; applying it to every workflow
+        # would admit their tasks into a step they don't own.
+        own = override if override in {s["id"] for s in steps} else None
+        target = admission_target(steps, own)
+        if target:
+            admission[wf["id"]] = target
+    return scope, work, queues, admission, skipped
 
 def step_names(steps):
     """id -> display name, for logging. Steps without a name fall back to their id."""
@@ -174,13 +239,19 @@ def _has_on_enter(step, kind):
     ev = step.get("events") or {}
     return any(a.get("type") == kind for a in (ev.get("on_enter") or []))
 
-def lint_workflow(steps):
-    """Return warning strings for config that would bypass the gate or misbehave. No mutation."""
-    works = work_step_ids(steps)
+def lint_workflow(steps, enrolled_only=True):
+    """Warning strings for config that would bypass the gate or misbehave. No mutation.
+
+    `enrolled_only` suppresses the "nothing to pace" complaints for a workflow that was
+    never enrolled -- with discovery across every workflow, most of them are legitimately
+    not paced and saying so each startup would bury the warnings that matter.
+    """
+    works = paced_step_ids(steps)
     warns = []
     for s in steps:
         name = s.get("name", "?")
         stage = (s.get("stage_type") or "").lower()
+        routes = is_work_step(s)
         # These two auto-launch a turn on step ENTRY, before the pacer gets to act, so they
         # bypass the gate on ANY step -- a parked Review step leaks just as a work step does.
         if _has_on_enter(s, "auto_start_agent"):
@@ -190,16 +261,30 @@ def lint_workflow(steps):
         if s["id"] in works:
             if s.get("auto_advance_requires_signal"):
                 warns.append(f"work step {name!r} gates routing on the agent step_complete signal")
-            if stage in ("review", "approval"):
-                warns.append(f"step {name!r} routes on on_turn_complete (classified work) but is tagged stage_type={stage!r}")
+        elif routes and stage in ("review", "approval"):
+            warns.append(f"step {name!r} routes on on_turn_complete (work-shaped) but is tagged stage_type={stage!r}")
+        elif routes and enrolled_only:
+            # The one that explains a task sitting there forever: work-shaped but untagged,
+            # so the pacer will not touch it.
+            warns.append(f"step {name!r} routes on on_turn_complete but is tagged stage_type={stage or 'custom'!r} "
+                         f"-> NOT paced (make_paced.py tags it 'work')")
         elif stage == "work":
             warns.append(f"step {name!r} is tagged stage_type='work' but has no on_turn_complete transition (parked)")
+    if not enrolled_only:
+        return warns
     if not works:
-        warns.append("no work step found (no on_turn_complete transition anywhere) -- nothing to pace")
+        warns.append("no pace-eligible step (stage_type=work + on_turn_complete transition) -- nothing to pace")
     if admission_target(steps, ADMISSION_OVERRIDE) is None:
         warns.append("no admission target derivable")
-    if queue_step_id(steps) is None:
+    queue = queue_step_id(steps)
+    if queue is None:
         warns.append("no start step (parked queue) found")
+    elif queue in works:
+        # The whole design rests on new work *waiting* somewhere until the gate opens. A start
+        # step that is itself pace-eligible has no holding area: every task landing there is
+        # immediately launchable, so a backlog executes instead of queueing.
+        warns.append(f"start step {named(queue, step_names(steps))!r} is itself pace-eligible -- "
+                     f"the parked queue will execute rather than hold (tasks never wait there)")
     return warns
 
 # --- launchability (pure) ---
@@ -215,7 +300,7 @@ def newest_session(sessions):
         return None
     return max(sessions, key=lambda s: s.get("started_at", ""))
 
-def is_launchable(task, sessions, work_steps, queue_step_id_, booked):
+def is_launchable(task, sessions, work_steps, queue_steps, booked):
     """Can the pacer start a turn for this task now?
 
     - at a work step: only when its newest session is idle -- WAITING_FOR_INPUT (in-place next
@@ -236,14 +321,22 @@ def is_launchable(task, sessions, work_steps, queue_step_id_, booked):
     state = newest["state"] if newest else None
     if step in work_steps:
         return state in IDLE_STATES
-    if step == queue_step_id_:
+    if step in queue_steps:
         return newest is None or state in IDLE_STATES
     return False
 
-def launch_target(task, work_steps, queue_step_id_, admission_step):
-    """Which step id to launch at: the current step in place, or the admission step from the queue."""
+def launch_target(task, work_steps, admission):
+    """Which step id to launch at: the current step in place, or the admission step to move to.
+
+    Admission is looked up by the task's OWN workflow_id -- with several workflows paced at
+    once, a single global admission step would drag a queued task into another workflow's
+    board. Returns None when the task's workflow has no admission target, which the caller
+    must treat as "skip", never as "launch in place".
+    """
     step = task.get("workflow_step_id", "")
-    return step if step in work_steps else admission_step
+    if step in work_steps:
+        return step
+    return admission.get(task.get("workflow_id", ""))
 
 def pick_intent(sessions):
     """(intent, session_id): 'start' only with no session at all, else 'workflow_step' + newest.
@@ -257,6 +350,107 @@ def pick_intent(sessions):
     if newest is None:
         return ("start", None)
     return ("workflow_step", newest["id"])
+
+# --- launch order: the sidebar TASKS list, top to bottom (pure) ---
+
+def effective_sidebar_view(settings):
+    """The active sidebar view merged with any in-flight draft, or None.
+
+    Mirrors the frontend's useEffectiveSidebarView. Reading only the saved view would miss
+    exactly the case this feature is for: dragging a task flips the sort to 'custom' in the
+    *draft* first, and the draft is what the user is looking at.
+    """
+    views = settings.get("sidebar_views") or []
+    active = next((v for v in views if v.get("id") == settings.get("sidebar_active_view_id")), None)
+    if active is None:
+        active = views[0] if views else None
+    if active is None:
+        return None
+    draft = settings.get("sidebar_draft") or None
+    if draft and draft.get("base_view_id") == active.get("id"):
+        return {**active, "filters": draft.get("filters"), "sort": draft.get("sort"),
+                "group": draft.get("group")}
+    return active
+
+def has_custom_sort_view(settings):
+    """True when the user keeps a sidebar view on the manual (drag-ordered) sort.
+
+    Deliberately *any* saved view, not just the active one: the manual order itself
+    (`ordered_task_ids`) is stored once per user, not per view, so a live "Prioritize" view
+    still expresses the user's intended order while they have some other view selected to
+    work in. Keying on the active view would silently flip the pacer back to FIFO the
+    moment they switch views for an unrelated reason. The draft is checked too -- dragging
+    a task flips the sort to custom in the draft first, before it is saved to the view.
+    """
+    views = list(settings.get("sidebar_views") or [])
+    effective = effective_sidebar_view(settings)
+    if effective:
+        views.append(effective)
+    return any((v.get("sort") or {}).get("key") == "custom" for v in views)
+
+def _rank(tasks, ordered_ids):
+    """Tasks listed in `ordered_ids` first, in that order; the rest keep their incoming order."""
+    index = {tid: i for i, tid in enumerate(ordered_ids)}
+    listed = sorted((t for t in tasks if t["id"] in index), key=lambda t: index[t["id"]])
+    return listed + [t for t in tasks if t["id"] not in index]
+
+def visible_task_order(tasks, pinned_ids, ordered_ids, subtask_order=None):
+    """Tasks in the order the sidebar renders them under sort=custom, group=none.
+
+    Root tasks take the manual order, then pinned ones float to the top (pinning is a
+    visible re-ordering, so honoring it keeps "the pacer runs the top-most task" true).
+    Each task is followed by its subtasks in their own stored order -- the sidebar nests
+    them under the parent, so scheduling them right after it is what the list shows.
+
+    Tasks the user never dragged keep their incoming order -- the caller passes them in
+    FIFO, so "not placed" means "not prioritized", and they run oldest-first behind
+    everything that was placed. (The sidebar itself floats them to the top by newest
+    created_at; copying that here would let merely *creating* a task jump the queue ahead
+    of an order the user deliberately set.)
+    """
+    subtask_order = subtask_order or {}
+    ids = {t["id"] for t in tasks}
+    roots, subs = [], {}
+    for t in tasks:
+        parent = t.get("parent_id") or ""
+        if parent and parent in ids and parent != t["id"]:
+            subs.setdefault(parent, []).append(t)
+        else:
+            roots.append(t)
+    out, seen = [], set()
+    def visit(task):
+        if task["id"] in seen:
+            return
+        seen.add(task["id"])
+        out.append(task)
+        for sub in _rank(subs.get(task["id"], []), subtask_order.get(task["id"]) or []):
+            visit(sub)
+    for task in _rank(_rank(roots, ordered_ids), pinned_ids):
+        visit(task)
+    # A parent cycle leaves its tasks unreachable from any root. Append them rather than
+    # dropping them -- an unorderable task must still be launchable, just last.
+    out.extend(t for t in tasks if t["id"] not in seen)
+    return out
+
+def ordered_tasks(tasks, settings, mode):
+    """Candidate tasks in launch-priority order.
+
+    mode 'created' (or no settings) is FIFO by creation time -- the pacer's original order,
+    and the fallback whenever the user's list order can't be read. 'auto' follows the manual
+    order once the user keeps a sidebar view on the custom sort; 'custom' always does.
+
+    FIFO is the base order in every mode: the manual list is layered on top of it, so tasks
+    the user hasn't placed stay in oldest-first order behind the ones they have.
+    """
+    fifo = sorted(tasks, key=lambda t: t.get("created_at", ""))
+    if mode == "created" or not settings:
+        return fifo
+    if mode != "custom" and not has_custom_sort_view(settings):
+        return fifo
+    prefs = settings.get("sidebar_task_prefs") or {}
+    return visible_task_order(fifo, prefs.get("pinned_task_ids") or [],
+                              prefs.get("ordered_task_ids") or [],
+                              prefs.get("subtask_order_by_parent_id") or {})
 
 def prune_booked(booked, tasks, task_sessions, now, ttl):
     """Keep a booking (key -> booked_at) only while it still guards against a double start.
@@ -297,14 +491,37 @@ def _req(method, path, body=None):
         raw = resp.read()
         return json.loads(raw) if raw else None
 
-def workflow_name():
-    return (_req("GET", f"/api/v1/workflows/{PACED_WORKFLOW_ID}") or {}).get("name") or PACED_WORKFLOW_ID
+def workflows():
+    return (_req("GET", "/api/v1/workflows") or {}).get("workflows") or []
 
-def workflow_steps():
-    return (_req("GET", f"/api/v1/workflows/{PACED_WORKFLOW_ID}/workflow/steps") or {}).get("steps", [])
+def workflow_steps(workflow_id):
+    return (_req("GET", f"/api/v1/workflows/{workflow_id}/workflow/steps") or {}).get("steps", [])
 
-def paced_tasks():
-    return (_req("GET", f"/api/v1/workflows/{PACED_WORKFLOW_ID}/tasks") or {}).get("tasks", [])
+def workflow_entries():
+    """[(workflow, steps)] for every workflow on the server -- the input to resolve_scope."""
+    return [(wf, workflow_steps(wf["id"])) for wf in workflows()]
+
+def tasks_of(workflow_id):
+    return (_req("GET", f"/api/v1/workflows/{workflow_id}/tasks") or {}).get("tasks", [])
+
+def paced_tasks(scope=None):
+    """Tasks across every paced workflow. Each carries `workflow_id`, which is what routes
+    an admission back to a step of its own board."""
+    return [t for wf in (scope if scope is not None else _SCOPE) for t in tasks_of(wf)]
+
+def user_settings():
+    """The user settings blob (sidebar views + task prefs), or None if unavailable.
+
+    Returns None rather than raising: a failure here only costs the manual order, and
+    falling back to FIFO is far better than pausing the whole tick over it.
+    """
+    if ORDER == "created":
+        return None
+    try:
+        return (_req("GET", "/api/v1/user/settings") or {}).get("settings") or None
+    except Exception as e:
+        print(f"user settings unavailable ({e}) -> FIFO order this tick", file=sys.stderr, flush=True)
+        return None
 
 def sessions_of(task_id):
     return (_req("GET", f"/api/v1/tasks/{task_id}/sessions") or {}).get("sessions", [])
@@ -336,10 +553,12 @@ def ws_launch(task_id, intent, session_id, workflow_step_id, req_id="pace-1"):
 # --- pacing loop ---
 
 _BOOKED = {}             # (task_id, step_id, session_id) -> booked_at (launch issued)
-_WORK_STEPS = set()
-_QUEUE_STEP = None
-_ADMISSION = None
+_SCOPE = []              # workflow ids being paced
+_WORK_STEPS = set()      # pace-eligible step ids, unioned across the scope
+_QUEUE_STEPS = set()     # each scoped workflow's start step (its parked queue)
+_ADMISSION = {}          # workflow id -> step id to admit a queued task into
 _STEP_NAMES = {}         # step id -> name, for logging only
+_WF_NAMES = {}           # workflow id -> name, for logging only
 
 def tick(was_open):
     global _BOOKED
@@ -367,8 +586,8 @@ def tick(was_open):
         print(f"headroom={wh:+.3f} open, full ({running}/{CONCURRENCY})", flush=True)
         return is_open
 
-    launchable = [t for t in sorted(tasks, key=lambda t: t.get("created_at", ""))
-                  if is_launchable(t, task_sessions[t["id"]], _WORK_STEPS, _QUEUE_STEP, _BOOKED)]
+    launchable = [t for t in ordered_tasks(tasks, user_settings(), ORDER)
+                  if is_launchable(t, task_sessions[t["id"]], _WORK_STEPS, _QUEUE_STEPS, _BOOKED)]
     if not launchable:
         print(f"headroom={wh:+.3f} open, nothing to launch ({running}/{CONCURRENCY} running)", flush=True)
         return is_open
@@ -385,34 +604,89 @@ def tick(was_open):
               f"-> skip", flush=True)
         return is_open
     step = fresh.get("workflow_step_id", "")
+    target = launch_target(fresh, _WORK_STEPS, _ADMISSION)
+    if target is None:
+        print(f"headroom={wh:+.3f} open, {task.get('title') or task['id']!r} has no admission "
+              f"target in workflow {named(fresh.get('workflow_id'), _WF_NAMES)!r} -> skip", flush=True)
+        return is_open
     sessions = sessions_of(task["id"])
     intent, sid = pick_intent(sessions)
-    target = launch_target(fresh, _WORK_STEPS, _QUEUE_STEP, _ADMISSION)
     ws_launch(task["id"], intent, sid, target)
     _BOOKED[(task["id"], step, sid)] = now
     print(f"headroom={wh:+.3f} open -> launched {fresh.get('title') or task['id']!r} "
-          f"intent={intent} target={named(target, _STEP_NAMES)!r} "
-          f"({running + 1}/{CONCURRENCY})", flush=True)
+          f"intent={intent} workflow={named(fresh.get('workflow_id'), _WF_NAMES)!r} "
+          f"target={named(target, _STEP_NAMES)!r} ({running + 1}/{CONCURRENCY})", flush=True)
     return is_open
 
+def resolve_globals(entries):
+    """Fill the scope globals from [(workflow, steps)]. Returns the skipped list for reporting."""
+    global _SCOPE, _WORK_STEPS, _QUEUE_STEPS, _ADMISSION, _STEP_NAMES, _WF_NAMES
+    _SCOPE, _WORK_STEPS, _QUEUE_STEPS, _ADMISSION, skipped = resolve_scope(
+        entries, PACED_WORKFLOWS, ADMISSION_OVERRIDE)
+    _STEP_NAMES = {sid: name for _, steps in entries for sid, name in step_names(steps).items()}
+    _WF_NAMES = {wf["id"]: wf.get("name") or wf["id"] for wf, _ in entries}
+    return skipped
+
+def _dump_order(entries, skipped):
+    """Print the queue the pacer would work down, so the effect of a drag is checkable without
+    waiting a tick (or spending quota) to see which task it picks."""
+    settings = user_settings()
+    manual = bool(settings) and (ORDER == "custom" or has_custom_sort_view(settings))
+    placed = ((settings or {}).get("sidebar_task_prefs") or {}).get("ordered_task_ids") or []
+    print(f"order={ORDER} -> {'manual sidebar order' if manual else 'FIFO by created_at'} "
+          f"({len(placed)} task(s) placed by hand)")
+    print(f"scope: {[named(w, _WF_NAMES) for w in _SCOPE]}")
+    tasks = paced_tasks()
+    for i, t in enumerate(ordered_tasks(tasks, settings, ORDER)):
+        print(f"{i + 1:3}. {t.get('title') or t['id']}")
+    # The sidebar list spans every workflow, so a task can be placed high by hand and still be
+    # out of scope. Saying nothing about it is what made a top-dragged task look lost.
+    if not skipped:
+        return
+    in_scope = {t["id"] for t in tasks}
+    elsewhere = {t["id"]: (t, wf) for wf, _ in skipped for t in tasks_of(wf["id"])}
+    missing = [tid for tid in placed if tid not in in_scope and tid in elsewhere]
+    print(f"\nnot paced: {len(skipped)} workflow(s) out of scope")
+    for wf, reason in skipped:
+        print(f"  - {wf.get('name') or wf['id']}: {reason}")
+    for tid in missing:
+        task, wf = elsewhere[tid]
+        print(f"  ! placed by hand but not paced: {task.get('title') or tid!r} "
+              f"(in {wf.get('name') or wf['id']!r})")
+
 def main():
-    global _WORK_STEPS, _QUEUE_STEP, _ADMISSION, _STEP_NAMES
     if "--dump-usage" in sys.argv:
         print(json.dumps(_req("GET", "/api/v1/agents/usage"), indent=2))
         return
+    if ORDER not in ("auto", "custom", "created"):
+        print(f"lint: PACER_ORDER={ORDER!r} unknown -> treating it as 'auto'",
+              file=sys.stderr, flush=True)
 
-    steps = workflow_steps()
-    _WORK_STEPS = work_step_ids(steps)
-    _QUEUE_STEP = queue_step_id(steps)
-    _ADMISSION = admission_target(steps, ADMISSION_OVERRIDE)
-    _STEP_NAMES = step_names(steps)
-    for w in lint_workflow(steps):
-        print(f"lint: {w}", file=sys.stderr, flush=True)
-    works = sorted(named(s, _STEP_NAMES) for s in _WORK_STEPS)
-    print(f"pacing {URL} workflow={workflow_name()!r} every {INTERVAL}s "
-          f"(alpha={ALPHA}, concurrency={CONCURRENCY}, provider={PROVIDER})\n"
-          f"  work_steps={works} queue={named(_QUEUE_STEP, _STEP_NAMES)!r} "
-          f"admission={named(_ADMISSION, _STEP_NAMES)!r}", flush=True)
+    entries = workflow_entries()
+    skipped = resolve_globals(entries)
+    if "--dump-order" in sys.argv:
+        _dump_order(entries, skipped)
+        return
+    if not _SCOPE:
+        print("no workflow is enrolled for pacing (no step tagged stage_type=work that routes "
+              "on turn complete). Run: ./make_paced.py '<workflow>' --apply", file=sys.stderr, flush=True)
+        return 1
+    for wf, steps in entries:
+        if wf["id"] not in _SCOPE:
+            continue
+        for w in lint_workflow(steps):
+            print(f"lint: [{wf.get('name') or wf['id']}] {w}", file=sys.stderr, flush=True)
+    print(f"pacing {URL} every {INTERVAL}s "
+          f"(alpha={ALPHA}, concurrency={CONCURRENCY}, provider={PROVIDER}, order={ORDER})", flush=True)
+    steps_by_wf = {wf["id"]: steps for wf, steps in entries}
+    for wf_id in _SCOPE:
+        steps = steps_by_wf[wf_id]
+        works = sorted(named(s["id"], _STEP_NAMES) for s in steps if s["id"] in _WORK_STEPS)
+        print(f"  {named(wf_id, _WF_NAMES)!r}: work_steps={works} "
+              f"queue={named(queue_step_id(steps), _STEP_NAMES)!r} "
+              f"admission={named(_ADMISSION.get(wf_id), _STEP_NAMES)!r}", flush=True)
+    for wf, reason in skipped:
+        print(f"  not paced: {wf.get('name') or wf['id']!r} -- {reason}", flush=True)
 
     was_open = True
     while True:
@@ -424,4 +698,4 @@ def main():
         time.sleep(INTERVAL)
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main() or 0)
