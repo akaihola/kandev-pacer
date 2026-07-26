@@ -145,6 +145,14 @@ Config via env: `KANDEV_URL`, `KANDEV_WS_URL` (default derives `ws://host/ws`),
 `PACER_RESUME_MARGIN`, `PACER_BACKSTOP`, `PACER_INTERVAL`, and optional `PACER_ADMISSION_STEP_ID`
 (else the lowest-position work step). Defaults are the live `gogo` "Paced Kanban" ids.
 
+## Packaging as a kandev plugin
+
+Assessed and rejected as a *native* plugin: kandev's plugin Host API has no session-launch
+call, no usage/quota reader, no `workflow_step_id` on its `Task`, and no step routing on its
+`WorkflowStep` — so the pacing loop would still run on `/api/v1` + `/ws` exactly as it does
+today. Viable only as a lifecycle/config/UI wrapper. See
+[`docs/kandev-plugin-feasibility.md`](docs/kandev-plugin-feasibility.md).
+
 ## Design provenance
 
 Distilled from the kandev integration investigation in the vault:
