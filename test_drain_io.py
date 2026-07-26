@@ -23,12 +23,13 @@ HTTP_PORT, WS_PORT = 38997, 38998
 # Point the pacer at the fakes before importing it -- config is read at import time.
 os.environ.update(KANDEV_URL=f"http://127.0.0.1:{HTTP_PORT}",
                   KANDEV_WS_URL=f"ws://127.0.0.1:{WS_PORT}/ws",
-                  PACED_WORKFLOW_ID="wf", PACER_INTERVAL="120", PACER_CONCURRENCY="1")
+                  PACED_WORKFLOW_ID="wf", PACER_INTERVAL="120", PACER_CONCURRENCY="1",
+                  PACER_ORDER="board")
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 STEPS = [
     {"id": "bk", "name": "Backlog", "is_start_step": True, "position": 0, "events": {}},
-    {"id": "ip", "name": "In Progress", "position": 1,
+    {"id": "ip", "name": "In Progress", "position": 1, "stage_type": "work",
      "events": {"on_turn_complete": [{"type": "move_to_step"}]}},
     {"id": "rv", "name": "Review", "position": 2,
      "events": {"on_turn_start": [{"type": "move_to_step"}]}},
@@ -114,9 +115,11 @@ def _start_fakes():
 _start_fakes()
 import pacer  # noqa: E402  -- must follow the env setup above
 
-pacer._WORK_STEPS = pacer.work_step_ids(STEPS)
-pacer._QUEUE_STEP = pacer.queue_step_id(STEPS)
-pacer._ADMISSION = pacer.admission_target(STEPS)
+pacer._SCOPE = ["wf"]
+pacer._WORK_STEPS = pacer.paced_step_ids(STEPS)
+pacer._QUEUE_STEPS = {pacer.queue_step_id(STEPS)}
+pacer._ADMISSION = {"wf": pacer.admission_target(STEPS)}
+pacer._WF_NAMES = {"wf": "Paced"}
 pacer._STEP_NAMES = pacer.step_names(STEPS)
 pacer._STEP_RANKS = pacer.step_ranks(STEPS)
 
@@ -126,7 +129,8 @@ def _sess(sid, state):
 
 
 def _task(tid, step, title="T", created="1"):
-    return {"id": tid, "title": title, "workflow_step_id": step, "created_at": created}
+    return {"id": tid, "title": title, "workflow_step_id": step, "created_at": created,
+            "workflow_id": "wf"}
 
 
 def _load(tasks, sessions, queues):

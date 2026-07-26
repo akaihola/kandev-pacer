@@ -64,17 +64,94 @@ and branch immediately and parks the session in `CREATED` — prepared, agent ne
 alongside `WAITING_FOR_INPUT`. Getting this wrong is silent and total: tasks sit in the queue
 forever while the pacer cheerfully logs `nothing to launch` every tick.
 
-**Work-step classification is read from Kandev, not a local list.** A step counts as a *work
-step* when — and only when — its `on_turn_complete` carries a transition action (`move_to_next` |
-`move_to_previous` | `move_to_step`) — writable via the normal step-edit API and self-consistent
-with the rule that a completed turn always moves the task off the step. That gives us a handy
-guarantee: if a task is *still sitting* on a work step, its turn hasn't finished yet, so the
-pacer won't double-launch it. `stage_type: "work"` is a corroborating hint only (it is read-only
-via the step API; settable only out of band, via workflow import or a direct SQLite write).
-Parked steps (Review/Done, the queue)
-must route via `on_turn_start`/`on_comment`, never `on_turn_complete`. On startup the pacer
-lints the workflow and warns about bypass/ambiguity (leftover `auto_start_agent`, profile-switch
-+ prompt, signal-gated routing, stage_type/routing disagreement, missing work step or queue).
+## Scope: every enrolled workflow, not one hardcoded board
+
+A step is **pace-eligible** when it satisfies *both* halves, and the pacer paces every workflow
+that has at least one:
+
+1. **`stage_type: "work"` — the enrollment marker.** Kandev defaults this column to `custom` and
+   exposes no API/UI/import surface for it, so the only thing that ever writes `work` is
+   `make_paced.py`'s direct SQLite write — which is also what strips the `auto_start_agent` that
+   would bypass the gate. "Tagged work" therefore means "deliberately prepared for pacing",
+   which is exactly the signal needed to decide, unattended, whether a workflow the pacer merely
+   *discovered* is fair game. (`make_paced.py` is the enroll action; a workflow re-import resets
+   `stage_type`, so re-run it after one.)
+2. **An `on_turn_complete` transition (`move_to_next` | `move_to_previous` | `move_to_step`) —
+   the safety property**, and not optional. It buys the guarantee that a task *still sitting* on
+   the step has an unfinished turn, so the pacer won't double-launch it. Without it a step that
+   never routes away would read as idle after every turn and be relaunched forever — an infinite
+   prompt loop billed to the quota this program exists to protect.
+
+Parked steps (Review/Done, the queue) must route via `on_turn_start`/`on_comment`, never
+`on_turn_complete`. Step ids are globally unique, so eligible steps across all workflows live in
+one flat set; **admission is per workflow**, since a queued task must be admitted into a step of
+its own board.
+
+`PACED_WORKFLOW_ID` (comma-separated ids *or* names) narrows the scope; unset — the default —
+paces every enrolled workflow. **This changed:** it used to default to one hardcoded workflow id.
+Enrollment, not this variable, is now the normal way to opt a workflow in.
+
+On startup, and in `--dump-order`, the pacer prints the workflows it is pacing **and the ones it
+is not, with the reason** — a workflow silently out of scope is how a task dragged to the top of
+your sidebar goes missing with no explanation. It also lints each scoped workflow for
+bypass/ambiguity: leftover `auto_start_agent`, profile-switch + prompt, signal-gated routing,
+work-shaped-but-untagged steps (the "why is this never paced" case), `stage_type`/routing
+disagreement, and a **start step that is itself pace-eligible** — which leaves the design no
+holding area at all, so the backlog executes instead of queueing.
+
+## Which task goes next
+
+When more than one task is launchable and the gate is open, two orderings decide, layered:
+
+1. **What you placed by hand** — the order of your Kandev `TASKS` sidebar list, if you keep one.
+2. **Everything else** — the board's own kanban-pull order (below).
+
+An explicit drag outranks the pull heuristic; anything you have *not* dragged keeps pull order.
+
+### The overlay: your sidebar drag order
+
+Put a sidebar view on **sort `custom`, group `none`**, drag the tasks into the order you want,
+and the pacer works down that order — no pacer-side priority field to maintain.
+
+- **Placed tasks first**, in your drag order. **Pinned tasks float above them** (pinning is a
+  visible re-ordering, so honoring it keeps "the pacer runs the top-most task" true).
+- **Subtasks follow their parent**, in their own stored order — the sidebar nests them there.
+- **Tasks you never dragged sit behind the placed ones**, in the board's pull order. "Not
+  placed" means "not prioritized". Note this is a *deliberate* divergence from the sidebar,
+  which floats unplaced tasks to the *top* by newest `created_at`: copying that would let
+  merely *creating* a task jump an order you set by hand.
+- Re-read **every tick**, so a drag re-prioritizes the queue without restarting the pacer.
+- The sidebar list spans **every** workflow while the pacer only sees enrolled ones, so a task
+  can sit high in your manual order and still be out of scope. `--dump-order` names those
+  explicitly (`placed by hand but not paced`) rather than leaving them to look lost.
+
+`PACER_ORDER` picks the policy:
+
+| value | behavior |
+| --- | --- |
+| `auto` (default) | Layer the manual order over pull order once **any** saved sidebar view uses sort `custom`; pull order alone otherwise. |
+| `custom` | Always layer the manual order, whatever the sidebar's current sort. |
+| `board` | Pull order alone — ignores the sidebar and skips the settings fetch entirely. |
+
+**Why "any saved view" and not the active one?** The manual order (`ordered_task_ids`) is
+stored **once per user, not per view**. So a saved "Prioritize" view still expresses your
+intended order while you have some other view selected to work in — keying on the *active*
+view would silently flip the pacer back to FIFO the moment you switched views for an unrelated
+reason. The in-flight *draft* counts too: dragging a task flips the sort to `custom` in the
+draft before it is ever saved to the view.
+
+**Fails soft, never sideways.** Pull order is the base in every mode and the manual list is
+layered on top, so anything missing degenerates cleanly: settings unreadable (logged, pacing
+continues — an HTTP hiccup here must not pause the gate), nothing dragged yet, or a task whose
+parent chain is cyclic all fall back to the board order rather than to an arbitrary one.
+
+**The trade-off this layering makes.** Pull order deliberately prefers finishing in-flight work
+over admitting new work; dragging a queued task to the top overrides that and admits it first.
+That is the point — an explicit instruction beats a heuristic — but if you would rather the WIP
+preference always win, use `PACER_ORDER=board`.
+
+`./pacer.py --dump-order` prints the queue the pacer would work down, so a drag is checkable
+without waiting a tick — or spending quota — to see which task it picks.
 
 **Priority tiering is free**: the gate reads *account-level* usage, which already includes
 Routine/UI burn. When high-priority work pushes `c` above `e`, headroom goes negative and the
@@ -91,10 +168,10 @@ pacer withholds *all* launches (including admissions). A hard mid-turn lockout o
 already-running turn is **not** preventable here — halting a live turn needs a WebSocket
 `stop_task`, which is preemption and out of scope for this admission-control pacer.
 
-## Which task goes next
+### The base: the board's pull order
 
-When more than one task is launchable and the gate is open, the pacer picks by **column first,
-then the board's own pull order**:
+Whatever the overlay does not place, the pacer picks by **column first, then the board's own
+pull order**:
 
 ```
 descending workflow-step position   (rightmost / most downstream column first)
@@ -106,7 +183,7 @@ descending workflow-step position   (rightmost / most downstream column first)
 
 Everything after the first line is kandev's WIP-limit pull ordering copied verbatim
 (`task/repository/sqlite/task.go:504`, documented at `docs/public/tasks-and-workflows.md:187`),
-so dragging a card up the board moves it up the pacer's queue too — `position` outranks both
+so dragging a card up the *board* moves it up the pacer's queue too — `position` outranks both
 priority and age, because a drag is an explicit human decision and the other two are defaults.
 The `id` tiebreak keeps the order total, so a fully tied pair always resolves the same way
 instead of flapping between ticks.
@@ -131,7 +208,7 @@ unchanged, so dragging a card up its column moves its queued prompt up the relea
 `position` reaches the pacer already: `GET /api/v1/workflows/:id/tasks` returns it on every task
 (`dto.TaskDTO.Position`, `task/dto/dto.go:146`), as do the WS `task.*` events
 (`task/service/service_events.go:352`). A task with a missing or null `position` is read as `0` —
-top of its column, not last — so an older payload or an un-dragged board degrades to the previous
+top of its column, not last — so an older payload or an un-dragged board degrades to plain
 `created_at` ordering rather than sorting the task to the back.
 
 Concurrency cap (`PACER_CONCURRENCY`, default 1) bounds how many paced turns run at once
@@ -157,6 +234,16 @@ launches until the turn is observed to start.
   state plus the `executors_running` row (`:1359`) and calls `startAgentOnPreparedWorkspace`
   rather than a full relaunch. (`intent: start_created` also starts a prepared session, but
   `StartCreatedSession` takes no `workflow_step_id`, so it can't admit — it won't move the task.)
+- **Sidebar order** (2026-07-26) `GET /api/v1/user/settings` → `{settings: {…}}` (note the wrapper). The
+  manual order lives in `settings.sidebar_task_prefs{pinned_task_ids, ordered_task_ids,
+  subtask_order_by_parent_id}` — **per user, not per view** (`user/models/models.go:167`,
+  route `user/handlers/handlers.go:39`). Views are `settings.sidebar_views[]{sort{key,
+  direction}, group}` plus `sidebar_active_view_id` and an unsaved `sidebar_draft`; the pacer
+  merges draft over active view exactly like the frontend's `useEffectiveSidebarView`
+  (`web/hooks/domains/sidebar/use-effective-sidebar-view.ts`). Ordering semantics mirror
+  `applyView` (`web/lib/sidebar/apply-view.ts`): sort → group → subtask order → pinned float,
+  where the pin float applies to root tasks only. `custom` ignores sort `direction` (reversing
+  a manual drag has no meaning). Tasks carry `parent_id` (`task/models/models.go:446`).
 - **Message queue** (WebSocket only, no `/api/v1` route): `message.queue.add` / `.get` /
   `.drain` / `.update` / `.remove` / `.cancel` (`pkg/websocket/actions.go:114`), handlers in
   `orchestrator/handlers/queue_handlers.go`. `.get` → `{entries, count, max}`; `.drain` →
@@ -185,6 +272,7 @@ launches until the turn is observed to start.
 ./make_paced.py 'Paced Kanban'          # dry run: show the edits pacing needs
 ./make_paced.py 'Paced Kanban' --apply  # write them (server can stay up; WAL)
 ./pacer.py --dump-usage     # inspect live usage payload first
+./pacer.py --dump-order     # show the queue order launches will follow
 ./pacer.py                  # start the pacing loop (lints the workflow on startup)
 uv run test_pace.py         # pure pacing + classification tests (no network)
 uv run test_make_paced.py   # pure workflow-adaptation planning tests
@@ -194,7 +282,8 @@ uv run test_drain_io.py     # queued-prompt release vs a fake kandev (loopback, 
 
 **Workflow setup:** `make_paced.py` adapts an existing workflow in place: it strips every
 `on_enter: auto_start_agent` action and normalizes `stage_type` (`work` for steps that route
-away on `on_turn_complete` — the same classifier the pacer uses — `review`/`approval` for
+away on `on_turn_complete` — which is what enrolls them, since the pacer then requires that tag
+*and* the routing — `review`/`approval` for
 parked steps named via `--review`/`--approval`, with any step named Review defaulting to
 `review`). A parked step that already carries a valid tag by hand (`review`, `approval`,
 `custom`) keeps it; only a missing tag or a stale `work` tag on a parked step falls back to
@@ -205,9 +294,11 @@ any import. The steps it leaves alone still show as `ok` lines, and it prints th
 warnings the pacer would.
 
 Config via env: `KANDEV_URL`, `KANDEV_WS_URL` (default derives `ws://host/ws`),
-`PACED_WORKFLOW_ID`, `PACER_PROVIDER` (default `anthropic`), `PACER_CONCURRENCY`, `PACER_ALPHA`,
-`PACER_RESUME_MARGIN`, `PACER_BACKSTOP`, `PACER_INTERVAL`, and optional `PACER_ADMISSION_STEP_ID`
-(else the lowest-position work step). Defaults are the live `gogo` "Paced Kanban" ids.
+`PACED_WORKFLOW_ID` (comma-separated ids or names; unset = every enrolled workflow),
+`PACER_PROVIDER` (default `anthropic`), `PACER_CONCURRENCY`, `PACER_ALPHA`,
+`PACER_RESUME_MARGIN`, `PACER_BACKSTOP`, `PACER_INTERVAL`, `PACER_ORDER`
+(`auto` | `custom` | `board`, default `auto`), and optional `PACER_ADMISSION_STEP_ID`
+(else the lowest-position pace-eligible step; applies only to the workflow that owns it).
 
 ## Packaging as a kandev plugin
 
