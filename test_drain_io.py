@@ -118,6 +118,7 @@ pacer._WORK_STEPS = pacer.work_step_ids(STEPS)
 pacer._QUEUE_STEP = pacer.queue_step_id(STEPS)
 pacer._ADMISSION = pacer.admission_target(STEPS)
 pacer._STEP_NAMES = pacer.step_names(STEPS)
+pacer._STEP_RANKS = pacer.step_ranks(STEPS)
 
 
 def _sess(sid, state):

@@ -46,6 +46,9 @@ WINDOW_DURATIONS = {"5-hour": 5 * 3600, "7-day": 7 * 24 * 3600, "7-day (Fable)":
 
 # Workflow step-event action kinds that move a task off its step.
 TRANSITION_KINDS = {"move_to_next", "move_to_previous", "move_to_step"}
+# Kandev's task priority ordering, lower first -- copied from the WIP-limit pull query
+# (task/repository/sqlite/task.go:504). 'none' and any unknown value tie at the back.
+PRIORITY_RANK = {"critical": 0, "high": 1, "medium": 2, "low": 3, "none": 4}
 # Session states that mean a turn is in flight (counts against concurrency).
 RUNNING_STATES = {"STARTING", "RUNNING"}
 # Session state that means the turn is done and the next may be launched.
@@ -163,6 +166,10 @@ def admission_target(steps, override=None):
         return None
     return min(works, key=lambda s: s.get("position", 0))["id"]
 
+def step_ranks(steps):
+    """step id -> board position (column order), for ordering tasks across columns."""
+    return {s["id"]: s.get("position", 0) for s in steps}
+
 def step_names(steps):
     """id -> display name, for logging. Steps without a name fall back to their id."""
     return {s["id"]: s.get("name") or s["id"] for s in steps}
@@ -206,6 +213,37 @@ def lint_workflow(steps):
     if queue_step_id(steps) is None:
         warns.append("no start step (parked queue) found")
     return warns
+
+# --- launch ordering (pure) ---
+
+def priority_rank(task):
+    """Kandev's priority ordering, lower first. Anything unrecognized ranks last, with 'none'."""
+    return PRIORITY_RANK.get((task.get("priority") or "").strip().lower(), PRIORITY_RANK["none"])
+
+def task_order_key(task, ranks):
+    """Sort key deciding which launchable task goes next: downstream column first, then pull order.
+
+    `position` is the manual drag order from the board, but it is scoped to a *workflow step*,
+    not to the workflow -- two tasks in different columns can both sit at position 0, so it is
+    not a total order on its own. We therefore order by column first and only compare positions
+    within one: descending step position, i.e. the rightmost (most downstream) column wins.
+
+    That is kanban pull, and it is what Design 13 needs. A task already at a work step is a turn
+    in flight; admitting a fresh one from the parked queue (the leftmost column) instead would
+    grow WIP without finishing anything. Draining right-to-left also generalizes past the single
+    work step of the live board: a multi-work-step workflow advances tasks already deep in the
+    pipeline before pulling new ones in at the start.
+
+    Within a column, this is kandev's own WIP-limit pull ordering (task.go:504) verbatim:
+    position -> priority -> created_at -> id. The id tiebreak keeps the order total, so the same
+    board state always picks the same task rather than flapping between two equal candidates.
+    """
+    step = task.get("workflow_step_id", "")
+    return (-ranks.get(step, -1),                 # unknown/vanished step sorts last, not first
+            task.get("position") or 0,            # missing or null position == top of the column
+            priority_rank(task),
+            task.get("created_at") or "",
+            task.get("id") or "")
 
 # --- launchability (pure) ---
 
@@ -263,16 +301,20 @@ def is_drainable(task, sessions, queued, booked):
         return False
     return (task["id"], task.get("workflow_step_id", ""), newest["id"]) not in booked
 
-def select_action(tasks, task_sessions, queued, work_steps, queue_step_id_, booked):
+def select_action(tasks, task_sessions, queued, work_steps, queue_step_id_, booked, ranks):
     """('drain'|'launch', task) for the one turn this tick may spend, else (None, None).
 
-    Oldest task first within each kind, and drain outranks launch for a reason: launching a
-    task that has a prompt queued spends the turn on the *step* prompt and leaves the queued
-    entry behind, where kandev's own on-step-entry drain flushes it after the turn completes
-    -- a second turn that never passed the gate, carrying text written for the previous step.
-    Releasing the queued prompt first keeps it at one turn per admitted decision.
+    Both kinds are ordered by the board's own pull order (task_order_key), so dragging a card
+    up its column moves its queued prompt up too, and a prompt parked in a downstream column is
+    released before one further left.
+
+    Drain outranks launch for a reason: launching a task that has a prompt queued spends the
+    turn on the *step* prompt and leaves the queued entry behind, where kandev's own
+    on-step-entry drain flushes it after the turn completes -- a second turn that never passed
+    the gate, carrying text written for the previous step. Releasing the queued prompt first
+    keeps it at one turn per admitted decision.
     """
-    ordered = sorted(tasks, key=lambda t: t.get("created_at", ""))
+    ordered = sorted(tasks, key=lambda t: task_order_key(t, ranks))
     for t in ordered:
         if is_drainable(t, task_sessions.get(t["id"], []), queued, booked):
             return ("drain", t)
@@ -434,6 +476,7 @@ _WORK_STEPS = set()
 _QUEUE_STEP = None
 _ADMISSION = None
 _STEP_NAMES = {}         # step id -> name, for logging only
+_STEP_RANKS = {}         # step id -> board position, for cross-column launch ordering
 
 def tick(was_open):
     global _BOOKED
@@ -462,7 +505,8 @@ def tick(was_open):
         return is_open
 
     queued = queued_counts(task_sessions)
-    kind, task = select_action(tasks, task_sessions, queued, _WORK_STEPS, _QUEUE_STEP, _BOOKED)
+    kind, task = select_action(tasks, task_sessions, queued, _WORK_STEPS, _QUEUE_STEP,
+                               _BOOKED, _STEP_RANKS)
     if kind is None:
         print(f"headroom={wh:+.3f} open, nothing to launch ({running}/{CONCURRENCY} running)", flush=True)
         return is_open
@@ -523,7 +567,7 @@ def tick(was_open):
     return is_open
 
 def main():
-    global _WORK_STEPS, _QUEUE_STEP, _ADMISSION, _STEP_NAMES
+    global _WORK_STEPS, _QUEUE_STEP, _ADMISSION, _STEP_NAMES, _STEP_RANKS
     if "--dump-usage" in sys.argv:
         print(json.dumps(_req("GET", "/api/v1/agents/usage"), indent=2))
         return
@@ -533,6 +577,7 @@ def main():
     _QUEUE_STEP = queue_step_id(steps)
     _ADMISSION = admission_target(steps, ADMISSION_OVERRIDE)
     _STEP_NAMES = step_names(steps)
+    _STEP_RANKS = step_ranks(steps)
     for w in lint_workflow(steps):
         print(f"lint: {w}", file=sys.stderr, flush=True)
     works = sorted(named(s, _STEP_NAMES) for s in _WORK_STEPS)
