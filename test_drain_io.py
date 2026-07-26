@@ -152,6 +152,11 @@ def _load(tasks, sessions, queues):
     QUEUES.update(queues)
 
 
+# These tests drive pacer.tick() with fake IO, so their records are fixtures, not
+# observations -- writing them to the real log would poison the very dataset the
+# log exists to collect.
+pacer.LOG_PATH = ""
+
 LAST = {}  # what the last _tick() returned, for the tests that care whether the gate stayed open
 
 
@@ -160,6 +165,9 @@ def _tick(tasks, sessions, queues):
     _load(tasks, sessions, queues)
     WS_LOG.clear()
     pacer._BOOKED, pacer._FAILED = {}, {}
+    # Fresh snapshots per tick, or one test's fake board leaks into the next one's session
+    # diff. LOG_PATH is cleared at import; this only keeps the in-memory state honest.
+    pacer._PREV_SESSIONS, pacer._PREV_WINDOWS = None, []
     LAST["open"] = pacer.tick(was_open=True)
     return [a for a, _, _ in WS_LOG if a != "message.queue.get"]
 
