@@ -82,6 +82,43 @@ pacer withholds *all* launches (including admissions). A hard mid-turn lockout o
 already-running turn is **not** preventable here — halting a live turn needs a WebSocket
 `stop_task`, which is preemption and out of scope for this admission-control pacer.
 
+## Which task goes next
+
+When more than one task is launchable and the gate is open, the pacer picks by **column first,
+then the board's own pull order**:
+
+```
+descending workflow-step position   (rightmost / most downstream column first)
+  -> task position ASC              (the manual drag order within that column)
+  -> priority     (critical, high, medium, low, then none/unknown)
+  -> created_at ASC
+  -> id ASC
+```
+
+Everything after the first line is kandev's WIP-limit pull ordering copied verbatim
+(`task/repository/sqlite/task.go:504`, documented at `docs/public/tasks-and-workflows.md:187`),
+so dragging a card up the board moves it up the pacer's queue too — `position` outranks both
+priority and age, because a drag is an explicit human decision and the other two are defaults.
+The `id` tiebreak keeps the order total, so a fully tied pair always resolves the same way
+instead of flapping between ticks.
+
+**Why a column ordering comes first.** A task's `position` is scoped to a *workflow step*, not
+to the workflow — `MoveTask` never looks at repositories, and two tasks in different columns can
+both sit at `position = 0`, so `position` alone is not a total order and comparing it across
+columns is meaningless. The pacer therefore ranks columns first and only compares positions
+*within* one. It ranks them right-to-left (highest step position first) because that is kanban
+pull, and it is what Design 13 needs: a task already at a work step is a turn in flight, and
+admitting a fresh one from the parked queue instead would grow WIP without finishing anything.
+Draining right-to-left also generalizes past the single work step of the live board — in a
+multi-work-step workflow, tasks deepest in the pipeline advance before new ones are pulled in.
+A step id that no longer exists in the workflow sorts last, not first.
+
+`position` reaches the pacer already: `GET /api/v1/workflows/:id/tasks` returns it on every task
+(`dto.TaskDTO.Position`, `task/dto/dto.go:146`), as do the WS `task.*` events
+(`task/service/service_events.go:352`). A task with a missing or null `position` is read as `0` —
+top of its column, not last — so an older payload or an un-dragged board degrades to the previous
+`created_at` ordering rather than sorting the task to the back.
+
 Concurrency cap (`PACER_CONCURRENCY`, default 1) bounds how many paced turns run at once
 (counting sessions in `STARTING`/`RUNNING`); with slow polling a high cap can overshoot the
 line between ticks. Duplicate-start protection: the pacer books each `(task, step, session)` it
@@ -108,7 +145,11 @@ launches until the turn is observed to start.
 - **Usage** `GET /api/v1/agents/usage` →
   `agents[].usage{provider, windows[]{label, utilization_pct, reset_at}}`; `utilization_pct`
   is *consumed*; labels `"5-hour"`, `"7-day"`, `"7-day (Fable)"`.
-- **Tasks** `GET /api/v1/workflows/:id/tasks` → `{tasks:[…]}`, each with `workflow_step_id`.
+- **Tasks** `GET /api/v1/workflows/:id/tasks` → `{tasks:[…]}`, each with `workflow_step_id`,
+  and — via `dto.FromTask` — the `position`, `priority` and `created_at` the launch ordering
+  above needs. `position` is the board drag order **scoped to a workflow step**, `priority` is
+  a free-standing `critical|high|medium|low` attribute (default `medium`); neither is scoped to
+  a repository, so one column mixes and orders tasks from every repo in the workspace.
   **Sessions** `GET /api/v1/tasks/:id/sessions` → `{sessions:[…]}` with `state` and
   `started_at` — note there is **no** `created_at` on a session, so ordering by recency uses
   `started_at` (tasks *do* have `created_at`).

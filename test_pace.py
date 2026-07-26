@@ -9,7 +9,7 @@ from pacer import (
     parse_windows, usage_providers, provider_missing,
     is_work_step, work_step_ids, queue_step_id, admission_target,
     lint_workflow, newest_session, is_launchable, launch_target, pick_intent, prune_booked,
-    step_names, named,
+    step_names, named, step_ranks, priority_rank, task_order_key,
 )
 
 # --- pacing math (unchanged) ---
@@ -139,6 +139,93 @@ def test_queue_and_admission_target():
                              _step("b", "B", otc=["move_to_next"], pos=2)]) == "b"
     assert admission_target(CLEAN, override="forced") == "forced"
     assert admission_target([_step("bk", "Backlog", start=True)]) is None  # no work step
+
+# --- launch ordering ---
+
+RANKS = step_ranks(CLEAN)   # bk=0, ip=1, rv=2, dn=3
+
+def _task(id, step="ip", pos=0, prio="medium", created="2026-01-01T00:00:00Z"):
+    return {"id": id, "workflow_step_id": step, "position": pos,
+            "priority": prio, "created_at": created}
+
+def _order(tasks, ranks=RANKS):
+    return [t["id"] for t in sorted(tasks, key=lambda t: task_order_key(t, ranks))]
+
+def test_step_ranks():
+    assert RANKS == {"bk": 0, "ip": 1, "rv": 2, "dn": 3}
+    assert step_ranks([{"id": "x"}]) == {"x": 0}      # missing position -> leftmost column
+
+def test_priority_rank():
+    assert priority_rank({"priority": "critical"}) < priority_rank({"priority": "high"})
+    assert priority_rank({"priority": "high"}) < priority_rank({"priority": "medium"})
+    assert priority_rank({"priority": "medium"}) < priority_rank({"priority": "low"})
+    assert priority_rank({"priority": "LOW  "}) == priority_rank({"priority": "low"})  # case/space
+    # kandev's query ranks 'none' and anything unrecognized identically (ELSE 4).
+    assert priority_rank({"priority": "none"}) == priority_rank({"priority": "weird"})
+    assert priority_rank({}) == priority_rank({"priority": None}) == priority_rank({"priority": "none"})
+
+def test_order_by_position_within_a_step():
+    """The headline rule: the board's manual drag order decides, lowest position first."""
+    assert _order([_task("c", pos=2), _task("a", pos=0), _task("b", pos=1)]) == ["a", "b", "c"]
+
+def test_position_beats_priority_and_age():
+    """position outranks both, exactly as in kandev's pull query -- a drag is an explicit decision."""
+    assert _order([_task("dragged_down", pos=5, prio="critical", created="2020-01-01T00:00:00Z"),
+                   _task("dragged_up", pos=0, prio="low", created="2026-06-01T00:00:00Z")]) \
+        == ["dragged_up", "dragged_down"]
+
+def test_priority_breaks_position_ties():
+    assert _order([_task("lo", pos=0, prio="low"),
+                   _task("hi", pos=0, prio="high"),
+                   _task("crit", pos=0, prio="critical")]) == ["crit", "hi", "lo"]
+
+def test_created_at_breaks_priority_ties():
+    assert _order([_task("new", pos=0, created="2026-06-01T00:00:00Z"),
+                   _task("old", pos=0, created="2026-01-01T00:00:00Z")]) == ["old", "new"]
+
+def test_id_makes_the_order_total():
+    """Fully tied tasks must still order deterministically, or the pick flaps tick to tick."""
+    same = dict(pos=0, prio="medium", created="2026-01-01T00:00:00Z")
+    assert _order([_task("b", **same), _task("a", **same)]) == ["a", "b"]
+
+def test_missing_and_zero_position_tie_at_the_top():
+    """A task with no/null position is treated as position 0 -- top of its column, not last."""
+    explicit_zero = _task("zero", pos=0, created="2026-01-02T00:00:00Z")
+    absent = {"id": "absent", "workflow_step_id": "ip", "priority": "medium",
+              "created_at": "2026-01-01T00:00:00Z"}
+    null = dict(_task("null", created="2026-01-03T00:00:00Z"), position=None)
+    # All three collapse to 0, so the created_at tiebreak -- not the missing key -- decides.
+    assert _order([null, explicit_zero, absent]) == ["absent", "zero", "null"]
+    # And they all still beat a genuinely dragged-down task.
+    assert _order([_task("down", pos=1), absent]) == ["absent", "down"]
+
+def test_downstream_column_wins_across_steps():
+    """position is per-column, so columns are ranked first: rightmost (most downstream) first.
+
+    Both tasks sit at position 0 -- comparing those numbers directly would be meaningless.
+    Finishing the turn already in flight beats admitting new work from the parked queue.
+    """
+    assert _order([_task("queued", step="bk", pos=0),
+                   _task("in_flight", step="ip", pos=0)]) == ["in_flight", "queued"]
+    # Even a queue task dragged to the very top, made critical and years older stays behind:
+    # the column ordering is applied before any of it.
+    assert _order([_task("queued", step="bk", pos=0, prio="critical", created="2020-01-01T00:00:00Z"),
+                   _task("in_flight", step="ip", pos=9, prio="low")]) == ["in_flight", "queued"]
+
+def test_multi_work_step_drains_right_to_left():
+    """With several work steps, tasks deepest in the pipeline advance before new ones enter."""
+    assert _order([_task("q", step="bk"), _task("early", step="ip"), _task("late", step="rv")]) \
+        == ["late", "early", "q"]
+
+def test_positions_only_compared_within_a_column():
+    """Within each column position decides; the columns themselves never interleave."""
+    tasks = [_task("q_top", step="bk", pos=0), _task("q_next", step="bk", pos=1),
+             _task("ip_top", step="ip", pos=0), _task("ip_next", step="ip", pos=1)]
+    assert _order(tasks) == ["ip_top", "ip_next", "q_top", "q_next"]
+
+def test_unknown_step_sorts_last():
+    """A step that vanished from the workflow must not silently rank as the leftmost column."""
+    assert _order([_task("ghost", step="deleted"), _task("real", step="bk")]) == ["real", "ghost"]
 
 # --- launchability ---
 
