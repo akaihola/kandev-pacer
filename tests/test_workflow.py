@@ -3,200 +3,21 @@
 # requires-python = ">=3.11"
 # dependencies = []
 # ///
-"""Pure pacing + classification tests (no network). Run: uv run test_pace.py"""
-import json
-import tempfile
-from pathlib import Path
+"""Tests for kandev_pacer/workflow.py: step classification, scope, ordering, selection, lint.
 
-import pacer
-from pacer import (
-    clamp01, elapsed_frac, headroom, worst_headroom, gate_open, ceiling_breached,
-    parse_windows, usage_providers, provider_missing,
-    is_work_step, is_paced_step, paced_step_ids, queue_step_id, admission_target, resolve_scope,
-    lint_workflow, newest_session, is_launchable, launch_target, pick_intent, prune_booked,
-    step_names, named, step_ranks, priority_rank, task_order_key,
-    effective_sidebar_view, has_custom_sort_view, visible_task_order, ordered_tasks,
-    is_drainable, select_action,
-    action_key, fail_backoff, backed_off, prune_failures,
-    window_records, binding_label, tick_record, sessions_snapshot, diff_sessions,
-    detect_resets, log_event,
+No network. Run: uv run tests/test_workflow.py
+"""
+from support import run_tests, sess as _sess, step as _step, task as _task
+
+from kandev_pacer.workflow import (  # noqa: E402  -- must follow the path setup above
+    action_key, admission_target, backed_off, effective_sidebar_view, fail_backoff,
+    has_custom_sort_view, is_drainable, is_launchable, is_paced_step, is_work_step,
+    launch_target, lint_workflow, named, newest_session, ordered_tasks, paced_step_ids,
+    pick_intent, priority_rank, prune_booked, prune_failures, queue_step_id, resolve_scope,
+    select_action, step_names, step_ranks, task_order_key, visible_task_order,
 )
 
-# --- pacing math (unchanged) ---
-
-def test_elapsed():
-    now = 1000.0
-    assert elapsed_frac(now, resets_at=now + 3600, duration_s=3600) == 0.0   # just reset
-    assert elapsed_frac(now, resets_at=now + 1800, duration_s=3600) == 0.5   # halfway
-    assert elapsed_frac(now, resets_at=now, duration_s=3600) == 1.0          # at reset
-    assert clamp01(elapsed_frac(now, resets_at=now - 100, duration_s=3600)) == 1.0
-
-def test_steady_burn_never_pauses():
-    for e in (0.1, 0.5, 0.9):
-        assert headroom(consumed_frac=e, elapsed_frac_=e) == 0.0
-        assert gate_open(headroom(e, e), was_open=True)
-
-def test_overspend_pauses():
-    assert headroom(0.8, 0.25) < 0
-    assert not gate_open(headroom(0.8, 0.25), was_open=True)
-
-def test_underspend_open():
-    assert headroom(0.1, 0.5) > 0
-    assert gate_open(headroom(0.1, 0.5), was_open=False)
-
-def test_self_heal():
-    frozen = 0.8
-    assert not gate_open(headroom(frozen, 0.5), was_open=False)   # still behind
-    assert gate_open(headroom(frozen, 0.85), was_open=False)      # time caught up -> open
-
-def test_worst_window_wins():
-    now = 0.0
-    windows = [
-        {"consumed_frac": 0.2, "resets_at": 1800, "duration_s": 3600},  # e=0.5, h=+0.3
-        {"consumed_frac": 0.9, "resets_at": 1800, "duration_s": 3600},  # e=0.5, h=-0.4  <- worst
-    ]
-    assert worst_headroom(windows, now) == -0.4
-    assert not gate_open(worst_headroom(windows, now), was_open=True)
-
-def test_no_windows_open():
-    assert worst_headroom([], now=0.0) == 1.0
-
-def test_alpha_reserve():
-    assert headroom(0.48, 0.5, alpha=0.9) < 0
-    assert headroom(0.48, 0.5, alpha=1.0) > 0
-
-def test_ceiling_breached():
-    assert ceiling_breached([{"consumed_frac": 0.98}], 0.97)        # over cutoff
-    assert not ceiling_breached([{"consumed_frac": 0.5}], 0.97)     # under
-    assert not ceiling_breached([{"consumed_frac": 0.99}], 1.0)     # >=1.0 disables
-    assert not ceiling_breached([], 0.97)
-
-# --- usage parsing (real payload shape) ---
-
-USAGE = {"agents": [
-    {"agent_id": "claude-acp", "usage": {"provider": "anthropic", "windows": [
-        {"label": "5-hour", "utilization_pct": 9, "reset_at": "2026-07-23T19:39:59.5Z"},
-        {"label": "7-day", "utilization_pct": 21, "reset_at": "2026-07-27T12:59:59.5Z"},
-        {"label": "7-day (Fable)", "utilization_pct": 9, "reset_at": "2026-07-27T12:59:59.5Z"}]}},
-    {"agent_id": "codex-acp", "usage": {"provider": "openai", "windows": [
-        {"label": "7-day", "utilization_pct": 10, "reset_at": "2026-07-29T18:51:33+03:00"}]}}]}
-
-def test_parse_windows_real_shape():
-    ws = parse_windows(USAGE, provider="anthropic")
-    assert len(ws) == 3                                   # all 3 anthropic windows, codex dropped
-    assert [round(w["consumed_frac"], 2) for w in ws] == [0.09, 0.21, 0.09]
-    assert [w["duration_s"] for w in ws] == [18000, 604800, 604800]
-
-def test_parse_windows_provider_filter():
-    assert len(parse_windows(USAGE, provider="openai")) == 1   # only codex survives
-    assert parse_windows(USAGE, provider="nobody") == []
-
-def test_parse_windows_skips_unknown_label():
-    u = {"agents": [{"usage": {"provider": "anthropic", "windows": [
-        {"label": "1-minute", "utilization_pct": 5, "reset_at": "2026-07-23T19:39:59Z"}]}}]}
-    assert parse_windows(u, provider="anthropic") == []
-
-def test_provider_guard():
-    """A PACER_PROVIDER that matches nothing must be caught, not silently fail open."""
-    assert usage_providers(USAGE) == {"anthropic", "openai"}
-    assert usage_providers({"agents": []}) == set()
-    assert provider_missing(USAGE, "claude")            # typo -> present providers, ours absent -> guard fires
-    assert not provider_missing(USAGE, "anthropic")     # ours is present -> fine
-    assert not provider_missing({"agents": []}, "anthropic")  # empty payload -> can't tell -> don't withhold
-
-# --- structured log records ---
-
-def test_parse_windows_carries_label():
-    """The log names the binding window and matches windows across ticks -- both need the label."""
-    assert [w["label"] for w in parse_windows(USAGE, provider="anthropic")] == [
-        "5-hour", "7-day", "7-day (Fable)"]
-
-def test_window_records_keep_duration():
-    """h alone is not comparable across windows; the duration is what converts it to seconds."""
-    now = 0.0
-    ws = [{"label": "5-hour", "consumed_frac": 0.2, "resets_at": 9000, "duration_s": 18000},
-          {"label": "7-day", "consumed_frac": 0.9, "resets_at": 302400, "duration_s": 604800}]
-    recs = window_records(ws, now)
-    assert [r["e"] for r in recs] == [0.5, 0.5]
-    assert [r["h"] for r in recs] == [0.3, -0.4]
-    assert [r["d"] for r in recs] == [18000, 604800]
-    assert binding_label(recs) == "7-day"          # the window the gate is reacting to
-    assert binding_label([]) is None
-
-def test_tick_record_separates_gate_from_action():
-    """gate=open + action=nothing + launchable>0 is the 'quota going unspent' signature."""
-    recs = window_records([{"label": "5-hour", "consumed_frac": 0.1,
-                            "resets_at": 9000, "duration_s": 18000}], now=0.0)
-    r = tick_record(1234.5, "open", "nothing", recs, running=0, launchable=3,
-                    cap=1, booked=0)
-    assert (r["kind"], r["gate"], r["action"]) == ("tick", "open", "nothing")
-    assert r["wh"] == 0.4 and r["bind"] == "5-hour"
-    assert (r["running"], r["launchable"], r["cap"]) == (0, 3, 1)
-    assert r["launched"] is None
-    # No windows at all (blind tick): still a valid record, no crash on min() of empty.
-    assert tick_record(1.0, "blind", "withheld", [], 0, 0, 1, 0)["wh"] == 1.0
-
-def test_diff_sessions():
-    prev = {"t1": {"s1": "RUNNING"}}
-    cur = {"t1": {"s1": "WAITING_FOR_INPUT"}, "t2": {"s9": "CREATED"}}
-    evs = diff_sessions(prev, cur, now=5.0)
-    assert [(e["task"], e["from"], e["to"]) for e in evs] == [
-        ("t1", "RUNNING", "WAITING_FOR_INPUT"),   # turn ended
-        ("t2", None, "CREATED"),                  # session surfaced
-    ]
-    assert diff_sessions(cur, cur, now=5.0) == []     # steady state is silent
-    assert diff_sessions(None, cur, now=5.0) == []    # first tick has no baseline to diff
-
-def test_sessions_snapshot():
-    assert sessions_snapshot({"t": [_sess("a", "RUNNING"), _sess("b", "CREATED")]}) == {
-        "t": {"a": "RUNNING", "b": "CREATED"}}
-
-def test_detect_resets():
-    """final_c is only observable at the roll -- after it, the old number is gone for good."""
-    prev = [{"label": "5-hour", "consumed_frac": 0.83, "resets_at": 1000, "duration_s": 18000}]
-    cur = [{"label": "5-hour", "consumed_frac": 0.02, "resets_at": 19000, "duration_s": 18000}]
-    evs = detect_resets(prev, cur, now=1001.0)
-    assert len(evs) == 1
-    assert evs[0]["label"] == "5-hour" and evs[0]["final_c"] == 0.83   # ended with 17% unspent
-    assert detect_resets(prev, prev, now=1.0) == []    # same reset time -> no rollover
-    assert detect_resets([], cur, now=1.0) == []       # no baseline -> nothing to close
-
-def test_log_event_roundtrip_and_never_raises():
-    with tempfile.TemporaryDirectory() as d:
-        original = pacer.LOG_PATH
-        try:
-            pacer.LOG_PATH = str(Path(d) / "sub" / "pacer.jsonl")   # parent is created on demand
-            log_event({"kind": "tick", "gate": "open"})
-            log_event({"kind": "session", "to": "RUNNING"})
-            lines = Path(pacer.LOG_PATH).read_text().splitlines()
-            assert [json.loads(x)["kind"] for x in lines] == ["tick", "session"]
-            # A log we cannot write must not take the pacing loop down with it: here the
-            # parent of the log path is an existing *file*, so mkdir raises NotADirectoryError.
-            blocker = Path(d) / "blocker"
-            blocker.write_text("")
-            pacer.LOG_PATH = str(blocker / "pacer.jsonl")
-            pacer._log_failed = False
-            log_event({"kind": "tick"})
-            assert pacer._log_failed                                 # warned once, did not raise
-            pacer.LOG_PATH = ""                                      # disabled -> no-op
-            log_event({"kind": "tick"})
-        finally:
-            pacer.LOG_PATH, pacer._log_failed = original, False
-
 # --- workflow step fixtures ---
-
-def _step(id, name, otc=None, oe=None, ots=None, start=False, stage="custom",
-          pos=0, profile="", prompt="", signal=False):
-    events = {}
-    if oe:
-        events["on_enter"] = [{"type": k} for k in oe]
-    if otc:
-        events["on_turn_complete"] = [{"type": k} for k in otc]
-    if ots:
-        events["on_turn_start"] = [{"type": k} for k in ots]
-    return {"id": id, "name": name, "events": events, "is_start_step": start,
-            "stage_type": stage, "position": pos, "agent_profile_id": profile,
-            "prompt": prompt, "auto_advance_requires_signal": signal}
 
 # Enrolled (post-make_paced) Paced Kanban: In Progress routes away, tagged work, no auto-start.
 CLEAN = [
@@ -298,13 +119,6 @@ def test_queue_and_admission_target():
 
 RANKS = step_ranks(CLEAN)   # bk=0, ip=1, rv=2, dn=3
 
-def _task(id, step="ip", pos=0, prio="medium", created="2026-01-01T00:00:00Z", parent=None):
-    t = {"id": id, "workflow_step_id": step, "position": pos,
-         "priority": prio, "created_at": created}
-    if parent:
-        t["parent_id"] = parent
-    return t
-
 def _ord(tasks):
     """Fixtures in launch-priority order, board mode -- select_action no longer sorts itself,
     so route them through the real ordering pipeline rather than hand-sorting here."""
@@ -390,10 +204,6 @@ def test_unknown_step_sorts_last():
     assert _order([_task("ghost", step="deleted"), _task("real", step="bk")]) == ["real", "ghost"]
 
 # --- launchability ---
-
-def _sess(id, state, started="1"):
-    # `started_at` is the real field name in GET /tasks/:id/sessions -- there is no `created_at`.
-    return {"id": id, "state": state, "started_at": started}
 
 WORK = {"ip"}
 # Sets, not single ids: with several workflows paced at once there is one queue step per board.
@@ -809,8 +619,4 @@ def test_lint_workflow():
     assert lint_workflow(FEATURE_DEV) == []
 
 if __name__ == "__main__":
-    tests = [(n, f) for n, f in sorted(globals().items()) if n.startswith("test_") and callable(f)]
-    for name, fn in tests:
-        fn()
-        print(f"ok {name}")
-    print(f"\n{len(tests)} passed")
+    run_tests(globals())

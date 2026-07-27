@@ -3,7 +3,9 @@
 # requires-python = ">=3.11"
 # dependencies = []
 # ///
-"""Pure planning tests for make_paced.py (no database). Run: uv run test_make_paced.py"""
+"""Pure planning tests for make_paced.py (no database). Run: uv run tests/test_make_paced.py"""
+from support import run_tests  # noqa: F401  -- sets up sys.path
+
 from make_paced import plan_changes, planned_steps, strip_auto_start, target_stage
 
 def _step(id, name, events=None, stage="custom"):
@@ -71,8 +73,4 @@ def test_planned_steps_merge():
     assert after[1] == steps[1]
 
 if __name__ == "__main__":
-    tests = [(n, f) for n, f in sorted(globals().items()) if n.startswith("test_") and callable(f)]
-    for name, fn in tests:
-        fn()
-        print(f"ok {name}")
-    print(f"\n{len(tests)} passed")
+    run_tests(globals())
