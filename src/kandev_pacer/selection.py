@@ -23,14 +23,27 @@ def priority_rank(task):
     )
 
 
+# A step id the workflow no longer has: sorted after every real column rather than
+# before it, so a stale task waits instead of jumping the queue.
+UNKNOWN_STEP = float("inf")
+
+
 def task_order_key(task, ranks):
+    """The board's own pull order: rightmost column first, then the drag order within it.
+
+    Positions are scoped to a step, so comparing them across columns is meaningless --
+    the column has to be decided first. Negating the position sorts the rightmost
+    (most downstream) column first, which is kanban pull: finish what is in flight
+    before admitting anything new.
+    """
     step = task.get("workflow_step_id", "")
+    column = -ranks[step] if step in ranks else UNKNOWN_STEP
     return (
-        -ranks.get(step, -1),
-        task.get("position") or 0,
+        column,
+        task.get("position") or 0,     # the drag order inside that column
         priority_rank(task),
         task.get("created_at") or "",
-        task.get("id") or "",
+        task.get("id") or "",          # keeps the order total, so ties never flap
     )
 
 
@@ -153,7 +166,10 @@ def visible_task_order(tasks, pinned_ids, ordered_ids, subtask_order=None):
         for child in _rank(children.get(task["id"], []), subtask_order.get(task["id"]) or []):
             visit(child)
 
-    for task in _rank(_rank(roots, ordered_ids), pinned_ids):
+    # Two passes, outermost last: the drag order first, then pinned tasks floated
+    # above it. Pinning is itself a visible re-ordering, so it has to win.
+    dragged = _rank(roots, ordered_ids)
+    for task in _rank(dragged, pinned_ids):
         visit(task)
     # Tasks in a parent loop (A's parent is B, B's parent is A) are nobody's root, so
     # nothing above reaches them. They still have to launch.
