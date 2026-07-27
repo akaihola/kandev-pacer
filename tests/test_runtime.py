@@ -247,3 +247,54 @@ def test_dump_order_names_a_dragged_task_that_will_never_launch(pacer, board, ca
     assert "not paced: 1 workflow(s) out of scope" in out
     assert "Not Enrolled: not enrolled" in out
     assert "! placed by hand but not paced: 'Stranded' (in 'Not Enrolled')" in out
+
+
+# --- the gate shut: what the pacer exists to do ---
+
+def records_of(pacer, monkeypatch):
+    """Collect the JSONL records a tick writes, without touching the real log."""
+    written = []
+    monkeypatch.setattr(pacer, "log_event", written.append)
+    return written
+
+
+def test_a_window_burning_too_fast_pauses_the_gate(pacer, board, monkeypatch):
+    """80% consumed against a half-elapsed window: ahead of the burn line, so withhold."""
+    written = records_of(pacer, monkeypatch)
+    board.usage_pct = 80
+    was_open = tick(pacer, board, [_task("t", "ip", "Ready")],
+                    {"t": _sess("s", "WAITING_FOR_INPUT")}, {})
+    assert was_open is False
+    assert actions(board) == [], "a shut gate must spend nothing"
+    assert (written[0]["gate"], written[0]["action"]) == ("paused", "withheld")
+
+
+def test_consumption_past_the_backstop_withholds_whatever_the_burn_line_says(
+    pacer, board, monkeypatch
+):
+    written = records_of(pacer, monkeypatch)
+    board.usage_pct = 99                      # past PACER_BACKSTOP, and past elapsed
+    assert tick(pacer, board, [_task("t", "ip", "Ready")],
+                {"t": _sess("s", "WAITING_FOR_INPUT")}, {}) is False
+    assert actions(board) == []
+    assert (written[0]["gate"], written[0]["action"]) == ("ceiling", "withheld")
+
+
+def test_an_unknown_provider_withholds_rather_than_pacing_blind(pacer, board, monkeypatch):
+    """A PACER_PROVIDER typo leaves zero windows -- which must not read as 'plenty of room'."""
+    written = records_of(pacer, monkeypatch)
+    board.provider = "openai"                 # settings.provider is anthropic
+    assert tick(pacer, board, [_task("t", "ip", "Ready")],
+                {"t": _sess("s", "WAITING_FOR_INPUT")}, {}) is False
+    assert actions(board) == []
+    assert (written[0]["gate"], written[0]["action"]) == ("blind", "withheld")
+
+
+def test_a_shut_gate_still_records_the_board(pacer, board, monkeypatch):
+    """The paused ticks are exactly the ones the log exists to explain."""
+    written = records_of(pacer, monkeypatch)
+    board.usage_pct = 80
+    tick(pacer, board, [_task("t", "ip", "Ready")], {"t": _sess("s", "WAITING_FOR_INPUT")}, {})
+    assert written[0]["launchable"] == 1, "quota going unspent while work waits"
+    assert written[0]["running"] == 0
+    assert written[0]["windows"][0]["label"] == "5-hour"

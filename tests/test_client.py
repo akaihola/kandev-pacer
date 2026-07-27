@@ -6,6 +6,7 @@ No real kandev, no agent turn, no quota.
 """
 from conftest import one_session as _sess
 
+from kandev_pacer import client
 from kandev_pacer.client import queued_counts, ws_drain
 from kandev_pacer.config import settings
 
@@ -48,3 +49,48 @@ def test_ws_errors_surface_with_kandev_reason(board):
 def test_unreadable_queue_degrades_to_empty(board):
     """A failing queue read must not kill the tick -- it falls back to launch-only pacing."""
     assert queued_counts({"t": _sess("sBoom", "WAITING_FOR_INPUT")}) == {}
+
+
+# --- the HTTP layer itself, which every other test replaces ---
+
+def test_get_builds_the_url_and_decodes_the_body(monkeypatch):
+    """The one place a path becomes a URL. Every other test patches it away."""
+    calls = []
+
+    class _Response:
+        def __init__(self, raw):
+            self.raw = raw
+
+        def read(self):
+            return self.raw
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_):
+            return False
+
+    def fake_urlopen(url, timeout=None):
+        calls.append((url, timeout))
+        return _Response(b'{"tasks": []}')
+
+    monkeypatch.setattr(client.urllib.request, "urlopen", fake_urlopen)
+    assert client.get("/api/v1/workflows") == {"tasks": []}
+    assert calls == [(f"{settings.url}/api/v1/workflows", 15)]
+
+
+def test_get_reads_an_empty_body_as_nothing(monkeypatch):
+    """kandev answers some endpoints with no body at all; that is None, not a crash."""
+
+    class _Empty:
+        def read(self):
+            return b""
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_):
+            return False
+
+    monkeypatch.setattr(client.urllib.request, "urlopen", lambda url, timeout=None: _Empty())
+    assert client.get("/api/v1/anything") is None

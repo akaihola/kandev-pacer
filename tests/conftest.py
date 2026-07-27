@@ -127,6 +127,10 @@ class FakeBoard:
         self.origins = []      # the Origin header each connection presented
         self.paths = []        # every REST path fetched, for counting round trips
         self.sidebar = {}      # what GET /user/settings answers
+        # Quota the board reports. The defaults leave the gate open; a test that wants
+        # it shut moves these instead of reaching into the pacer.
+        self.usage_pct = USAGE_PCT
+        self.provider = "anthropic"
         self.tasks_elsewhere = []   # tasks belonging to workflows outside the scope
 
     def load(self, tasks, sessions, queues):
@@ -138,8 +142,8 @@ class FakeBoard:
         self.paths.append(path)
         if path.endswith("/agents/usage"):
             # A reset 2.5h out on a 5h window: half elapsed, 10% consumed.
-            return {"agents": [{"usage": {"provider": "anthropic", "windows": [
-                {"label": "5-hour", "utilization_pct": USAGE_PCT,
+            return {"agents": [{"usage": {"provider": self.provider, "windows": [
+                {"label": "5-hour", "utilization_pct": self.usage_pct,
                  "reset_at": _iso_in(9000)}]}}]}
         if path == "/api/v1/workflows":
             return {"workflows": [{"id": "wf", "name": "Fake Paced"}]}
