@@ -1,13 +1,15 @@
 """Kandev HTTP and WebSocket access."""
 
 import json
-import sys
+import logging
 import urllib.request
 
 import websocket
 
 from .config import DRAINABLE_STATES, settings
 from .workflow import newest_session
+
+log = logging.getLogger("kandev-pacer")
 
 
 def request(method, path, body=None):
@@ -53,11 +55,7 @@ def user_settings(order):
     try:
         return (request("GET", "/api/v1/user/settings") or {}).get("settings") or None
     except Exception as error:
-        print(
-            f"user settings unavailable ({error}) -> FIFO order this tick",
-            file=sys.stderr,
-            flush=True,
-        )
+        log.warning(f"user settings unavailable ({error}) -> FIFO order this tick")
         return None
 
 
@@ -141,11 +139,7 @@ def queued_counts(task_sessions):
     try:
         connection = _ws_connect()
     except Exception as error:
-        print(
-            f"queue status unavailable ({error}) -> treating every queue as empty",
-            file=sys.stderr,
-            flush=True,
-        )
+        log.warning(f"queue status unavailable ({error}) -> treating every queue as empty")
         return {}
     counts = {}
     try:
@@ -162,12 +156,8 @@ def queued_counts(task_sessions):
                 )
                 counts[session_id] = int(response.get("count") or 0)
             except Exception as error:
-                print(
-                    f"queue status failed for session {session_id} ({error}) "
-                    "-> treating as empty",
-                    file=sys.stderr,
-                    flush=True,
-                )
+                log.warning(f"queue status failed for session {session_id} ({error}) "
+                            "-> treating as empty")
     finally:
         connection.close()
     return counts

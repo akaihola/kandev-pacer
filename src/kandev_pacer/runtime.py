@@ -11,7 +11,7 @@ One tick runs in three steps, kept apart on purpose:
 
 import argparse
 import json
-import sys
+import logging
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -42,6 +42,8 @@ from .workflow import (
     queue_step_id,
     select_action,
 )
+
+log = logging.getLogger("kandev-pacer")
 
 
 @dataclass(frozen=True)
@@ -88,7 +90,7 @@ class Pacer:
                 file.write(json.dumps(record, separators=(",", ":")) + "\n")
         except OSError as error:
             if not self._log_failed:
-                print(f"log: {error} (continuing unlogged)", file=sys.stderr, flush=True)
+                log.warning(f"log: {error} (continuing unlogged)")
                 self._log_failed = True
 
     # --- 1. gather ---
@@ -162,15 +164,14 @@ class Pacer:
         )
         if not verdict.is_open:
             suffix = f" ({snapshot.running} running)" if verdict.gate == "paused" else ""
-            print(verdict.message + suffix, flush=True)
+            log.info(verdict.message + suffix)
             emit(verdict.gate, "withheld")
             return verdict.is_open
 
         headroom = verdict.headroom
         cap = self.config.concurrency
         if snapshot.running >= cap:
-            print(f"headroom={headroom:+.3f} open, full ({snapshot.running}/{cap})",
-                  flush=True)
+            log.info(f"headroom={headroom:+.3f} open, full ({snapshot.running}/{cap})")
             emit("open", "full")
             return True
 
@@ -179,22 +180,15 @@ class Pacer:
             kind, task = self.next_action(snapshot, queued)
             if kind is None:
                 held = f", {len(self.failed)} held after a failed launch" if self.failed else ""
-                print(
-                    f"headroom={headroom:+.3f} open, nothing to launch "
-                    f"({snapshot.running}/{cap} running{held})",
-                    flush=True,
-                )
+                log.info(f"headroom={headroom:+.3f} open, nothing to launch "
+                         f"({snapshot.running}/{cap} running{held})")
                 emit("open", "nothing")
                 return True
             key = action_key(task, snapshot.sessions.get(task["id"], []))
             if self.attempt(kind, task, key, headroom, snapshot.running, snapshot.now, emit):
                 return True
-        print(
-            f"headroom={headroom:+.3f} open, {MAX_ATTEMPTS} candidates rejected "
-            "this tick -> waiting for the next one",
-            file=sys.stderr,
-            flush=True,
-        )
+        log.warning(f"headroom={headroom:+.3f} open, {MAX_ATTEMPTS} candidates rejected "
+                    "this tick -> waiting for the next one")
         emit("open", "exhausted")
         return True
 
@@ -208,8 +202,8 @@ class Pacer:
             None,
         )
         if fresh is None or fresh.get("workflow_step_id", "") != task.get("workflow_step_id", ""):
-            print(f"headroom={headroom:+.3f} open, {label(task)!r} moved since selection "
-                  "-> skip", flush=True)
+            log.info(f"headroom={headroom:+.3f} open, {label(task)!r} moved since selection "
+                     "-> skip")
             emit("open", "skipped")
             return True
         step = fresh.get("workflow_step_id", "")
@@ -219,8 +213,8 @@ class Pacer:
         if kind == "drain":
             newest = newest_session(sessions)
             if newest is None or newest.get("state") not in DRAINABLE_STATES:
-                print(f"headroom={headroom:+.3f} open, {label(fresh)!r} no longer idle "
-                      "-> skip drain", flush=True)
+                log.info(f"headroom={headroom:+.3f} open, {label(fresh)!r} no longer idle "
+                         "-> skip drain")
                 emit("open", "skipped")
                 return True
             try:
@@ -229,14 +223,13 @@ class Pacer:
                 self.note_failure(key, fresh, f"drain rejected: {error}", now)
                 return False
             if not drained:
-                print(f"headroom={headroom:+.3f} open, queue for {label(fresh)!r} already "
-                      "empty -> no turn spent", flush=True)
+                log.info(f"headroom={headroom:+.3f} open, queue for {label(fresh)!r} already "
+                         "empty -> no turn spent")
                 emit("open", "empty")
                 return True
             self.book(task["id"], step, newest["id"], now)
-            print(f"headroom={headroom:+.3f} open -> drained queued prompt for "
-                  f"{label(fresh)!r} at {self.board.name_of(step)!r} ({running + 1}/{cap})",
-                  flush=True)
+            log.info(f"headroom={headroom:+.3f} open -> drained queued prompt for "
+                     f"{label(fresh)!r} at {self.board.name_of(step)!r} ({running + 1}/{cap})")
             emit("open", "drained",
                  {"task": task["id"], "session": newest["id"], "step": step})
             return True
@@ -253,9 +246,9 @@ class Pacer:
             self.note_failure(key, fresh, str(error), now)
             return False
         self.book(task["id"], step, session_id, now)
-        print(f"headroom={headroom:+.3f} open -> launched {label(fresh)!r} intent={intent} "
-              f"workflow={self.board.name_of(fresh.get('workflow_id'))!r} "
-              f"target={self.board.name_of(target)!r} ({running + 1}/{cap})", flush=True)
+        log.info(f"headroom={headroom:+.3f} open -> launched {label(fresh)!r} intent={intent} "
+                 f"workflow={self.board.name_of(fresh.get('workflow_id'))!r} "
+                 f"target={self.board.name_of(target)!r} ({running + 1}/{cap})")
         emit("open", "launched",
              {"task": task["id"], "intent": intent, "session": session_id, "target": target})
         return True
@@ -274,12 +267,8 @@ class Pacer:
             "attempts": attempts,
             "flagged": previous.get("flagged", False),
         }
-        print(
-            f"kandev refused to start {label(task)!r} ({reason}) -- failure "
-            f"{attempts}, holding it for {fail_backoff(attempts)}s",
-            file=sys.stderr,
-            flush=True,
-        )
+        log.warning(f"kandev refused to start {label(task)!r} ({reason}) -- failure "
+                    f"{attempts}, holding it for {fail_backoff(attempts)}s")
         self.log_event({
             "t": round(now, 3), "kind": "failure", "task": task["id"],
             "reason": reason, "attempts": attempts,
@@ -293,11 +282,9 @@ class Pacer:
         try:
             client.ws_set_state(task["id"], BLOCKED_STATE, "pace-block")
         except Exception as error:
-            print(f"could not flag {label(task)!r} {BLOCKED_STATE} ({error})",
-                  file=sys.stderr, flush=True)
+            log.warning(f"could not flag {label(task)!r} {BLOCKED_STATE} ({error})")
             return False
-        print(f"flagged {label(task)!r} {BLOCKED_STATE} on the board: {reason}",
-              file=sys.stderr, flush=True)
+        log.warning(f"flagged {label(task)!r} {BLOCKED_STATE} on the board: {reason}")
         return True
 
     def run(self):
@@ -307,7 +294,7 @@ class Pacer:
             try:
                 was_open = self.tick(was_open)
             except Exception as error:
-                print(f"tick error: {error} -> pausing this tick", file=sys.stderr, flush=True)
+                log.warning(f"tick error: {error} -> pausing this tick")
                 self.log_event({
                     "t": round(time.time(), 3), "kind": "error",
                     "where": "tick", "msg": str(error),
@@ -366,23 +353,19 @@ def report_startup(board):
     for workflow_id in board.scope:
         steps = board.steps[workflow_id]
         for warning in lint_workflow(steps):
-            print(f"lint: [{board.name_of(workflow_id)}] {warning}", file=sys.stderr, flush=True)
-    print(
-        f"pacing {settings.url} every {settings.interval}s (alpha={settings.alpha}, "
-        f"concurrency={settings.concurrency}, provider={settings.provider}, "
-        f"order={settings.order})\n  log={settings.log_path or '(disabled)'}",
-        flush=True,
-    )
+            log.warning(f"lint: [{board.name_of(workflow_id)}] {warning}")
+    log.info(f"pacing {settings.url} every {settings.interval}s (alpha={settings.alpha}, "
+             f"concurrency={settings.concurrency}, provider={settings.provider}, "
+             f"order={settings.order})\n  log={settings.log_path or '(disabled)'}")
     for workflow_id in board.scope:
         steps = board.steps[workflow_id]
         works = sorted(board.name_of(step["id"]) for step in steps
                        if step["id"] in board.work_steps)
-        print(f"  {board.name_of(workflow_id)!r}: work_steps={works} "
-              f"queue={board.name_of(queue_step_id(steps))!r} "
-              f"admission={board.name_of(board.admission.get(workflow_id))!r}", flush=True)
+        log.info(f"  {board.name_of(workflow_id)!r}: work_steps={works} "
+                 f"queue={board.name_of(queue_step_id(steps))!r} "
+                 f"admission={board.name_of(board.admission.get(workflow_id))!r}")
     for workflow, reason in board.skipped:
-        print(f"  not paced: {workflow.get('name') or workflow['id']!r} -- {reason}",
-              flush=True)
+        log.info(f"  not paced: {workflow.get('name') or workflow['id']!r} -- {reason}")
 
 
 def main():
@@ -397,21 +380,24 @@ def main():
         help="print the queue launches will work down, then exit (spends no quota)",
     )
     args = parser.parse_args()
+    # No timestamps: the pacing lines are read live, and the JSONL log is what carries
+    # time. `journalctl` stamps them anyway when this runs as a unit.
+    logging.basicConfig(level=logging.INFO, format="%(message)s")
 
-    board = Board.scan(
-        client.workflow_entries(), settings.paced_workflows, settings.admission_step_id
-    )
+    try:
+        entries = client.workflow_entries()
+    except OSError as error:
+        log.error(f"cannot reach kandev at {settings.url} ({error}). "
+                  "Is it running? Set KANDEV_URL if it listens elsewhere.")
+        return 1
+    board = Board.scan(entries, settings.paced_workflows, settings.admission_step_id)
     pacer = Pacer(board)
     if args.dump_order:
         dump_order(pacer)
         return None
     if not board.scope:
-        print(
-            "no workflow is enrolled for pacing (no step tagged stage_type=work "
-            "that routes on turn complete). Run: make-paced '<workflow>' --apply",
-            file=sys.stderr,
-            flush=True,
-        )
+        log.warning("no workflow is enrolled for pacing (no step tagged stage_type=work "
+                    "that routes on turn complete). Run: make-paced '<workflow>' --apply")
         return 1
 
     report_startup(board)
