@@ -133,8 +133,8 @@ def test_concurrency_cap_short_circuits_before_any_queue_read(pacer, board):
 def test_sidebar_order_is_fetched_once_per_tick(pacer, board):
     """Not once per candidate: three refused launches must not mean three settings reads.
 
-    The drag order cannot change inside a tick, and the fetch used to sit in the
-    candidate loop, so a board of broken tasks multiplied it by MAX_ATTEMPTS.
+    The drag order cannot change inside a tick, so a board of broken tasks must not
+    multiply the fetch by MAX_ATTEMPTS.
     """
     tick(pacer, board,
          [_task(f"boom{i}", "ip", "Broken", created=str(i)) for i in range(5)],

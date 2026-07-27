@@ -198,7 +198,6 @@ def describe(step, change):
     return f"  {step['name']}: " + "; ".join(edits)
 
 
-
 def build_parser():
     """The command line: one enrolment tool, dry by default."""
     parser = argparse.ArgumentParser(

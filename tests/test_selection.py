@@ -33,8 +33,11 @@ from kandev_pacer.workflow import Board, step_ranks
 RANKS = step_ranks(CLEAN)   # bk=0, ip=1, rv=2, dn=3
 
 def _ord(tasks):
-    """Fixtures in launch-priority order, board mode -- select_action no longer sorts itself,
-    so route them through the real ordering pipeline rather than hand-sorting here."""
+    """Fixtures in launch-priority order, board mode.
+
+    Routed through the real ordering pipeline rather than hand-sorted, so a test
+    cannot accidentally assert against an order the pacer would never produce.
+    """
     return ordered_tasks(tasks, None, "board", RANKS)
 
 def _order(tasks, ranks=RANKS):

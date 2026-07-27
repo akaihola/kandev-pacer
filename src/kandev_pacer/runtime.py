@@ -65,15 +65,16 @@ def label(task):
 
 @dataclass(frozen=True)
 class Outcome:
-    """What one attempt did, for the caller to log and record. No I/O of its own."""
+    """What one attempt did, for the caller to log and record. No I/O of its own.
+
+    An attempt returns None instead when kandev refused it: a refusal spends no
+    quota, so there is nothing to report and the tick owes the board another
+    candidate.
+    """
 
     action: str            # the tick record's action field: launched/drained/skipped/empty
     message: str           # what to tell the operator, minus the shared headroom prefix
     launched: dict | None = None   # the launch detail, when a turn was actually spent
-
-
-# kandev refused, and a refusal spends no quota -- so the tick moves to the next candidate.
-RETRY = Outcome("retry", "")
 
 
 class Pacer:
@@ -202,7 +203,7 @@ class Pacer:
                               f" ({snapshot.running}/{cap} running{held})")
             key = action_key(task, snapshot.sessions.get(task["id"], []))
             outcome = self.attempt(kind, task, key, snapshot)
-            if outcome is RETRY:
+            if outcome is None:      # refused, no quota spent -- try the next candidate
                 continue
             # The occupancy count only means anything when a turn was actually spent.
             spent = f" ({snapshot.running + 1}/{cap})" if outcome.launched else ""
@@ -215,10 +216,10 @@ class Pacer:
         )
 
     def attempt(self, kind, task, key, snapshot):
-        """Try one action. Returns the Outcome; the caller reports it.
+        """Try one action. Returns the Outcome for the caller to report, or None.
 
-        A `retry` outcome means kandev refused and the refusal spent no quota, so the
-        tick still owes the board a turn and should move on to the next candidate.
+        None means kandev refused: the refusal spent no quota, so the tick still owes
+        the board a turn and should move on to the next candidate.
         """
         # Re-read: selection ran against a snapshot, and a turn is expensive enough to
         # be worth confirming the task is still where we think it is.
@@ -242,7 +243,7 @@ class Pacer:
             drained = bool((client.ws_drain(newest["id"]) or {}).get("drained"))
         except Exception as error:
             self.note_failure(key, task, f"drain rejected: {error}", snapshot.now)
-            return RETRY
+            return None
         if not drained:
             # Emptied between the count and the take: kandev spent no turn, so nor did we.
             return Outcome("empty", f"queue for {label(task)!r} already empty -> no turn spent")
@@ -263,13 +264,13 @@ class Pacer:
             self.note_failure(
                 key, task, f"no admission target in workflow {workflow!r}", snapshot.now
             )
-            return RETRY
+            return None
         intent, session_id = pick_intent(sessions)
         try:
             client.ws_launch(task["id"], intent, session_id, target)
         except Exception as error:
             self.note_failure(key, task, str(error), snapshot.now)
-            return RETRY
+            return None
 
         step = task.get("workflow_step_id", "")
         self.book(task["id"], step, session_id, snapshot.now)
