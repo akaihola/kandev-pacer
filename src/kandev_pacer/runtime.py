@@ -64,6 +64,19 @@ def label(task):
     return task.get("title") or task["id"]
 
 
+@dataclass(frozen=True)
+class Outcome:
+    """What one attempt did, for the caller to log and record. No I/O of its own."""
+
+    action: str            # the tick record's action field: launched/drained/skipped/empty
+    message: str           # what to tell the operator, minus the shared headroom prefix
+    launched: dict | None = None   # the launch detail, when a turn was actually spent
+
+
+# kandev refused, and a refusal spends no quota -- so the tick moves to the next candidate.
+RETRY = Outcome("retry", "")
+
+
 class Pacer:
     """The loop's mutable state: what it has spent a turn on, and what it has given up on.
 
@@ -175,25 +188,37 @@ class Pacer:
             emit("open", "full")
             return True
 
+        # Every line below shares this opening, so it is written once here.
+        def report(outcome, occupancy=""):
+            log.info(f"headroom={headroom:+.3f} open, {outcome.message}{occupancy}")
+            emit("open", outcome.action, outcome.launched)
+
         queued = client.queued_counts(snapshot.sessions)
         for _ in range(MAX_ATTEMPTS):
             kind, task = self.next_action(snapshot, queued)
             if kind is None:
                 held = f", {len(self.failed)} held after a failed launch" if self.failed else ""
-                log.info(f"headroom={headroom:+.3f} open, nothing to launch "
-                         f"({snapshot.running}/{cap} running{held})")
-                emit("open", "nothing")
+                report(Outcome("nothing", "nothing to launch"),
+                       f" ({snapshot.running}/{cap} running{held})")
                 return True
             key = action_key(task, snapshot.sessions.get(task["id"], []))
-            if self.attempt(kind, task, key, headroom, snapshot.running, snapshot.now, emit):
-                return True
+            outcome = self.attempt(kind, task, key, snapshot)
+            if outcome is RETRY:
+                continue
+            # The occupancy count only means anything when a turn was actually spent.
+            report(outcome, f" ({snapshot.running + 1}/{cap})" if outcome.launched else "")
+            return True
         log.warning(f"headroom={headroom:+.3f} open, {MAX_ATTEMPTS} candidates rejected "
                     "this tick -> waiting for the next one")
         emit("open", "exhausted")
         return True
 
-    def attempt(self, kind, task, key, headroom, running, now, emit):
-        """Try one action; False means the rejection spent no quota, so try another task."""
+    def attempt(self, kind, task, key, snapshot):
+        """Try one action. Returns the Outcome; the caller reports it.
+
+        A `retry` outcome means kandev refused and the refusal spent no quota, so the
+        tick still owes the board a turn and should move on to the next candidate.
+        """
         # Re-read: selection ran against a snapshot, and a turn is expensive enough to
         # be worth confirming the task is still where we think it is.
         fresh = next(
@@ -202,56 +227,57 @@ class Pacer:
             None,
         )
         if fresh is None or fresh.get("workflow_step_id", "") != task.get("workflow_step_id", ""):
-            log.info(f"headroom={headroom:+.3f} open, {label(task)!r} moved since selection "
-                     "-> skip")
-            emit("open", "skipped")
-            return True
-        step = fresh.get("workflow_step_id", "")
+            return Outcome("skipped", f"{label(task)!r} moved since selection -> skip")
         sessions = client.sessions_of(task["id"])
-        cap = self.config.concurrency
+        act = self.drain if kind == "drain" else self.launch
+        return act(fresh, key, sessions, snapshot)
 
-        if kind == "drain":
-            newest = newest_session(sessions)
-            if newest is None or newest.get("state") not in DRAINABLE_STATES:
-                log.info(f"headroom={headroom:+.3f} open, {label(fresh)!r} no longer idle "
-                         "-> skip drain")
-                emit("open", "skipped")
-                return True
-            try:
-                drained = bool((client.ws_drain(newest["id"]) or {}).get("drained"))
-            except Exception as error:
-                self.note_failure(key, fresh, f"drain rejected: {error}", now)
-                return False
-            if not drained:
-                log.info(f"headroom={headroom:+.3f} open, queue for {label(fresh)!r} already "
-                         "empty -> no turn spent")
-                emit("open", "empty")
-                return True
-            self.book(task["id"], step, newest["id"], now)
-            log.info(f"headroom={headroom:+.3f} open -> drained queued prompt for "
-                     f"{label(fresh)!r} at {self.board.name_of(step)!r} ({running + 1}/{cap})")
-            emit("open", "drained",
-                 {"task": task["id"], "session": newest["id"], "step": step})
-            return True
+    def drain(self, task, key, sessions, snapshot):
+        """Release a user prompt parked on the task's message queue."""
+        newest = newest_session(sessions)
+        if newest is None or newest.get("state") not in DRAINABLE_STATES:
+            return Outcome("skipped", f"{label(task)!r} no longer idle -> skip drain")
+        try:
+            drained = bool((client.ws_drain(newest["id"]) or {}).get("drained"))
+        except Exception as error:
+            self.note_failure(key, task, f"drain rejected: {error}", snapshot.now)
+            return RETRY
+        if not drained:
+            # Emptied between the count and the take: kandev spent no turn, so nor did we.
+            return Outcome("empty", f"queue for {label(task)!r} already empty -> no turn spent")
 
-        target = launch_target(fresh, self.board)
+        step = task.get("workflow_step_id", "")
+        self.book(task["id"], step, newest["id"], snapshot.now)
+        return Outcome(
+            "drained",
+            f"drained queued prompt for {label(task)!r} at {self.board.name_of(step)!r}",
+            {"task": task["id"], "session": newest["id"], "step": step},
+        )
+
+    def launch(self, task, key, sessions, snapshot):
+        """Start a turn: in place at a work step, or admitting the task from the queue."""
+        workflow = self.board.name_of(task.get("workflow_id"))
+        target = launch_target(task, self.board)
         if target is None:
-            self.note_failure(key, fresh, "no admission target in workflow "
-                              f"{self.board.name_of(fresh.get('workflow_id'))!r}", now)
-            return False
+            self.note_failure(
+                key, task, f"no admission target in workflow {workflow!r}", snapshot.now
+            )
+            return RETRY
         intent, session_id = pick_intent(sessions)
         try:
             client.ws_launch(task["id"], intent, session_id, target)
         except Exception as error:
-            self.note_failure(key, fresh, str(error), now)
-            return False
-        self.book(task["id"], step, session_id, now)
-        log.info(f"headroom={headroom:+.3f} open -> launched {label(fresh)!r} intent={intent} "
-                 f"workflow={self.board.name_of(fresh.get('workflow_id'))!r} "
-                 f"target={self.board.name_of(target)!r} ({running + 1}/{cap})")
-        emit("open", "launched",
-             {"task": task["id"], "intent": intent, "session": session_id, "target": target})
-        return True
+            self.note_failure(key, task, str(error), snapshot.now)
+            return RETRY
+
+        step = task.get("workflow_step_id", "")
+        self.book(task["id"], step, session_id, snapshot.now)
+        return Outcome(
+            "launched",
+            f"launched {label(task)!r} intent={intent} workflow={workflow!r} "
+            f"target={self.board.name_of(target)!r}",
+            {"task": task["id"], "intent": intent, "session": session_id, "target": target},
+        )
 
     def book(self, task_id, step, session_id, now):
         """Record a spent turn, and forget this task's failures -- something worked."""
