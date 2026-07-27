@@ -177,7 +177,7 @@ over admitting new work; dragging a queued task to the top overrides that and ad
 That is the point — an explicit instruction beats a heuristic — but if you would rather the WIP
 preference always win, use `PACER_ORDER=board`.
 
-`./pacer.py --dump-order` prints the queue the pacer would work down, so a drag is checkable
+`uv run kandev-pacer --dump-order` prints the queue the pacer would work down, so a drag is checkable
 without waiting a tick — or spending quota — to see which task it picks.
 
 **Priority tiering is free**: the gate reads *account-level* usage, which already includes
@@ -329,7 +329,7 @@ uv run tests/test_make_paced.py     # pure workflow-adaptation planning tests
 uv run tests/test_make_paced_db.py  # SQLite round-trip tests (temp db, no server)
 ```
 
-`./pacer.py` remains as a compatibility entry point. The installed code lives in
+The code lives in
 `src/kandev_pacer/`: `quota.py` and `workflow.py` hold the pure rules, `client.py`
 owns Kandev I/O, and `runtime.py` owns mutable loop state and the CLI. `tests/` mirrors
 that split one file per module, over shared helpers in `tests/support.py` (import path,

@@ -12,3 +12,8 @@ dependencies = ["websocket-client"]
 
 [project.scripts]
 kandev-pacer = "kandev_pacer.runtime:main"
+
+[dependency-groups]
+dev = [
+    "pytest>=9.1.1",
+]

@@ -1,4 +1,3 @@
-# ruff: noqa: F401  # compatibility exports for code that imported the old pacer.py
 """Stateful pacing loop and command-line interface."""
 
 import json
@@ -10,7 +9,7 @@ from pathlib import Path
 from .client import (
     paced_tasks as _paced_tasks,
     queued_counts,
-    request as _req,
+    request,
     sessions_of,
     tasks_of,
     user_settings as _user_settings,
@@ -28,7 +27,6 @@ from .config import (
     BOOKING_TTL,
     CONCURRENCY,
     DRAINABLE_STATES,
-    FAIL_BACKOFF,
     INTERVAL,
     LOG_PATH,
     MAX_ATTEMPTS,
@@ -40,14 +38,10 @@ from .config import (
     URL,
 )
 from .quota import (
-    binding_label,
     ceiling_breached,
-    clamp01,
     detect_resets,
     diff_sessions,
-    elapsed_frac,
     gate_open,
-    headroom,
     parse_windows,
     provider_missing,
     sessions_snapshot,
@@ -58,23 +52,16 @@ from .quota import (
 )
 from .workflow import (
     action_key,
-    admission_target,
     backed_off,
-    effective_sidebar_view,
     fail_backoff,
     has_custom_sort_view,
-    is_drainable,
     is_launchable,
-    is_paced_step,
-    is_work_step,
     launch_target,
     lint_workflow,
     named,
     newest_session,
     ordered_tasks,
-    paced_step_ids,
     pick_intent,
-    priority_rank,
     prune_booked,
     prune_failures,
     queue_step_id,
@@ -82,8 +69,6 @@ from .workflow import (
     select_action,
     step_names,
     step_ranks,
-    task_order_key,
-    visible_task_order,
 )
 
 _log_failed = False
@@ -276,7 +261,7 @@ def _clear_failures(task_id):
 
 def tick(was_open):
     global _BOOKED, _FAILED, _PREV_SESSIONS, _PREV_WINDOWS
-    usage = _req("GET", "/api/v1/agents/usage")
+    usage = request("GET", "/api/v1/agents/usage")
     now = time.time()
     windows = parse_windows(usage)
     tasks = paced_tasks()
@@ -481,7 +466,7 @@ def watch_usage(interval):
         now = time.time()
         try:
             records = window_records(
-                parse_windows(_req("GET", "/api/v1/agents/usage")), now, ALPHA
+                parse_windows(request("GET", "/api/v1/agents/usage")), now, ALPHA
             )
             log_event(
                 {
@@ -513,7 +498,7 @@ def watch_usage(interval):
 
 def main():
     if "--dump-usage" in sys.argv:
-        print(json.dumps(_req("GET", "/api/v1/agents/usage"), indent=2))
+        print(json.dumps(request("GET", "/api/v1/agents/usage"), indent=2))
         return None
     if "--watch-usage" in sys.argv:
         index = sys.argv.index("--watch-usage") + 1
