@@ -89,6 +89,11 @@ class Board:
         """A step or workflow id as its readable name, or the id when unknown."""
         return self.step_names.get(id_) or self.workflow_names.get(id_, id_)
 
+    @staticmethod
+    def label_of(workflow):
+        """A workflow dict as its readable name. `skipped` holds these, not ids."""
+        return workflow.get("name") or workflow["id"]
+
 
 def resolve_scope(entries, restrict=()):
     wanted = [value.lower() for value in restrict]

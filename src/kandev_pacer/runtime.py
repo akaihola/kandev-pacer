@@ -2,11 +2,12 @@
 
 One tick runs in three steps, kept apart on purpose:
 
-1. **gather** -- `Pacer.read()` makes every kandev call and returns a `Snapshot`.
-2. **decide** -- `quota.quota_verdict()` and `workflow.select_action()` are pure
+1. **gather** -- `Pacer.read()` makes the kandev calls and returns a `Snapshot`.
+2. **decide** -- `quota.quota_verdict()` and `selection.select_action()` are pure
    functions over that snapshot. Everything worth arguing about is testable with
    plain dictionaries and no fake server.
-3. **act** -- `Pacer.attempt()` makes the one call that spends a turn.
+3. **act** -- `Pacer.attempt()` re-checks the task, then `Pacer.drain()` or
+   `Pacer.launch()` makes the single call that spends a turn.
 """
 
 import argparse
@@ -359,7 +360,7 @@ def dump_order(pacer):
     }
     print(f"\nnot paced: {len(board.skipped)} workflow(s) out of scope")
     for workflow, reason in board.skipped:
-        print(f"  - {workflow.get('name') or workflow['id']}: {reason}")
+        print(f"  - {board.label_of(workflow)}: {reason}")
     # A task dragged to the top of the sidebar but sitting in an unpaced workflow will
     # never launch, and the sidebar gives no hint of that. Say so by name.
     for task_id in placed:
@@ -367,7 +368,7 @@ def dump_order(pacer):
             continue
         task, workflow = elsewhere[task_id]
         print(f"  ! placed by hand but not paced: {label(task)!r} "
-              f"(in {workflow.get('name') or workflow['id']!r})")
+              f"(in {board.label_of(workflow)!r})")
 
 
 def report_startup(board):
@@ -387,7 +388,7 @@ def report_startup(board):
                  f"queue={board.name_of(queue_step_id(steps))!r} "
                  f"admission={board.name_of(board.admission.get(workflow_id))!r}")
     for workflow, reason in board.skipped:
-        log.info(f"  not paced: {workflow.get('name') or workflow['id']!r} -- {reason}")
+        log.info(f"  not paced: {board.label_of(workflow)!r} -- {reason}")
 
 
 def main():
