@@ -334,8 +334,8 @@ Three record kinds, append-only, ~300 KB/day at the default 120s tick:
   drains too would need a `queued_counts()` WebSocket round trip on every tick, including the
   paused ones the record exists to capture.
 - `failure` — a launch or drain kandev refused, with the reason and the consecutive-failure
-  count. Its own kind rather than a tick outcome, for the same reason `_FAILED` is not
-  `_BOOKED`: a refused launch spends no quota, and the tick goes on to the next candidate.
+  count. Its own kind rather than a tick outcome, for the same reason `Pacer.failed` is not
+  `Pacer.booked`: a refused launch spends no quota, and the tick goes on to the next candidate.
 - `start` / `error` — run configuration (so analysis can segment by `cap`, `alpha`, `order`, …)
   and loop failures.
 
