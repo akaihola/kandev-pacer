@@ -20,6 +20,7 @@ make-paced = "kandev_pacer.make_paced:main"
 [dependency-groups]
 dev = [
     "darker[ruff]>=3.0.0",
+    "graylint",
     "pytest>=9.1.1",
 ]
 
@@ -39,15 +40,28 @@ max-line-length = 100
 [tool.darker]
 # Reformats only the lines a change touches, so the codebase converges on the
 # style above as it is edited instead of in one unreviewable sweep.
-#   uv run darker            # format what you changed
+#   uv run darker            # format what this branch changed
 #   uv run darker --check    # what CI would complain about
-# `revision` is left at darker's default (HEAD..:WORKTREE:) on purpose: pointing
-# it at the branch point would pull in every line the branch already touched.
 src = ["src", "tests"]
 formatter = "ruff"
+revision = "main..."
+
+[tool.graylint]
+# The same idea for the linter: run ruff over the old and new versions and show
+# only messages this branch introduced, so a legacy warning in a file you touched
+# does not become your problem.
+#   uv run graylint
+# ruff needs `--output-format concise` to emit the path:line:col: message shape
+# graylint parses.
+src = ["src", "tests"]
+revision = "main..."
+lint = ["ruff check --output-format concise"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 # make_paced.py sits at the repo root and the helpers sit in tests/, so both join
 # the installed package on the import path.
 pythonpath = ["tests"]
+
+[tool.uv.sources]
+graylint = { git = "https://github.com/akaihola/graylint", rev = "main" }

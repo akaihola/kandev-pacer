@@ -148,14 +148,16 @@ that spends a turn.
 ```bash
 uv run pytest                              # the whole suite (no network, no quota, no server)
 uv run pytest tests/test_quota.py -k alpha # one file, or one test by name
-uv run ruff check src tests                # style and dead code
-uv run darker                              # reformat just the lines you changed
+uv run ruff check src tests                # style and dead code, whole tree
+uv run darker                              # reformat what this branch changed
+uv run graylint                            # ruff findings this branch introduced
 ```
 
-`darker` rather than `ruff format`: it formats only the lines a change touches, so style
-converges as the code is edited instead of arriving as one sweep nobody can review. Both
-are configured in `pyproject.toml` — the formatter aims for 88 columns, the linter only
-errors past 100.
+`darker` and `graylint` rather than formatting and linting everything: both compare
+against the branch point and act only on what the branch touched, so style converges as
+code is edited instead of arriving as one sweep nobody can review, and a pre-existing
+warning in a file you edited does not become your problem. All three are configured in
+`pyproject.toml` — the formatter aims for 88 columns, the linter only errors past 100.
 
 [kandev]: https://github.com/kdlbs/kandev
 [docs/design.md]: docs/design.md

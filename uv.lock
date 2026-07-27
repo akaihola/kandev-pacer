@@ -52,6 +52,14 @@ wheels = [
 ]
 
 [[package]]
+name = "graylint"
+version = "2.0.0"
+source = { git = "https://github.com/akaihola/graylint?rev=main#8302d63eaffa9ba95d18c4314120793c384f10a8" }
+dependencies = [
+    { name = "darkgraylib" },
+]
+
+[[package]]
 name = "iniconfig"
 version = "2.3.0"
 source = { registry = "https://pypi.org/simple" }
@@ -72,6 +80,7 @@ dependencies = [
 [package.dev-dependencies]
 dev = [
     { name = "darker", extra = ["ruff"] },
+    { name = "graylint" },
     { name = "pytest" },
 ]
 
@@ -84,6 +93,7 @@ requires-dist = [
 [package.metadata.requires-dev]
 dev = [
     { name = "darker", extras = ["ruff"], specifier = ">=3.0.0" },
+    { name = "graylint", git = "https://github.com/akaihola/graylint?rev=main" },
     { name = "pytest", specifier = ">=9.1.1" },
 ]
 
