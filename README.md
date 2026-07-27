@@ -321,8 +321,6 @@ uv run kandev-pacer --dump-usage     # inspect live usage payload first
 uv run kandev-pacer --dump-order     # show the queue order launches will follow
 uv run kandev-pacer                  # start the pacing loop (lints on startup)
 uv run kandev-pacer --watch-usage 30 # read-only usage sampler (run alongside)
-./sim_concurrency.py       # is a higher PACER_CONCURRENCY worth it?
-                            #   --levers | --history | --measure <pacer.jsonl>
 uv run tests/test_quota.py    # pacing math, usage parsing, log records (no network)
 uv run tests/test_workflow.py # step classification, ordering, selection, lint (no network)
 uv run tests/test_client.py   # the WebSocket layer vs a fake kandev (loopback, no quota)

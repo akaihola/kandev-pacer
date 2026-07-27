@@ -3,8 +3,18 @@
 `PACER_CONCURRENCY` defaults to 1. The proposal: when consumption is well under the planned
 rate, let several tasks run at once instead of holding the board to a single turn.
 
-Measured on `gogo`, 2026-07-27, rather than argued from intuition. Reproduce with
-`./sim_concurrency.py`, `--levers`, `--history`, and `--measure <pacer.jsonl>`.
+Measured on `gogo`, 2026-07-27, rather than argued from intuition, with a one-off simulator
+(`sim_concurrency.py`) that has since been deleted — it was a second copy of the pacing loop
+that had to be kept in sync with the real one, for a question that is now answered here. To
+reproduce or re-run it:
+
+```bash
+git show 977d2e1:sim_concurrency.py > /tmp/sim_concurrency.py
+```
+
+It offered `--levers`, `--history`, and `--measure <pacer.jsonl>`. It imported the gate
+functions from the old top-level `pacer` module, so a re-run needs those imports pointed at
+`kandev_pacer.quota` / `kandev_pacer.workflow`.
 
 **Short answer: yes, raise it to 2** — but the strongest reason is not the quota one.
 
@@ -95,7 +105,7 @@ This is an argument for `N ≥ 2` that is independent of quota entirely.
 
 ## Simulated
 
-`sim_concurrency.py` runs the real gate (`worst_headroom`, `gate_open`, `ceiling_breached`)
+The simulator ran the real gate (`worst_headroom`, `gate_open`, `ceiling_breached`)
 over a 5-hour window, resampling durations from the 349 real turns, with a deep backlog. Read
 it as *what a higher cap is worth when there is work to give it* — the section above is exactly
 the argument that this precondition is not established here. Turns completed / final consumption, `dead_time=300 s`:
