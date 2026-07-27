@@ -173,8 +173,8 @@ def visible_task_order(tasks, pinned_ids, ordered_ids, subtask_order=None):
     ordered, seen = [], set()
 
     def visit(task):
-        if task["id"] in seen:
-            return
+        # No repeat-visit guard: _tree() puts each task in exactly one place, either
+        # roots or one parent's children, so nothing here is reachable twice.
         seen.add(task["id"])
         ordered.append(task)
         for child in _rank(children.get(task["id"], []), subtask_order.get(task["id"]) or []):

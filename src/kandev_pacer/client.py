@@ -12,26 +12,24 @@ from .selection import newest_session
 log = logging.getLogger("kandev-pacer")
 
 
-def request(method, path, body=None):
-    data = json.dumps(body).encode() if body is not None else None
-    req = urllib.request.Request(
-        settings.url + path,
-        data=data,
-        method=method,
-        headers={"Content-Type": "application/json"},
-    )
-    with urllib.request.urlopen(req, timeout=15) as response:
+def get(path):
+    """Read one `/api/v1` endpoint. GET is the only HTTP verb the pacer uses.
+
+    Everything that changes kandev -- launching, draining, flagging -- goes over the
+    WebSocket instead, so there is no body to send and no other method to pick.
+    """
+    with urllib.request.urlopen(settings.url + path, timeout=15) as response:
         raw = response.read()
         return json.loads(raw) if raw else None
 
 
 def workflow_entries():
     """Every workflow kandev knows, each paired with its steps. The startup scan's input."""
-    workflows = (request("GET", "/api/v1/workflows") or {}).get("workflows") or []
+    workflows = (get("/api/v1/workflows") or {}).get("workflows") or []
     return [
         (
             workflow,
-            (request("GET", f"/api/v1/workflows/{workflow['id']}/workflow/steps")
+            (get(f"/api/v1/workflows/{workflow['id']}/workflow/steps")
              or {}).get("steps", []),
         )
         for workflow in workflows
@@ -39,7 +37,7 @@ def workflow_entries():
 
 
 def tasks_of(workflow_id):
-    response = request("GET", f"/api/v1/workflows/{workflow_id}/tasks") or {}
+    response = get(f"/api/v1/workflows/{workflow_id}/tasks") or {}
     return response.get("tasks", [])
 
 
@@ -47,18 +45,21 @@ def paced_tasks(scope):
     return [task for workflow_id in scope for task in tasks_of(workflow_id)]
 
 
-def user_settings(order):
-    if order == "board":
-        return None
+def user_settings():
+    """The sidebar preferences, or None if they cannot be read.
+
+    Unreadable settings must not stop a tick -- the pacer falls back to board pull
+    order, which is the base ordering anyway.
+    """
     try:
-        return (request("GET", "/api/v1/user/settings") or {}).get("settings") or None
+        return (get("/api/v1/user/settings") or {}).get("settings") or None
     except Exception as error:
         log.warning(f"user settings unavailable ({error}) -> FIFO order this tick")
         return None
 
 
 def sessions_of(task_id):
-    response = request("GET", f"/api/v1/tasks/{task_id}/sessions") or {}
+    response = get(f"/api/v1/tasks/{task_id}/sessions") or {}
     return response.get("sessions", [])
 
 
@@ -81,6 +82,8 @@ def _ws_call(connection, action, payload, request_id):
     while True:
         raw = connection.recv()
         if not raw:
+            # recv() returns "" for any non-text frame, so this skips ping/pong. A
+            # real close does not spin here: the next recv() raises instead.
             continue
         message = json.loads(raw)
         if message.get("id") != request_id:

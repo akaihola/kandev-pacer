@@ -117,7 +117,7 @@ class Pacer:
         tick(), because they cost a WebSocket round trip per idle session and are only
         needed once the gate is open and there is room to launch.
         """
-        usage = client.request("GET", "/api/v1/agents/usage")
+        usage = client.get("/api/v1/agents/usage")
         now = time.time()
         tasks = client.paced_tasks(self.board.scope)
         sessions = {task["id"]: client.sessions_of(task["id"]) for task in tasks}
@@ -129,7 +129,8 @@ class Pacer:
         )
         # Read once per tick, not once per attempt: the drag order cannot change
         # mid-tick, and MAX_ATTEMPTS candidates would otherwise mean three fetches.
-        sidebar = client.user_settings(self.config.order)
+        # `board` mode ignores the sidebar entirely, so it does not even ask.
+        sidebar = None if self.config.order == "board" else client.user_settings()
         return Snapshot(now, usage, parse_windows(usage), tasks, sessions, running, sidebar)
 
     # --- 2. decide (the pure parts live in quota.py and workflow.py) ---
@@ -337,7 +338,7 @@ class Pacer:
 def dump_order(pacer):
     """Print the queue launches will work down, without spending a turn to find out."""
     board = pacer.board
-    sidebar = client.user_settings(settings.order)
+    sidebar = None if settings.order == "board" else client.user_settings()
     placed = ((sidebar or {}).get("sidebar_task_prefs") or {}).get("ordered_task_ids") or []
     if uses_manual_order(sidebar, settings.order):
         description = (

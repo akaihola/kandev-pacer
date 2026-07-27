@@ -2,7 +2,7 @@
 
 The pacer talks to kandev two ways, and this fakes each at its own seam:
 
-- REST reads go through `client.request(method, path)`, so `FakeBoard.request`
+- REST reads go through `client.get(path)`, so `FakeBoard.get`
   replaces that one function and answers from the board held here.
 - Actions go over a WebSocket, and the framing is the pacer's own code (matching a
   reply to its request id past unrelated pushes, spotting error frames). So the fake
@@ -134,7 +134,7 @@ class FakeBoard:
 
     # --- REST ---
 
-    def request(self, method, path, body=None):
+    def get(self, path):
         self.paths.append(path)
         if path.endswith("/agents/usage"):
             # A reset 2.5h out on a 5h window: half elapsed, 10% consumed.
@@ -214,6 +214,6 @@ def backoff_100(monkeypatch):
 def board(monkeypatch):
     """A fake kandev, with `client`'s two seams pointed at it."""
     fake = FakeBoard()
-    monkeypatch.setattr(client, "request", fake.request)
+    monkeypatch.setattr(client, "get", fake.get)
     monkeypatch.setattr(websocket, "create_connection", fake.connect)
     return fake
