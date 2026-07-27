@@ -211,7 +211,7 @@ def _iso_in(seconds):
 @pytest.fixture
 def backoff_100(monkeypatch):
     """A round PACER_FAIL_BACKOFF, so the doubling is readable in the assertions."""
-    monkeypatch.setattr(settings, "fail_backoff", 100)
+    monkeypatch.setattr(settings, "fail_backoff_override", 100)
 
 
 @pytest.fixture

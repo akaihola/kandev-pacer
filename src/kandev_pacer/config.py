@@ -8,8 +8,8 @@ changing one is a code change, not a configuration change.
 from pathlib import Path
 from typing import Literal
 
-from pydantic import Field, field_validator, model_validator
-from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic import Field, field_validator
+from pydantic_settings import BaseSettings
 
 
 class Settings(BaseSettings):
@@ -20,12 +20,9 @@ class Settings(BaseSettings):
     week should not start at all on a typo'd number.
     """
 
-    # Field names work as keyword arguments too, so a test can write Settings(alpha=0.5)
-    # instead of Settings(PACER_ALPHA=0.5).
-    model_config = SettingsConfigDict(populate_by_name=True)
-
     url: str = Field("http://127.0.0.1:38429", alias="KANDEV_URL")
-    ws_url: str = Field("", alias="KANDEV_WS_URL")
+    # Empty means "derive it from url"; see the ws_url property.
+    ws_url_override: str = Field("", alias="KANDEV_WS_URL")
     provider: str = Field("anthropic", alias="PACER_PROVIDER")
 
     # How many turns may be in flight at once.
@@ -39,9 +36,9 @@ class Settings(BaseSettings):
     interval: int = Field(120, alias="PACER_INTERVAL", gt=0)
     order: Literal["auto", "custom", "board"] = Field("auto", alias="PACER_ORDER")
 
-    # Seconds before a refused launch is retried; doubles per consecutive failure.
-    # Unset means three ticks, so it scales with the interval.
-    fail_backoff: int | None = Field(None, alias="PACER_FAIL_BACKOFF", ge=0)
+    # Unset means "three ticks"; see the fail_backoff property. 0 is a real value --
+    # retry with no backoff at all.
+    fail_backoff_override: int | None = Field(None, alias="PACER_FAIL_BACKOFF", ge=0)
     # Consecutive failures before the card is flagged BLOCKED. 0 keeps the pacer read-only.
     block_after: int = Field(2, alias="PACER_BLOCK_AFTER", ge=0)
 
@@ -57,6 +54,26 @@ class Settings(BaseSettings):
         alias="PACER_LOG",
     )
 
+    # --- values derived from the ones above ---
+    #
+    # Properties, not fields a validator fills in: a derived value that is settable is
+    # indistinguishable from a configured one, and its declared type has to admit the
+    # unset state forever after. These are always what they say they are.
+
+    @property
+    def ws_url(self):
+        """The /ws endpoint. Same host as the API unless KANDEV_WS_URL says otherwise."""
+        if self.ws_url_override:
+            return self.ws_url_override
+        return self.url.replace("https://", "wss://").replace("http://", "ws://") + "/ws"
+
+    @property
+    def fail_backoff(self):
+        """Seconds to hold a refused task before retrying, before any doubling."""
+        if self.fail_backoff_override is None:
+            return 3 * self.interval
+        return self.fail_backoff_override
+
     @property
     def booking_ttl(self):
         """How long a booking is honoured before the task counts as launchable again."""
@@ -67,16 +84,11 @@ class Settings(BaseSettings):
     def _lowercase(cls, value):
         return value.lower() if isinstance(value, str) else value
 
-    @model_validator(mode="after")
-    def _derive(self):
-        self.url = self.url.rstrip("/")
-        if not self.ws_url:
-            self.ws_url = (
-                self.url.replace("https://", "wss://").replace("http://", "ws://") + "/ws"
-            )
-        if self.fail_backoff is None:
-            self.fail_backoff = 3 * self.interval
-        return self
+    @field_validator("url", mode="after")
+    @classmethod
+    def _no_trailing_slash(cls, value):
+        # Every caller appends a path that already starts with "/".
+        return value.rstrip("/")
 
 
 settings = Settings()

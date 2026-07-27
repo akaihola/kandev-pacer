@@ -180,7 +180,7 @@ def test_quota_verdict_is_blind_when_the_provider_is_missing():
 
 def test_quota_verdict_honours_the_resume_margin():
     """Reopening needs more than bare zero, or the gate flaps around h == 0."""
-    config = Settings(resume_margin=0.05)
+    config = Settings(PACER_RESUME_MARGIN=0.05)
     barely = _windows(0.4999)                       # h ~ +0.0001, above 0 but under margin
     assert quota_verdict(_usage(), barely, 1000.0, True, config).is_open    # already open
     assert not quota_verdict(_usage(), barely, 1000.0, False, config).is_open  # was paused
