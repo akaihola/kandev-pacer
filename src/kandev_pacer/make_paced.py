@@ -199,7 +199,8 @@ def describe(step, change):
 
 
 
-def main():
+def build_parser():
+    """The command line: one enrolment tool, dry by default."""
     parser = argparse.ArgumentParser(
         prog="make-paced",
         description="Make a Kandev workflow paced: strip auto_start_agent, set stage_type.",
@@ -239,7 +240,11 @@ def main():
     parser.add_argument(
         "--apply", action="store_true", help="write the changes (default: dry run)"
     )
-    args = parser.parse_args()
+    return parser
+
+
+def main():
+    args = build_parser().parse_args()
 
     connection = connect(args.db, writable=args.apply)
     if not args.workflow:

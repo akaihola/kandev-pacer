@@ -145,12 +145,13 @@ def _rank(tasks, ordered_ids):
     return sorted(tasks, key=lambda task: index.get(task["id"], len(index)))
 
 
-def visible_task_order(tasks, pinned_ids, ordered_ids, subtask_order=None):
-    """The sidebar's own reading order.
+def _tree(tasks):
+    """Split tasks into (roots, children-by-parent).
 
-    Pinned first, then dragged, each parent immediately before its children.
+    A task counts as a root unless its parent is here too: a subtask whose parent
+    sits in another workflow, or is its own parent, has nothing to nest under and
+    would otherwise never be reached.
     """
-    subtask_order = subtask_order or {}
     ids = {task["id"] for task in tasks}
     roots, children = [], {}
     for task in tasks:
@@ -159,6 +160,16 @@ def visible_task_order(tasks, pinned_ids, ordered_ids, subtask_order=None):
             children.setdefault(parent, []).append(task)
         else:
             roots.append(task)
+    return roots, children
+
+
+def visible_task_order(tasks, pinned_ids, ordered_ids, subtask_order=None):
+    """The sidebar's own reading order.
+
+    Pinned first, then dragged, each parent immediately before its children.
+    """
+    subtask_order = subtask_order or {}
+    roots, children = _tree(tasks)
     ordered, seen = [], set()
 
     def visit(task):
