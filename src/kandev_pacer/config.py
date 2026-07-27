@@ -1,45 +1,122 @@
-"""Environment-backed pacer configuration."""
+"""Configuration: the knobs read from the environment, and the fixed kandev vocabulary.
 
-import os
+Two different things live here, deliberately separated. `Settings` is what an operator
+sets per run. The constants below it are what kandev calls things -- not knobs, and
+changing one is a code change, not a configuration change.
+"""
+
 from pathlib import Path
+from typing import Annotated, Literal
 
-URL = os.environ.get("KANDEV_URL", "http://127.0.0.1:38429").rstrip("/")
-PACED_WORKFLOWS = [
-    value.strip()
-    for value in (os.environ.get("PACED_WORKFLOW_ID") or "").split(",")
-    if value.strip()
-]
-PROVIDER = os.environ.get("PACER_PROVIDER", "anthropic")
-CONCURRENCY = int(os.environ.get("PACER_CONCURRENCY", "1"))
-ALPHA = float(os.environ.get("PACER_ALPHA", "1.0"))
-RESUME_MARGIN = float(os.environ.get("PACER_RESUME_MARGIN", "0.0"))
-BACKSTOP = float(os.environ.get("PACER_BACKSTOP", "0.97"))
-INTERVAL = int(os.environ.get("PACER_INTERVAL", "120"))
-ORDER = (os.environ.get("PACER_ORDER") or "auto").lower()
-BOOKING_TTL = 3 * INTERVAL
-FAIL_BACKOFF = int(os.environ.get("PACER_FAIL_BACKOFF", str(3 * INTERVAL)))
-FAIL_BACKOFF_MAX_MULT = 8
-BLOCK_AFTER = int(os.environ.get("PACER_BLOCK_AFTER", "2"))
-BLOCKED_STATE = "BLOCKED"
-MAX_ATTEMPTS = 3
-ADMISSION_OVERRIDE = os.environ.get("PACER_ADMISSION_STEP_ID") or None
-LOG_PATH = os.environ.get(
-    "PACER_LOG",
-    str(Path.home() / ".local" / "state" / "kandev-pacer" / "pacer.jsonl"),
-)
-WS_URL = os.environ.get("KANDEV_WS_URL") or (
-    URL.replace("https://", "wss://").replace("http://", "ws://") + "/ws"
-)
+from pydantic import Field, field_validator, model_validator
+from pydantic_settings import BaseSettings, NoDecode
 
+
+class Settings(BaseSettings):
+    """Every environment variable the pacer reads, validated once at startup.
+
+    A bad value fails here with the variable's name in the message, rather than as a
+    traceback out of whichever line first used it -- an unattended loop that runs all
+    week should not start at all on a typo'd number.
+    """
+
+    url: str = Field("http://127.0.0.1:38429", alias="KANDEV_URL")
+    ws_url: str = Field("", alias="KANDEV_WS_URL")
+    # ids or names; empty means "every enrolled workflow", which is the normal case.
+    # NoDecode: take the raw string, since pydantic would otherwise read a list field
+    # from the environment as JSON, and this is the comma-separated list a person types.
+    paced_workflows: Annotated[list[str], NoDecode] = Field(
+        default_factory=list, alias="PACED_WORKFLOW_ID"
+    )
+    provider: str = Field("anthropic", alias="PACER_PROVIDER")
+
+    # How many turns may be in flight at once.
+    concurrency: int = Field(1, alias="PACER_CONCURRENCY", ge=1)
+    # Target burn line: alpha < 1 aims below steady, finishing each window with quota spare.
+    alpha: float = Field(1.0, alias="PACER_ALPHA", gt=0)
+    # Headroom the gate must regain before it reopens, to stop it flapping at h == 0.
+    resume_margin: float = Field(0.0, alias="PACER_RESUME_MARGIN", ge=0)
+    # Hard ceiling on consumed fraction, whatever the burn line says. 1.0 disables it.
+    backstop: float = Field(0.97, alias="PACER_BACKSTOP", gt=0, le=1.0)
+    interval: int = Field(120, alias="PACER_INTERVAL", gt=0)
+    order: Literal["auto", "custom", "board"] = Field("auto", alias="PACER_ORDER")
+
+    # Seconds before a refused launch is retried; doubles per consecutive failure.
+    # Unset means three ticks, so it scales with the interval.
+    fail_backoff: int = Field(0, alias="PACER_FAIL_BACKOFF", ge=0)
+    # Consecutive failures before the card is flagged BLOCKED. 0 keeps the pacer read-only.
+    block_after: int = Field(2, alias="PACER_BLOCK_AFTER", ge=0)
+
+    # Empty disables logging.
+    log_path: str = Field(
+        str(Path.home() / ".local" / "state" / "kandev-pacer" / "pacer.jsonl"),
+        alias="PACER_LOG",
+    )
+    # Normally derived: the lowest-position work step of each workflow.
+    admission_step_id: str = Field("", alias="PACER_ADMISSION_STEP_ID")
+
+    @property
+    def booking_ttl(self):
+        """How long a booking is honoured before the task counts as launchable again."""
+        return 3 * self.interval
+
+    @field_validator("order", mode="before")
+    @classmethod
+    def _lowercase(cls, value):
+        return value.lower() if isinstance(value, str) else value
+
+    @field_validator("paced_workflows", mode="before")
+    @classmethod
+    def _split_commas(cls, value):
+        # pydantic parses list fields from the environment as JSON; this is a plain
+        # comma-separated list, which is what a person types into a systemd unit.
+        if isinstance(value, str):
+            return [part.strip() for part in value.split(",") if part.strip()]
+        return value
+
+    @model_validator(mode="after")
+    def _derive(self):
+        self.url = self.url.rstrip("/")
+        if not self.ws_url:
+            self.ws_url = (
+                self.url.replace("https://", "wss://").replace("http://", "ws://") + "/ws"
+            )
+        if not self.fail_backoff:
+            self.fail_backoff = 3 * self.interval
+        return self
+
+
+settings = Settings()
+"""Read once, at import, so a bad value stops the pacer before it launches anything.
+
+Modules read attributes off this object rather than importing values, so a test can
+point one knob somewhere else without re-importing half the package.
+"""
+
+
+# --- kandev's vocabulary: names and shapes the server defines, not knobs ---
+
+# The payload gives resets_at, not duration, so each window's length is hardcoded.
 WINDOW_DURATIONS = {
     "5-hour": 5 * 3600,
     "7-day": 7 * 24 * 3600,
     "7-day (Fable)": 7 * 24 * 3600,
 }
+# A step carrying one of these on on_turn_complete routes the task away when a turn ends,
+# which is what makes it safe to pace: a task still sitting there has an unfinished turn.
 TRANSITION_KINDS = {"move_to_next", "move_to_previous", "move_to_step"}
 PRIORITY_RANK = {"critical": 0, "high": 1, "medium": 2, "low": 3, "none": 4}
+
 RUNNING_STATES = {"STARTING", "RUNNING"}
 READY_STATE = "WAITING_FOR_INPUT"
-CREATED_STATE = "CREATED"
+CREATED_STATE = "CREATED"          # session prepared when the task was made, never started
 IDLE_STATES = {CREATED_STATE, READY_STATE}
-DRAINABLE_STATES = {READY_STATE}
+DRAINABLE_STATES = {READY_STATE}   # a CREATED session cannot take a queued prompt yet
+BLOCKED_STATE = "BLOCKED"
+
+# Candidates one tick will try before giving up, so a board of broken cards can't turn
+# one tick into a walk of the whole backlog.
+MAX_ATTEMPTS = 3
+# Ceiling on the failure-backoff doubling: a hopeless task still gets an occasional
+# "has the user fixed it yet?" retry.
+FAIL_BACKOFF_MAX_MULT = 8

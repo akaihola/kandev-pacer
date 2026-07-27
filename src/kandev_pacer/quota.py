@@ -2,7 +2,7 @@
 
 from datetime import datetime
 
-from .config import PROVIDER, WINDOW_DURATIONS
+from .config import WINDOW_DURATIONS, settings
 
 
 def clamp01(x):
@@ -85,7 +85,7 @@ def _epoch(timestamp):
 
 
 def parse_windows(usage, provider=None):
-    provider = PROVIDER if provider is None else provider
+    provider = settings.provider if provider is None else provider
     windows = []
     for agent in usage.get("agents", []):
         agent_usage = agent.get("usage") or {}

@@ -8,23 +8,11 @@ from pathlib import Path
 
 from . import client
 from .config import (
-    ADMISSION_OVERRIDE,
-    ALPHA,
-    BACKSTOP,
-    BLOCK_AFTER,
     BLOCKED_STATE,
-    BOOKING_TTL,
-    CONCURRENCY,
     DRAINABLE_STATES,
-    INTERVAL,
-    LOG_PATH,
     MAX_ATTEMPTS,
-    ORDER,
-    PACED_WORKFLOWS,
-    PROVIDER,
-    RESUME_MARGIN,
     RUNNING_STATES,
-    URL,
+    settings,
 )
 from .quota import (
     ceiling_breached,
@@ -72,10 +60,10 @@ _STEP_RANKS = {}
 def log_event(record):
     """Append a JSONL record without letting log failure stop the pacing loop."""
     global _log_failed
-    if not LOG_PATH:
+    if not settings.log_path:
         return
     try:
-        path = Path(LOG_PATH)
+        path = Path(settings.log_path)
         path.parent.mkdir(parents=True, exist_ok=True)
         with path.open("a") as file:
             file.write(json.dumps(record, separators=(",", ":")) + "\n")
@@ -90,7 +78,7 @@ def paced_tasks(scope=None):
 
 
 def user_settings():
-    return client.user_settings(ORDER)
+    return client.user_settings(settings.order)
 
 
 def label(task):
@@ -138,7 +126,7 @@ def note_failure(key, task, reason, now):
             "attempts": attempts,
         }
     )
-    if BLOCK_AFTER and attempts >= BLOCK_AFTER and not _FAILED[key]["flagged"]:
+    if settings.block_after and attempts >= settings.block_after and not _FAILED[key]["flagged"]:
         _FAILED[key]["flagged"] = flag_blocked(task, reason)
 
 
@@ -190,7 +178,7 @@ def attempt(kind, task, key, wh, running, now, emit):
         print(
             f"headroom={wh:+.3f} open -> drained queued prompt for "
             f"{label(fresh)!r} at {named(step, _STEP_NAMES)!r} "
-            f"({running + 1}/{CONCURRENCY})",
+            f"({running + 1}/{settings.concurrency})",
             flush=True,
         )
         emit(
@@ -222,7 +210,7 @@ def attempt(kind, task, key, wh, running, now, emit):
         f"headroom={wh:+.3f} open -> launched {label(fresh)!r} intent={intent} "
         f"workflow={named(fresh.get('workflow_id'), _WF_NAMES)!r} "
         f"target={named(target, _STEP_NAMES)!r} "
-        f"({running + 1}/{CONCURRENCY})",
+        f"({running + 1}/{settings.concurrency})",
         flush=True,
     )
     emit(
@@ -250,7 +238,7 @@ def tick(was_open):
     windows = parse_windows(usage)
     tasks = paced_tasks()
     task_sessions = {task["id"]: client.sessions_of(task["id"]) for task in tasks}
-    _BOOKED = prune_booked(_BOOKED, tasks, task_sessions, now, BOOKING_TTL)
+    _BOOKED = prune_booked(_BOOKED, tasks, task_sessions, now, settings.booking_ttl)
     _FAILED = prune_failures(_FAILED, tasks, task_sessions)
     running = sum(
         1
@@ -270,7 +258,7 @@ def tick(was_open):
             skip,
         )
     )
-    records = window_records(windows, now, ALPHA)
+    records = window_records(windows, now, settings.alpha)
 
     def emit(gate, action, launched=None):
         log_event(
@@ -281,44 +269,44 @@ def tick(was_open):
                 records,
                 running,
                 launchable,
-                CONCURRENCY,
+                settings.concurrency,
                 len(_BOOKED),
                 launched,
             )
         )
 
-    if not windows and provider_missing(usage, PROVIDER):
+    if not windows and provider_missing(usage, settings.provider):
         print(
-            f"provider {PROVIDER!r} not in usage "
+            f"provider {settings.provider!r} not in usage "
             f"{sorted(usage_providers(usage))} -> WITHHOLDING "
             "(check PACER_PROVIDER)",
             flush=True,
         )
         emit("blind", "withheld")
         return False
-    worst = worst_headroom(windows, now, ALPHA)
-    if ceiling_breached(windows, BACKSTOP):
+    worst = worst_headroom(windows, now, settings.alpha)
+    if ceiling_breached(windows, settings.backstop):
         print(
-            f"headroom={worst:+.3f} CEILING (consumed>{BACKSTOP:.2f}) "
+            f"headroom={worst:+.3f} CEILING (consumed>{settings.backstop:.2f}) "
             "-> withholding",
             flush=True,
         )
         emit("ceiling", "withheld")
         return False
-    is_open = gate_open(worst, was_open, RESUME_MARGIN)
+    is_open = gate_open(worst, was_open, settings.resume_margin)
     if not is_open:
         print(f"headroom={worst:+.3f} PAUSED ({running} running)", flush=True)
         emit("paused", "withheld")
         return is_open
-    if running >= CONCURRENCY:
+    if running >= settings.concurrency:
         print(
-            f"headroom={worst:+.3f} open, full ({running}/{CONCURRENCY})",
+            f"headroom={worst:+.3f} open, full ({running}/{settings.concurrency})",
             flush=True,
         )
         emit("open", "full")
         return is_open
 
-    ordered = ordered_tasks(tasks, user_settings(), ORDER, _STEP_RANKS)
+    ordered = ordered_tasks(tasks, user_settings(), settings.order, _STEP_RANKS)
     queued = client.queued_counts(task_sessions)
     for _ in range(MAX_ATTEMPTS):
         skip = set(_BOOKED) | backed_off(_FAILED, now)
@@ -336,7 +324,7 @@ def tick(was_open):
             )
             print(
                 f"headroom={worst:+.3f} open, nothing to launch "
-                f"({running}/{CONCURRENCY} running{held})",
+                f"({running}/{settings.concurrency} running{held})",
                 flush=True,
             )
             emit("open", "nothing")
@@ -365,7 +353,7 @@ def resolve_globals(entries):
     global _SCOPE, _WORK_STEPS, _QUEUE_STEPS, _ADMISSION
     global _STEP_NAMES, _WF_NAMES, _STEP_RANKS
     _SCOPE, _WORK_STEPS, _QUEUE_STEPS, _ADMISSION, skipped = resolve_scope(
-        entries, PACED_WORKFLOWS, ADMISSION_OVERRIDE
+        entries, settings.paced_workflows, settings.admission_step_id
     )
     _STEP_NAMES = {
         step_id: name
@@ -385,12 +373,12 @@ def resolve_globals(entries):
 
 
 def _dump_order(entries, skipped):
-    settings = user_settings()
-    manual = bool(settings) and (
-        ORDER == "custom" or has_custom_sort_view(settings)
+    sidebar = user_settings()
+    manual = bool(sidebar) and (
+        settings.order == "custom" or has_custom_sort_view(sidebar)
     )
     placed = (
-        ((settings or {}).get("sidebar_task_prefs") or {}).get(
+        ((sidebar or {}).get("sidebar_task_prefs") or {}).get(
             "ordered_task_ids"
         )
         or []
@@ -401,11 +389,11 @@ def _dump_order(entries, skipped):
         if manual
         else "board pull order (sidebar order not consulted)"
     )
-    print(f"order={ORDER} -> {description}")
+    print(f"order={settings.order} -> {description}")
     print(f"scope: {[named(workflow, _WF_NAMES) for workflow in _SCOPE]}")
     tasks = paced_tasks()
     for index, task in enumerate(
-        ordered_tasks(tasks, settings, ORDER, _STEP_RANKS), start=1
+        ordered_tasks(tasks, sidebar, settings.order, _STEP_RANKS), start=1
     ):
         print(f"{index:3}. {task.get('title') or task['id']}")
     if not skipped:
@@ -446,9 +434,9 @@ def main():
     )
     args = parser.parse_args()
 
-    if ORDER not in ("auto", "custom", "board"):
+    if settings.order not in ("auto", "custom", "board"):
         print(
-            f"lint: PACER_ORDER={ORDER!r} unknown -> treating it as 'auto'",
+            f"lint: PACER_ORDER={settings.order!r} unknown -> treating it as 'auto'",
             file=sys.stderr,
             flush=True,
         )
@@ -477,24 +465,24 @@ def main():
                 flush=True,
             )
     print(
-        f"pacing {URL} every {INTERVAL}s "
-        f"(alpha={ALPHA}, concurrency={CONCURRENCY}, provider={PROVIDER}, "
-        f"order={ORDER})\n  log={LOG_PATH or '(disabled)'}",
+        f"pacing {settings.url} every {settings.interval}s "
+        f"(alpha={settings.alpha}, concurrency={settings.concurrency}, provider={settings.provider}, "
+        f"order={settings.order})\n  log={settings.log_path or '(disabled)'}",
         flush=True,
     )
     log_event(
         {
             "t": round(time.time(), 3),
             "kind": "start",
-            "url": URL,
+            "url": settings.url,
             "scope": list(_SCOPE),
-            "interval": INTERVAL,
-            "alpha": ALPHA,
-            "cap": CONCURRENCY,
-            "order": ORDER,
-            "backstop": BACKSTOP,
-            "resume_margin": RESUME_MARGIN,
-            "provider": PROVIDER,
+            "interval": settings.interval,
+            "alpha": settings.alpha,
+            "cap": settings.concurrency,
+            "order": settings.order,
+            "backstop": settings.backstop,
+            "resume_margin": settings.resume_margin,
+            "provider": settings.provider,
         }
     )
     steps_by_workflow = {
@@ -539,4 +527,4 @@ def main():
                 }
             )
             was_open = False
-        time.sleep(INTERVAL)
+        time.sleep(settings.interval)

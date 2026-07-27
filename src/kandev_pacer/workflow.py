@@ -1,15 +1,14 @@
 """Workflow classification, task ordering, and launch eligibility."""
 
 from .config import (
-    ADMISSION_OVERRIDE,
     CREATED_STATE,
     DRAINABLE_STATES,
-    FAIL_BACKOFF,
     FAIL_BACKOFF_MAX_MULT,
     IDLE_STATES,
     PRIORITY_RANK,
     READY_STATE,
     TRANSITION_KINDS,
+    settings,
 )
 
 
@@ -95,7 +94,9 @@ def _has_on_enter(step, kind):
     )
 
 
-def lint_workflow(steps, enrolled_only=True, admission_override=ADMISSION_OVERRIDE):
+def lint_workflow(steps, enrolled_only=True, admission_override=None):
+    if admission_override is None:
+        admission_override = settings.admission_step_id
     works = paced_step_ids(steps)
     warnings = []
     for step in steps:
@@ -217,20 +218,20 @@ def pick_intent(sessions):
     return ("start", None) if newest is None else ("workflow_step", newest["id"])
 
 
-def effective_sidebar_view(settings):
-    views = settings.get("sidebar_views") or []
+def effective_sidebar_view(sidebar):
+    views = sidebar.get("sidebar_views") or []
     active = next(
         (
             view
             for view in views
-            if view.get("id") == settings.get("sidebar_active_view_id")
+            if view.get("id") == sidebar.get("sidebar_active_view_id")
         ),
         None,
     )
     active = active or (views[0] if views else None)
     if active is None:
         return None
-    draft = settings.get("sidebar_draft") or None
+    draft = sidebar.get("sidebar_draft") or None
     if draft and draft.get("base_view_id") == active.get("id"):
         return {
             **active,
@@ -241,9 +242,9 @@ def effective_sidebar_view(settings):
     return active
 
 
-def has_custom_sort_view(settings):
-    views = list(settings.get("sidebar_views") or [])
-    effective = effective_sidebar_view(settings)
+def has_custom_sort_view(sidebar):
+    views = list(sidebar.get("sidebar_views") or [])
+    effective = effective_sidebar_view(sidebar)
     if effective:
         views.append(effective)
     return any((view.get("sort") or {}).get("key") == "custom" for view in views)
@@ -285,13 +286,13 @@ def visible_task_order(tasks, pinned_ids, ordered_ids, subtask_order=None):
     return ordered
 
 
-def ordered_tasks(tasks, settings, mode, ranks=None):
+def ordered_tasks(tasks, sidebar, mode, ranks=None):
     base = sorted(tasks, key=lambda task: task_order_key(task, ranks or {}))
-    if mode == "board" or not settings:
+    if mode == "board" or not sidebar:
         return base
-    if mode != "custom" and not has_custom_sort_view(settings):
+    if mode != "custom" and not has_custom_sort_view(sidebar):
         return base
-    prefs = settings.get("sidebar_task_prefs") or {}
+    prefs = sidebar.get("sidebar_task_prefs") or {}
     return visible_task_order(
         base,
         prefs.get("pinned_task_ids") or [],
@@ -319,7 +320,7 @@ def live_keys(tasks, task_sessions):
 
 
 def fail_backoff(attempts, base=None):
-    base = FAIL_BACKOFF if base is None else base
+    base = settings.fail_backoff if base is None else base
     return base * min(2 ** max(attempts - 1, 0), FAIL_BACKOFF_MAX_MULT)
 
 

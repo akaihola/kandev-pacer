@@ -6,7 +6,8 @@ No real kandev, no agent turn, no quota.
 """
 from conftest import one_session as _sess
 
-from kandev_pacer.client import URL, queued_counts, ws_drain
+from kandev_pacer.client import queued_counts, ws_drain
+from kandev_pacer.config import settings
 
 
 def test_queued_counts_only_asks_about_drainable_sessions(board):
@@ -25,7 +26,7 @@ def test_queued_counts_only_asks_about_drainable_sessions(board):
 def test_connections_present_the_servers_own_origin(board):
     """/ws rejects a foreign Origin, so the pacer must send the server's own URL."""
     ws_drain("sAny")
-    assert board.origins == [URL]
+    assert board.origins == [settings.url]
 
 
 def test_drain_reports_whether_it_took_anything(board):

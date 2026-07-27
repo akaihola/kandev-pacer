@@ -10,7 +10,7 @@ import pytest
 from conftest import STEPS, board_task as _task, one_session as _sess
 
 from kandev_pacer import runtime
-from kandev_pacer.config import FAIL_BACKOFF, MAX_ATTEMPTS
+from kandev_pacer.config import MAX_ATTEMPTS, settings
 from kandev_pacer.workflow import fail_backoff
 
 
@@ -23,7 +23,7 @@ def pacer(board, monkeypatch):
     these records are fixtures, not observations -- writing them to the real log would
     poison the very dataset the log exists to collect.
     """
-    monkeypatch.setattr(runtime, "LOG_PATH", "")
+    monkeypatch.setattr(settings, "log_path", "")
     monkeypatch.setattr(runtime, "_BOOKED", {})
     monkeypatch.setattr(runtime, "_FAILED", {})
     runtime.resolve_globals([({"id": "wf", "name": "Paced"}, STEPS)])
@@ -46,7 +46,7 @@ def tick(pacer, tasks, sessions, queues):
 # --- the event log ---
 
 def test_log_event_roundtrip_and_never_raises(tmp_path, monkeypatch):
-    monkeypatch.setattr(runtime, "LOG_PATH", str(tmp_path / "sub" / "pacer.jsonl"))
+    monkeypatch.setattr(settings, "log_path", str(tmp_path / "sub" / "pacer.jsonl"))
     runtime.log_event({"kind": "tick", "gate": "open"})
     runtime.log_event({"kind": "session", "to": "RUNNING"})   # parent created on demand
     lines = (tmp_path / "sub" / "pacer.jsonl").read_text().splitlines()
@@ -56,12 +56,12 @@ def test_log_event_roundtrip_and_never_raises(tmp_path, monkeypatch):
     # the log path is an existing *file*, so mkdir raises NotADirectoryError.
     blocker = tmp_path / "blocker"
     blocker.write_text("")
-    monkeypatch.setattr(runtime, "LOG_PATH", str(blocker / "pacer.jsonl"))
+    monkeypatch.setattr(settings, "log_path", str(blocker / "pacer.jsonl"))
     monkeypatch.setattr(runtime, "_log_failed", False)
     runtime.log_event({"kind": "tick"})
     assert runtime._log_failed                               # warned once, did not raise
 
-    monkeypatch.setattr(runtime, "LOG_PATH", "")             # disabled -> no-op
+    monkeypatch.setattr(settings, "log_path", "")             # disabled -> no-op
     runtime.log_event({"kind": "tick"})
 
 
@@ -183,4 +183,4 @@ def test_a_tick_gives_up_after_max_attempts(pacer):
 def _expire_backoff():
     """Jump to the far side of every recorded backoff instead of waiting it out."""
     for failure in runtime._FAILED.values():
-        failure["at"] -= max(FAIL_BACKOFF, fail_backoff(failure["attempts"])) + 1
+        failure["at"] -= max(settings.fail_backoff, fail_backoff(failure["attempts"])) + 1

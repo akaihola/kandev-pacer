@@ -1,7 +1,7 @@
 #!/usr/bin/env -S uv run --script
 # /// script
 # requires-python = ">=3.11"
-# dependencies = []
+# dependencies = ["pydantic-settings"]
 # ///
 """Adapt an existing Kandev workflow for pacing (Design 13) via its SQLite DB.
 

@@ -6,14 +6,14 @@ import urllib.request
 
 import websocket
 
-from .config import DRAINABLE_STATES, ORDER, URL, WS_URL
+from .config import DRAINABLE_STATES, settings
 from .workflow import newest_session
 
 
 def request(method, path, body=None):
     data = json.dumps(body).encode() if body is not None else None
     req = urllib.request.Request(
-        URL + path,
+        settings.url + path,
         data=data,
         method=method,
         headers={"Content-Type": "application/json"},
@@ -47,7 +47,7 @@ def paced_tasks(scope):
     return [task for workflow_id in scope for task in tasks_of(workflow_id)]
 
 
-def user_settings(order=ORDER):
+def user_settings(order):
     if order == "board":
         return None
     try:
@@ -68,7 +68,7 @@ def sessions_of(task_id):
 
 def _ws_connect():
     # /ws rejects a foreign Origin, so present the server's own URL.
-    return websocket.create_connection(WS_URL, timeout=30, origin=URL)
+    return websocket.create_connection(settings.ws_url, timeout=30, origin=settings.url)
 
 
 def _ws_call(connection, action, payload, request_id):
