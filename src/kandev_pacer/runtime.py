@@ -305,7 +305,7 @@ class Pacer:
     def flag_blocked(self, task, reason):
         """Put a task the pacer has given up on where a person will see it: the card."""
         try:
-            client.ws_set_state(task["id"], BLOCKED_STATE, "pace-block")
+            client.ws_set_state(task["id"], BLOCKED_STATE)
         except Exception as error:
             log.warning(f"could not flag {label(task)!r} {BLOCKED_STATE} ({error})")
             return False

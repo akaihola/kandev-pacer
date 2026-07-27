@@ -25,19 +25,17 @@ def request(method, path, body=None):
         return json.loads(raw) if raw else None
 
 
-def workflows():
-    return (request("GET", "/api/v1/workflows") or {}).get("workflows") or []
-
-
-def workflow_steps(workflow_id):
-    response = request(
-        "GET", f"/api/v1/workflows/{workflow_id}/workflow/steps"
-    ) or {}
-    return response.get("steps", [])
-
-
 def workflow_entries():
-    return [(workflow, workflow_steps(workflow["id"])) for workflow in workflows()]
+    """Every workflow kandev knows, each paired with its steps. The startup scan's input."""
+    workflows = (request("GET", "/api/v1/workflows") or {}).get("workflows") or []
+    return [
+        (
+            workflow,
+            (request("GET", f"/api/v1/workflows/{workflow['id']}/workflow/steps")
+             or {}).get("steps", []),
+        )
+        for workflow in workflows
+    ]
 
 
 def tasks_of(workflow_id):
@@ -96,6 +94,11 @@ def _ws_call(connection, action, payload, request_id):
 
 
 def ws_request(action, payload, request_id="pace-1"):
+    """One action over its own connection.
+
+    The request id only has to be unique within a connection, and this opens a fresh
+    one per call with a single request in flight -- so one constant is enough.
+    """
     connection = _ws_connect()
     try:
         return _ws_call(connection, action, payload, request_id)
@@ -103,9 +106,7 @@ def ws_request(action, payload, request_id="pace-1"):
         connection.close()
 
 
-def ws_launch(
-    task_id, intent, session_id, workflow_step_id, request_id="pace-1"
-):
+def ws_launch(task_id, intent, session_id, workflow_step_id):
     payload = {
         "task_id": task_id,
         "intent": intent,
@@ -113,51 +114,37 @@ def ws_launch(
     }
     if session_id:
         payload["session_id"] = session_id
-    return ws_request("session.launch", payload, request_id)
+    return ws_request("session.launch", payload)
 
 
-def ws_set_state(task_id, state, request_id="state-1"):
-    return ws_request(
-        "task.state", {"id": task_id, "state": state}, request_id
-    )
+def ws_set_state(task_id, state):
+    return ws_request("task.state", {"id": task_id, "state": state})
 
 
-def ws_drain(session_id, request_id="drain-1"):
-    return ws_request(
-        "message.queue.drain", {"session_id": session_id}, request_id
-    )
+def ws_drain(session_id):
+    return ws_request("message.queue.drain", {"session_id": session_id})
+
+
+def ws_queue_count(session_id):
+    """How many prompts are parked on this session's queue."""
+    return int((ws_request("message.queue.get", {"session_id": session_id})
+                or {}).get("count") or 0)
 
 
 def queued_counts(task_sessions):
-    targets = []
+    """Pending prompt counts, for the idle sessions that could actually take one.
+
+    A session we cannot ask about is left out, which reads downstream as "empty" --
+    a queue-status hiccup must degrade to launch-only pacing, never stop the tick.
+    """
+    counts = {}
     for sessions in task_sessions.values():
         newest = newest_session(sessions)
-        if newest is not None and newest.get("state") in DRAINABLE_STATES:
-            targets.append(newest["id"])
-    if not targets:
-        return {}
-    try:
-        connection = _ws_connect()
-    except Exception as error:
-        log.warning(f"queue status unavailable ({error}) -> treating every queue as empty")
-        return {}
-    counts = {}
-    try:
-        for index, session_id in enumerate(targets):
-            try:
-                response = (
-                    _ws_call(
-                        connection,
-                        "message.queue.get",
-                        {"session_id": session_id},
-                        f"q{index}",
-                    )
-                    or {}
-                )
-                counts[session_id] = int(response.get("count") or 0)
-            except Exception as error:
-                log.warning(f"queue status failed for session {session_id} ({error}) "
-                            "-> treating as empty")
-    finally:
-        connection.close()
+        if newest is None or newest.get("state") not in DRAINABLE_STATES:
+            continue
+        try:
+            counts[newest["id"]] = ws_queue_count(newest["id"])
+        except Exception as error:
+            log.warning(f"queue status failed for session {newest['id']} ({error}) "
+                        "-> treating as empty")
     return counts
