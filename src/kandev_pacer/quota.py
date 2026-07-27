@@ -80,52 +80,6 @@ def tick_record(
     }
 
 
-def sessions_snapshot(task_sessions):
-    return {
-        task_id: {session["id"]: session.get("state") for session in sessions}
-        for task_id, sessions in task_sessions.items()
-    }
-
-
-def diff_sessions(prev, cur, now):
-    if prev is None:
-        return []
-    events = []
-    for task_id, sessions in sorted(cur.items()):
-        old = prev.get(task_id, {})
-        for session_id, state in sorted(sessions.items()):
-            if old.get(session_id) != state:
-                events.append(
-                    {
-                        "t": round(now, 3),
-                        "kind": "session",
-                        "task": task_id,
-                        "session": session_id,
-                        "from": old.get(session_id),
-                        "to": state,
-                    }
-                )
-    return events
-
-
-def detect_resets(prev_windows, cur_windows, now):
-    previous = {window.get("label"): window for window in prev_windows}
-    events = []
-    for window in cur_windows:
-        old = previous.get(window.get("label"))
-        if old and window["resets_at"] > old["resets_at"]:
-            events.append(
-                {
-                    "t": round(now, 3),
-                    "kind": "window_reset",
-                    "label": window.get("label"),
-                    "final_c": round(old["consumed_frac"], 4),
-                    "d": window["duration_s"],
-                }
-            )
-    return events
-
-
 def _epoch(timestamp):
     return datetime.fromisoformat(timestamp.replace("Z", "+00:00")).timestamp()
 

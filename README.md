@@ -317,10 +317,9 @@ uv sync                        # create the environment and install kandev-pacer
 ./make_paced.py             # list workflows in the kandev SQLite DB
 ./make_paced.py 'Paced Kanban'          # dry run: show the edits pacing needs
 ./make_paced.py 'Paced Kanban' --apply  # write them (server can stay up; WAL)
-uv run kandev-pacer --dump-usage     # inspect live usage payload first
 uv run kandev-pacer --dump-order     # show the queue order launches will follow
 uv run kandev-pacer                  # start the pacing loop (lints on startup)
-uv run kandev-pacer --watch-usage 30 # read-only usage sampler (run alongside)
+curl -s "$KANDEV_URL/api/v1/agents/usage" | jq   # the live usage payload
 uv run pytest                  # the whole suite (no network, no quota, no server)
 uv run pytest tests/test_quota.py -k alpha   # one file, or one test by name
 ```
@@ -365,7 +364,7 @@ every such question is either a time derivative (does headroom trend up while wo
 how long after a launch does `utilization_pct` move?) or a per-window breakdown, and neither
 survives in a formatted line with no timestamp.
 
-Five record kinds, append-only, ~300 KB/day at the default 120s tick:
+Three record kinds, append-only, ~300 KB/day at the default 120s tick:
 
 - `tick` — one per tick, **in every branch**. Carries `gate` (the quota verdict:
   `open`/`paused`/`ceiling`/`blind`) and `action` (what was done: `launched`/`drained`/`full`/
@@ -379,12 +378,6 @@ Five record kinds, append-only, ~300 KB/day at the default 120s tick:
   `d` is what converts back to seconds. `launchable` counts launch candidates only — counting
   drains too would need a `queued_counts()` WebSocket round trip on every tick, including the
   paused ones the record exists to capture.
-- `session` — an observed `{from → to}` state transition. Turn boundaries can't be derived
-  from launch records: kandev starts the agent in a detached goroutine, so the launch call
-  returns before `STARTING` appears, and nothing at all is recorded when a turn *ends*.
-- `window_reset` — a window rolled over, with `final_c`: what it *closed* at. Answers "did the
-  window end with quota unspent?", and is unrecoverable after the fact — once the endpoint
-  reports the new window, the old number is gone.
 - `failure` — a launch or drain kandev refused, with the reason and the consecutive-failure
   count. Its own kind rather than a tick outcome, for the same reason `_FAILED` is not
   `_BOOKED`: a refused launch spends no quota, and the tick goes on to the next candidate.
@@ -396,11 +389,10 @@ ones — it previously returned early when the gate was shut, leaving no record 
 the period that matters most, since running turns keep burning after the gate closes. Cost is
 one tasks call plus one sessions call per task per tick, against a local server.
 
-`--watch-usage N` is a separate read-only mode that polls usage every `N` seconds and appends
-`usage` records to the same log. Run it alongside the pacer to time how long after a turn
-starts `utilization_pct` actually moves: that dead time bounds any concurrency rule (N parallel
-turns overshoot by N × burn_rate × dead_time), and the 120s control tick is far too coarse to
-resolve it. Separate process, so the measurement cadence never perturbs the control loop.
+Two further record kinds (`session` state transitions, `window_reset` closing levels) and a
+`--watch-usage N` sampler existed to feed the concurrency-sizing analysis. That analysis is
+finished ([`docs/concurrency-sizing.md`](docs/concurrency-sizing.md)), so they are gone — see
+that document for how to get them back if a later question needs them.
 
 ## Packaging as a kandev plugin
 

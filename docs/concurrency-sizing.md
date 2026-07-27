@@ -16,6 +16,16 @@ It offered `--levers`, `--history`, and `--measure <pacer.jsonl>`. It imported t
 functions from the old top-level `pacer` module, so a re-run needs those imports pointed at
 `kandev_pacer.quota` / `kandev_pacer.workflow`.
 
+Three inputs it fed on were removed from the pacer at the same time, for the same reason —
+they cost something on every tick and only this analysis read them. To re-run the analysis
+on *fresh* data rather than the log already collected, restore them from the same commit:
+
+| dropped | what it recorded | where it lived |
+|---|---|---|
+| `session` log records | each `{from → to}` session state change, the only way to see when a turn *ended* | `quota.sessions_snapshot` / `diff_sessions` |
+| `window_reset` log records | `final_c`, what a window closed at — gone for good once the endpoint rolls over | `quota.detect_resets` |
+| `--watch-usage N` | a read-only sampler, run alongside the pacer, timing how long after a launch `utilization_pct` moves | `runtime.watch_usage` |
+
 **Short answer: yes, raise it to 2** — but the strongest reason is not the quota one.
 
 ## Read this first: the pacer has never run

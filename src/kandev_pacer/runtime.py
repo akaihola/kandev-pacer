@@ -3,7 +3,6 @@
 import json
 import sys
 import time
-from datetime import datetime
 from pathlib import Path
 
 from . import client
@@ -28,12 +27,9 @@ from .config import (
 )
 from .quota import (
     ceiling_breached,
-    detect_resets,
-    diff_sessions,
     gate_open,
     parse_windows,
     provider_missing,
-    sessions_snapshot,
     tick_record,
     usage_providers,
     window_records,
@@ -70,8 +66,6 @@ _ADMISSION = {}
 _STEP_NAMES = {}
 _WF_NAMES = {}
 _STEP_RANKS = {}
-_PREV_SESSIONS = None
-_PREV_WINDOWS = []
 
 
 def log_event(record):
@@ -249,19 +243,12 @@ def _clear_failures(task_id):
 
 
 def tick(was_open):
-    global _BOOKED, _FAILED, _PREV_SESSIONS, _PREV_WINDOWS
+    global _BOOKED, _FAILED
     usage = client.request("GET", "/api/v1/agents/usage")
     now = time.time()
     windows = parse_windows(usage)
     tasks = paced_tasks()
     task_sessions = {task["id"]: client.sessions_of(task["id"]) for task in tasks}
-    snapshot = sessions_snapshot(task_sessions)
-    for event in diff_sessions(_PREV_SESSIONS, snapshot, now):
-        log_event(event)
-    for event in detect_resets(_PREV_WINDOWS, windows, now):
-        log_event(event)
-    _PREV_SESSIONS, _PREV_WINDOWS = snapshot, windows
-
     _BOOKED = prune_booked(_BOOKED, tasks, task_sessions, now, BOOKING_TTL)
     _FAILED = prune_failures(_FAILED, tasks, task_sessions)
     running = sum(
@@ -445,54 +432,7 @@ def _dump_order(entries, skipped):
         )
 
 
-def watch_usage(interval):
-    print(
-        f"watching {URL} usage every {interval}s -> "
-        f"{LOG_PATH or '(logging disabled)'}",
-        flush=True,
-    )
-    while True:
-        now = time.time()
-        try:
-            records = window_records(
-                parse_windows(client.request("GET", "/api/v1/agents/usage")), now, ALPHA
-            )
-            log_event(
-                {
-                    "t": round(now, 3),
-                    "kind": "usage",
-                    "windows": records,
-                }
-            )
-            print(
-                f"{datetime.fromtimestamp(now):%H:%M:%S} "
-                + " ".join(
-                    f"{record['label']}={record['c']:.2f}"
-                    for record in records
-                ),
-                flush=True,
-            )
-        except Exception as error:
-            log_event(
-                {
-                    "t": round(now, 3),
-                    "kind": "error",
-                    "where": "watch_usage",
-                    "msg": str(error),
-                }
-            )
-            print(f"watch error: {error}", file=sys.stderr, flush=True)
-        time.sleep(interval)
-
-
 def main():
-    if "--dump-usage" in sys.argv:
-        print(json.dumps(client.request("GET", "/api/v1/agents/usage"), indent=2))
-        return None
-    if "--watch-usage" in sys.argv:
-        index = sys.argv.index("--watch-usage") + 1
-        watch_usage(int(sys.argv[index]) if len(sys.argv) > index else 30)
-        return None
     if ORDER not in ("auto", "custom", "board"):
         print(
             f"lint: PACER_ORDER={ORDER!r} unknown -> treating it as 'auto'",

@@ -2,11 +2,10 @@
 
 No network.
 """
-from support import sess as _sess
 
 from kandev_pacer.quota import (
-    binding_label, ceiling_breached, clamp01, detect_resets, diff_sessions, elapsed_frac,
-    gate_open, headroom, parse_windows, provider_missing, sessions_snapshot, tick_record,
+    binding_label, ceiling_breached, clamp01, elapsed_frac,
+    gate_open, headroom, parse_windows, provider_missing, tick_record,
     usage_providers, window_records, worst_headroom,
 )
 
@@ -123,28 +122,3 @@ def test_tick_record_separates_gate_from_action():
     assert r["launched"] is None
     # No windows at all (blind tick): still a valid record, no crash on min() of empty.
     assert tick_record(1.0, "blind", "withheld", [], 0, 0, 1, 0)["wh"] == 1.0
-
-def test_diff_sessions():
-    prev = {"t1": {"s1": "RUNNING"}}
-    cur = {"t1": {"s1": "WAITING_FOR_INPUT"}, "t2": {"s9": "CREATED"}}
-    evs = diff_sessions(prev, cur, now=5.0)
-    assert [(e["task"], e["from"], e["to"]) for e in evs] == [
-        ("t1", "RUNNING", "WAITING_FOR_INPUT"),   # turn ended
-        ("t2", None, "CREATED"),                  # session surfaced
-    ]
-    assert diff_sessions(cur, cur, now=5.0) == []     # steady state is silent
-    assert diff_sessions(None, cur, now=5.0) == []    # first tick has no baseline to diff
-
-def test_sessions_snapshot():
-    assert sessions_snapshot({"t": [_sess("a", "RUNNING"), _sess("b", "CREATED")]}) == {
-        "t": {"a": "RUNNING", "b": "CREATED"}}
-
-def test_detect_resets():
-    """final_c is only observable at the roll -- after it, the old number is gone for good."""
-    prev = [{"label": "5-hour", "consumed_frac": 0.83, "resets_at": 1000, "duration_s": 18000}]
-    cur = [{"label": "5-hour", "consumed_frac": 0.02, "resets_at": 19000, "duration_s": 18000}]
-    evs = detect_resets(prev, cur, now=1001.0)
-    assert len(evs) == 1
-    assert evs[0]["label"] == "5-hour" and evs[0]["final_c"] == 0.83   # ended with 17% unspent
-    assert detect_resets(prev, prev, now=1.0) == []    # same reset time -> no rollover
-    assert detect_resets([], cur, now=1.0) == []       # no baseline -> nothing to close

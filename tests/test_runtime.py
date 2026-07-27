@@ -24,9 +24,8 @@ def pacer(board, monkeypatch):
     poison the very dataset the log exists to collect.
     """
     monkeypatch.setattr(runtime, "LOG_PATH", "")
-    for name, value in [("_BOOKED", {}), ("_FAILED", {}), ("_PREV_SESSIONS", None),
-                        ("_PREV_WINDOWS", [])]:
-        monkeypatch.setattr(runtime, name, value)
+    monkeypatch.setattr(runtime, "_BOOKED", {})
+    monkeypatch.setattr(runtime, "_FAILED", {})
     runtime.resolve_globals([({"id": "wf", "name": "Paced"}, STEPS)])
     assert (runtime._SCOPE, runtime._WORK_STEPS, runtime._ADMISSION) == \
         (["wf"], {"ip"}, {"wf": "ip"})
