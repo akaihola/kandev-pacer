@@ -2,7 +2,7 @@
 
 No network.
 """
-from support import sess as _sess, step as _step, task as _task
+from conftest import sess as _sess, step as _step, task as _task
 
 from kandev_pacer.workflow import (
     Board, action_key, admission_target, backed_off, effective_sidebar_view, fail_backoff,

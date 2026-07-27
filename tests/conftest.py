@@ -1,4 +1,4 @@
-"""A fake kandev, wired in by monkeypatching instead of by running servers.
+"""The fake kandev the tests run against, and the payload builders they feed it.
 
 The pacer talks to kandev two ways, and this fakes each at its own seam:
 
@@ -30,14 +30,48 @@ STEPS = [
 USAGE_PCT = 10
 
 
+# --- payload builders, shaped like the kandev API responses ---
+# Plain functions, not fixtures: a test usually wants several with different fields,
+# which reads better as a call than as a fixture per shape.
+
+def step(id, name, otc=None, oe=None, ots=None, start=False, stage="custom",
+         pos=0, profile="", prompt="", signal=False):
+    events = {}
+    if oe:
+        events["on_enter"] = [{"type": k} for k in oe]
+    if otc:
+        events["on_turn_complete"] = [{"type": k} for k in otc]
+    if ots:
+        events["on_turn_start"] = [{"type": k} for k in ots]
+    return {"id": id, "name": name, "events": events, "is_start_step": start,
+            "stage_type": stage, "position": pos, "agent_profile_id": profile,
+            "prompt": prompt, "auto_advance_requires_signal": signal}
+
+
+def sess(id, state, started="1"):
+    # `started_at` is the real field name in GET /tasks/:id/sessions -- there is no `created_at`.
+    return {"id": id, "state": state, "started_at": started}
+
+
+def task(id, step="ip", pos=0, prio="medium", created="2026-01-01T00:00:00Z", parent=None):
+    t = {"id": id, "workflow_step_id": step, "position": pos,
+         "priority": prio, "created_at": created}
+    if parent:
+        t["parent_id"] = parent
+    return t
+
+
 def one_session(sid, state):
-    """The sessions list GET /tasks/:id/sessions returns for a task with one session."""
-    return [{"id": sid, "state": state, "started_at": "1"}]
+    """The list GET /tasks/:id/sessions returns for a task with a single session."""
+    return [sess(sid, state)]
 
 
-def board_task(tid, step, title="T", created="1"):
-    return {"id": tid, "title": title, "workflow_step_id": step, "created_at": created,
-            "workflow_id": "wf"}
+def board_task(tid, step_id, title="T", created="1"):
+    """A task as the fake board serves it: titled, and owned by workflow "wf"."""
+    return {**task(tid, step_id, created=created), "title": title, "workflow_id": "wf"}
+
+
+# --- the fake kandev ---
 
 
 class _FakeConnection:

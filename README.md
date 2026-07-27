@@ -131,7 +131,7 @@ src/kandev_pacer/
   client.py     every kandev HTTP and WebSocket call
   runtime.py    the Pacer object, the loop, the CLI
   make_paced.py the enrollment tool (`make-paced`)
-tests/          one file per module, over conftest.py's fake kandev
+tests/          one file per module, over conftest.py's fake kandev and builders
 docs/           design rationale and the investigations behind it
 ```
 
