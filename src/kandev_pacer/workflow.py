@@ -112,7 +112,7 @@ def resolve_scope(entries, restrict=(), override=None):
                 (
                     workflow,
                     "not enrolled: no step is tagged stage_type=work *and* routes "
-                    "on turn complete -- run make_paced.py to enroll it",
+                    "on turn complete -- run make-paced to enroll it",
                 )
             )
             continue
@@ -179,7 +179,7 @@ def lint_workflow(steps, enrolled_only=True, admission_override=None):
             warnings.append(
                 f"step {name!r} routes on on_turn_complete but is tagged "
                 f"stage_type={stage or 'custom'!r} -> NOT paced "
-                "(make_paced.py tags it 'work')"
+                "(make-paced tags it 'work')"
             )
         elif stage == "work":
             warnings.append(

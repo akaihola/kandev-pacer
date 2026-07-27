@@ -15,6 +15,7 @@ dependencies = [
 
 [project.scripts]
 kandev-pacer = "kandev_pacer.runtime:main"
+make-paced = "kandev_pacer.make_paced:main"
 
 [dependency-groups]
 dev = [
@@ -25,4 +26,4 @@ dev = [
 testpaths = ["tests"]
 # make_paced.py sits at the repo root and the helpers sit in tests/, so both join
 # the installed package on the import path.
-pythonpath = [".", "tests"]
+pythonpath = ["tests"]

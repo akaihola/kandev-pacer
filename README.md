@@ -98,10 +98,10 @@ that has at least one:
 
 1. **`stage_type: "work"` — the enrollment marker.** Kandev defaults this column to `custom` and
    exposes no API/UI/import surface for it, so the only thing that ever writes `work` is
-   `make_paced.py`'s direct SQLite write — which is also what strips the `auto_start_agent` that
+   `make-paced`'s direct SQLite write — which is also what strips the `auto_start_agent` that
    would bypass the gate. "Tagged work" therefore means "deliberately prepared for pacing",
    which is exactly the signal needed to decide, unattended, whether a workflow the pacer merely
-   *discovered* is fair game. (`make_paced.py` is the enroll action; a workflow re-import resets
+   *discovered* is fair game. (`make-paced` is the enroll action; a workflow re-import resets
    `stage_type`, so re-run it after one.)
 2. **An `on_turn_complete` transition (`move_to_next` | `move_to_previous` | `move_to_step`) —
    the safety property**, and not optional. It buys the guarantee that a task *still sitting* on
@@ -314,9 +314,9 @@ launches until the turn is observed to start.
 
 ```bash
 uv sync                        # create the environment and install kandev-pacer
-./make_paced.py             # list workflows in the kandev SQLite DB
-./make_paced.py 'Paced Kanban'          # dry run: show the edits pacing needs
-./make_paced.py 'Paced Kanban' --apply  # write them (server can stay up; WAL)
+uv run make-paced                       # list workflows in the kandev SQLite DB
+uv run make-paced 'Paced Kanban'        # dry run: show the edits pacing needs
+uv run make-paced 'Paced Kanban' --apply  # write them (server can stay up; WAL)
 uv run kandev-pacer --dump-order     # show the queue order launches will follow
 uv run kandev-pacer                  # start the pacing loop (lints on startup)
 curl -s "$KANDEV_URL/api/v1/agents/usage" | jq   # the live usage payload
@@ -332,7 +332,7 @@ kandev in `tests/conftest.py` (a `board` fixture: REST reads answered in place o
 `client.request`, actions answered as real WebSocket frames, so the pacer's own wire
 handling stays under test).
 
-**Workflow setup:** `make_paced.py` adapts an existing workflow in place: it strips every
+**Workflow setup:** `make-paced` adapts an existing workflow in place: it strips every
 `on_enter: auto_start_agent` action and normalizes `stage_type` (`work` for steps that route
 away on `on_turn_complete` — which is what enrolls them, since the pacer then requires that tag
 *and* the routing — `review`/`approval` for

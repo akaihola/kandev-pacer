@@ -9,7 +9,7 @@ import tempfile
 from pathlib import Path
 
 
-from make_paced import apply_changes, connect, load_steps, plan_changes, resolve_workflow
+from kandev_pacer.make_paced import apply_changes, connect, load_steps, plan_changes, resolve_workflow
 
 # Just the columns load_steps SELECTs and apply_changes writes -- a minimal
 # stand-in for kandev's real workflow_steps table.

@@ -75,7 +75,7 @@ def test_resolve_scope_enrolls_only_tagged_workflows():
     assert queues == {"bk", "fd-todo"}                 # one start step per scoped workflow
     assert admission == {"wf-ck": "ip", "wf-fd": "fd-spec"}   # lowest-position paced step, per board
     assert [wf["name"] for wf, _ in skipped] == ["Priority Kanban"]
-    assert "make_paced" in skipped[0][1]               # the reason is actionable, not just a drop
+    assert "make-paced" in skipped[0][1]               # the reason is actionable, not just a drop
 
 def test_resolve_scope_never_paces_an_untagged_queue():
     """Priority Kanban's Backlog routes on turn complete, so the routing-only classifier would
@@ -596,7 +596,7 @@ def test_lint_workflow():
     # Work-shaped but untagged -> NOT paced. This is the warning that explains a task sitting
     # on such a step forever; it names the fix rather than just reporting the state.
     untagged = lint_workflow([_step("x", "X", otc=["move_to_step"])])
-    assert any("NOT paced" in w and "make_paced" in w for w in untagged)
+    assert any("NOT paced" in w and "make-paced" in w for w in untagged)
     # P2: a PARKED step (no on_turn_complete) leaks too -- auto_start_agent / profile+prompt
     # auto-launch on entry regardless of classification, so both must be flagged there.
     assert any("auto_start_agent" in w for w in lint_workflow(
