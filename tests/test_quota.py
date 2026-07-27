@@ -1,15 +1,10 @@
-#!/usr/bin/env -S uv run --script
-# /// script
-# requires-python = ">=3.11"
-# dependencies = []
-# ///
 """Tests for kandev_pacer/quota.py: pacing math, usage parsing, tick/session records.
 
-No network. Run: uv run tests/test_quota.py
+No network.
 """
-from support import run_tests, sess as _sess  # noqa: F401  -- sets up sys.path
+from support import sess as _sess
 
-from kandev_pacer.quota import (  # noqa: E402  -- must follow the path setup above
+from kandev_pacer.quota import (
     binding_label, ceiling_breached, clamp01, detect_resets, diff_sessions, elapsed_frac,
     gate_open, headroom, parse_windows, provider_missing, sessions_snapshot, tick_record,
     usage_providers, window_records, worst_headroom,
@@ -153,6 +148,3 @@ def test_detect_resets():
     assert evs[0]["label"] == "5-hour" and evs[0]["final_c"] == 0.83   # ended with 17% unspent
     assert detect_resets(prev, prev, now=1.0) == []    # same reset time -> no rollover
     assert detect_resets([], cur, now=1.0) == []       # no baseline -> nothing to close
-
-if __name__ == "__main__":
-    run_tests(globals())

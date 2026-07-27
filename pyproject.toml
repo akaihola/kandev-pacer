@@ -17,3 +17,9 @@ kandev-pacer = "kandev_pacer.runtime:main"
 dev = [
     "pytest>=9.1.1",
 ]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+# make_paced.py sits at the repo root and the helpers sit in tests/, so both join
+# the installed package on the import path.
+pythonpath = [".", "tests"]

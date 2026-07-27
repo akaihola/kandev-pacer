@@ -6,18 +6,7 @@ import time
 from datetime import datetime
 from pathlib import Path
 
-from .client import (
-    paced_tasks as _paced_tasks,
-    queued_counts,
-    request,
-    sessions_of,
-    tasks_of,
-    user_settings as _user_settings,
-    workflow_entries,
-    ws_drain,
-    ws_launch,
-    ws_set_state,
-)
+from . import client
 from .config import (
     ADMISSION_OVERRIDE,
     ALPHA,
@@ -102,11 +91,11 @@ def log_event(record):
 
 
 def paced_tasks(scope=None):
-    return _paced_tasks(_SCOPE if scope is None else scope)
+    return client.paced_tasks(_SCOPE if scope is None else scope)
 
 
 def user_settings():
-    return _user_settings(ORDER)
+    return client.user_settings(ORDER)
 
 
 def label(task):
@@ -115,7 +104,7 @@ def label(task):
 
 def flag_blocked(task, reason):
     try:
-        ws_set_state(task["id"], BLOCKED_STATE, "pace-block")
+        client.ws_set_state(task["id"], BLOCKED_STATE, "pace-block")
     except Exception as error:
         print(
             f"could not flag {label(task)!r} {BLOCKED_STATE} ({error})",
@@ -176,7 +165,7 @@ def attempt(kind, task, key, wh, running, now, emit):
         emit("open", "skipped")
         return True
     step = fresh.get("workflow_step_id", "")
-    sessions = sessions_of(task["id"])
+    sessions = client.sessions_of(task["id"])
 
     if kind == "drain":
         newest = newest_session(sessions)
@@ -189,7 +178,7 @@ def attempt(kind, task, key, wh, running, now, emit):
             emit("open", "skipped")
             return True
         try:
-            drained = bool((ws_drain(newest["id"]) or {}).get("drained"))
+            drained = bool((client.ws_drain(newest["id"]) or {}).get("drained"))
         except Exception as error:
             note_failure(key, fresh, f"drain rejected: {error}", now)
             return False
@@ -228,7 +217,7 @@ def attempt(kind, task, key, wh, running, now, emit):
         return False
     intent, session_id = pick_intent(sessions)
     try:
-        ws_launch(task["id"], intent, session_id, target)
+        client.ws_launch(task["id"], intent, session_id, target)
     except Exception as error:
         note_failure(key, fresh, str(error), now)
         return False
@@ -261,11 +250,11 @@ def _clear_failures(task_id):
 
 def tick(was_open):
     global _BOOKED, _FAILED, _PREV_SESSIONS, _PREV_WINDOWS
-    usage = request("GET", "/api/v1/agents/usage")
+    usage = client.request("GET", "/api/v1/agents/usage")
     now = time.time()
     windows = parse_windows(usage)
     tasks = paced_tasks()
-    task_sessions = {task["id"]: sessions_of(task["id"]) for task in tasks}
+    task_sessions = {task["id"]: client.sessions_of(task["id"]) for task in tasks}
     snapshot = sessions_snapshot(task_sessions)
     for event in diff_sessions(_PREV_SESSIONS, snapshot, now):
         log_event(event)
@@ -342,7 +331,7 @@ def tick(was_open):
         return is_open
 
     ordered = ordered_tasks(tasks, user_settings(), ORDER, _STEP_RANKS)
-    queued = queued_counts(task_sessions)
+    queued = client.queued_counts(task_sessions)
     for _ in range(MAX_ATTEMPTS):
         skip = set(_BOOKED) | backed_off(_FAILED, now)
         kind, task = select_action(
@@ -437,7 +426,7 @@ def _dump_order(entries, skipped):
     elsewhere = {
         task["id"]: (task, workflow)
         for workflow, _ in skipped
-        for task in tasks_of(workflow["id"])
+        for task in client.tasks_of(workflow["id"])
     }
     missing = [
         task_id
@@ -466,7 +455,7 @@ def watch_usage(interval):
         now = time.time()
         try:
             records = window_records(
-                parse_windows(request("GET", "/api/v1/agents/usage")), now, ALPHA
+                parse_windows(client.request("GET", "/api/v1/agents/usage")), now, ALPHA
             )
             log_event(
                 {
@@ -498,7 +487,7 @@ def watch_usage(interval):
 
 def main():
     if "--dump-usage" in sys.argv:
-        print(json.dumps(request("GET", "/api/v1/agents/usage"), indent=2))
+        print(json.dumps(client.request("GET", "/api/v1/agents/usage"), indent=2))
         return None
     if "--watch-usage" in sys.argv:
         index = sys.argv.index("--watch-usage") + 1
@@ -511,7 +500,7 @@ def main():
             flush=True,
         )
 
-    entries = workflow_entries()
+    entries = client.workflow_entries()
     skipped = resolve_globals(entries)
     if "--dump-order" in sys.argv:
         _dump_order(entries, skipped)

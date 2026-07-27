@@ -4,6 +4,8 @@ import json
 import sys
 import urllib.request
 
+import websocket
+
 from .config import DRAINABLE_STATES, ORDER, URL, WS_URL
 from .workflow import newest_session
 
@@ -65,8 +67,7 @@ def sessions_of(task_id):
 
 
 def _ws_connect():
-    import websocket
-
+    # /ws rejects a foreign Origin, so present the server's own URL.
     return websocket.create_connection(WS_URL, timeout=30, origin=URL)
 
 

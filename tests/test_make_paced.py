@@ -1,10 +1,4 @@
-#!/usr/bin/env -S uv run --script
-# /// script
-# requires-python = ">=3.11"
-# dependencies = []
-# ///
-"""Pure planning tests for make_paced.py (no database). Run: uv run tests/test_make_paced.py"""
-from support import run_tests  # noqa: F401  -- sets up sys.path
+"""Pure planning tests for make_paced.py (no database)."""
 
 from make_paced import plan_changes, planned_steps, strip_auto_start, target_stage
 
@@ -71,6 +65,3 @@ def test_planned_steps_merge():
     assert [s["id"] for s in after] == ["ip", "bk"]               # order and untouched steps kept
     assert after[0]["stage_type"] == "work" and "on_enter" not in after[0]["events"]
     assert after[1] == steps[1]
-
-if __name__ == "__main__":
-    run_tests(globals())

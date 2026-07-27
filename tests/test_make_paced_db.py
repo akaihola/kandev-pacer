@@ -1,20 +1,13 @@
-#!/usr/bin/env -S uv run --script
-# /// script
-# requires-python = ">=3.11"
-# dependencies = []
-# ///
 """SQLite round-trip tests for make_paced.py's glue (connect/resolve/load/apply).
 
 The pure planning is covered in test_make_paced.py; this exercises the parts
-that actually touch a database, on a throwaway temp file. Run:
-    uv run tests/test_make_paced_db.py
+that actually touch a database, on a throwaway temp file.
 """
 import json
 import sqlite3
 import tempfile
 from pathlib import Path
 
-from support import run_tests  # noqa: F401  -- sets up sys.path
 
 from make_paced import apply_changes, connect, load_steps, plan_changes, resolve_workflow
 
@@ -107,6 +100,3 @@ def test_resolve_errors_exit():
             except SystemExit:
                 pass
         con.close()
-
-if __name__ == "__main__":
-    run_tests(globals())

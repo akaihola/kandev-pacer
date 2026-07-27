@@ -1,32 +1,10 @@
-"""Shared plumbing for the test modules: import path, runner, payload fixtures.
+"""Payload fixtures shaped like the kandev API responses.
 
-Each test module mirrors one application module (`test_quota.py` -> `kandev_pacer/quota.py`,
-and so on) and stays runnable on its own, so the pieces every module needs live here rather
-than being copied four times.
+Builders, not pytest fixtures: a test usually wants several of these with different
+fields, which reads better as a call than as a fixture per shape. The fake kandev the
+client/runtime tests run against lives in conftest.py.
 """
-import sys
-from pathlib import Path
 
-ROOT = Path(__file__).resolve().parent.parent
-# `kandev_pacer` from src/, `make_paced` from the repo root. Tests run as standalone
-# scripts (uv run tests/test_quota.py), so neither is on the path by default.
-for entry in (str(ROOT), str(ROOT / "src")):
-    if entry not in sys.path:
-        sys.path.insert(0, entry)
-
-
-def run_tests(namespace):
-    """Run every test_* callable in `namespace`, in name order. Returns the count."""
-    tests = [(n, f) for n, f in sorted(namespace.items())
-             if n.startswith("test_") and callable(f)]
-    for name, fn in tests:
-        fn()
-        print(f"ok {name}")
-    print(f"\n{len(tests)} passed")
-    return len(tests)
-
-
-# --- payload fixtures, shaped like the kandev API responses ---
 
 def step(id, name, otc=None, oe=None, ots=None, start=False, stage="custom",
          pos=0, profile="", prompt="", signal=False):

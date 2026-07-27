@@ -1,15 +1,10 @@
-#!/usr/bin/env -S uv run --script
-# /// script
-# requires-python = ">=3.11"
-# dependencies = []
-# ///
 """Tests for kandev_pacer/workflow.py: step classification, scope, ordering, selection, lint.
 
-No network. Run: uv run tests/test_workflow.py
+No network.
 """
-from support import run_tests, sess as _sess, step as _step, task as _task
+from support import sess as _sess, step as _step, task as _task
 
-from kandev_pacer.workflow import (  # noqa: E402  -- must follow the path setup above
+from kandev_pacer.workflow import (
     action_key, admission_target, backed_off, effective_sidebar_view, fail_backoff,
     has_custom_sort_view, is_drainable, is_launchable, is_paced_step, is_work_step,
     launch_target, lint_workflow, named, newest_session, ordered_tasks, paced_step_ids,
@@ -617,6 +612,3 @@ def test_lint_workflow():
     # clean workflow -> no warnings.
     assert lint_workflow(CLEAN) == []
     assert lint_workflow(FEATURE_DEV) == []
-
-if __name__ == "__main__":
-    run_tests(globals())

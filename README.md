@@ -321,20 +321,17 @@ uv run kandev-pacer --dump-usage     # inspect live usage payload first
 uv run kandev-pacer --dump-order     # show the queue order launches will follow
 uv run kandev-pacer                  # start the pacing loop (lints on startup)
 uv run kandev-pacer --watch-usage 30 # read-only usage sampler (run alongside)
-uv run tests/test_quota.py    # pacing math, usage parsing, log records (no network)
-uv run tests/test_workflow.py # step classification, ordering, selection, lint (no network)
-uv run tests/test_client.py   # the WebSocket layer vs a fake kandev (loopback, no quota)
-uv run tests/test_runtime.py  # the event log and tick() end to end vs the same fake
-uv run tests/test_make_paced.py     # pure workflow-adaptation planning tests
-uv run tests/test_make_paced_db.py  # SQLite round-trip tests (temp db, no server)
+uv run pytest                  # the whole suite (no network, no quota, no server)
+uv run pytest tests/test_quota.py -k alpha   # one file, or one test by name
 ```
 
 The code lives in
 `src/kandev_pacer/`: `quota.py` and `workflow.py` hold the pure rules, `client.py`
 owns Kandev I/O, and `runtime.py` owns mutable loop state and the CLI. `tests/` mirrors
-that split one file per module, over shared helpers in `tests/support.py` (import path,
-runner, payload fixtures) and `tests/fake_kandev.py` (the loopback HTTP + WebSocket fake
-the `client`/`runtime` tests run against).
+that split one file per module, over payload builders in `tests/support.py` and the fake
+kandev in `tests/conftest.py` (a `board` fixture: REST reads answered in place of
+`client.request`, actions answered as real WebSocket frames, so the pacer's own wire
+handling stays under test).
 
 **Workflow setup:** `make_paced.py` adapts an existing workflow in place: it strips every
 `on_enter: auto_start_agent` action and normalizes `stage_type` (`work` for steps that route
