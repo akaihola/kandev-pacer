@@ -1,6 +1,7 @@
 """Workflow classification, task ordering, and launch eligibility."""
 
 from dataclasses import dataclass
+from typing import NamedTuple
 
 from .config import (
     CREATED_STATE,
@@ -222,7 +223,7 @@ def is_launchable(task, sessions, work_steps, queue_steps, skip):
     step = task.get("workflow_step_id", "")
     newest = newest_session(sessions)
     session_id = newest["id"] if newest else None
-    if (task["id"], step, session_id) in skip:
+    if ActionKey(task["id"], step, session_id) in skip:
         return False
     state = newest["state"] if newest else None
     if step in work_steps:
@@ -236,8 +237,7 @@ def is_drainable(task, sessions, queued, skip):
         return False
     if queued.get(newest["id"], 0) <= 0:
         return False
-    key = (task["id"], task.get("workflow_step_id", ""), newest["id"])
-    return key not in skip
+    return ActionKey(task["id"], task.get("workflow_step_id", ""), newest["id"]) not in skip
 
 
 def select_action(ordered, task_sessions, queued, work_steps, queue_steps, skip):
@@ -350,9 +350,23 @@ def ordered_tasks(tasks, sidebar, mode, ranks=None):
     )
 
 
+class ActionKey(NamedTuple):
+    """What a booking or a failure is *about*.
+
+    Not just the task id: the moment the task moves step, or gets a new session, this
+    is a different key, so the booking that stopped a second launch -- or the failure
+    that held the task back -- stops applying by itself. `session` is None only for a
+    task with no session at all.
+    """
+
+    task: str
+    step: str
+    session: str | None
+
+
 def action_key(task, sessions):
     newest = newest_session(sessions)
-    return (
+    return ActionKey(
         task["id"],
         task.get("workflow_step_id", ""),
         newest["id"] if newest else None,
@@ -383,18 +397,36 @@ def backed_off(failures, now):
 
 
 def prune_failures(failures, tasks, task_sessions):
+    """Forget failures whose situation no longer exists -- the task moved, or was re-sessioned."""
     live = live_keys(tasks, task_sessions)
     return {key: value for key, value in failures.items() if key in live}
 
 
+def booking_still_applies(state, age, ttl):
+    """Whether a booking is still doing its job, given the session's state now.
+
+    A booking exists to stop the pacer spending a second turn on something it has
+    already paid for. Three cases, and they are the whole rule:
+
+    - no session yet, or `CREATED` -- the launch was made but the agent has not
+      visibly picked it up. Hold, but only up to `ttl`: if the turn never appears,
+      something went wrong out of view and the task has to become launchable again.
+    - `WAITING_FOR_INPUT` -- the turn ran and finished. Hold with no expiry, or the
+      next tick would launch the same session at the same step all over again.
+    - anything else (`STARTING`/`RUNNING`) -- the turn is visibly in flight. The
+      booking has done its job; the concurrency count takes over from here.
+    """
+    if state is None or state == CREATED_STATE:
+        return age < ttl
+    return state == READY_STATE
+
+
 def prune_booked(booked, tasks, task_sessions, now, ttl):
-    kept = {}
-    for key, state in live_keys(tasks, task_sessions).items():
-        if key not in booked:
-            continue
-        if key[2] is None or state == CREATED_STATE:
-            if now - booked[key] < ttl:
-                kept[key] = booked[key]
-        elif state == READY_STATE:
-            kept[key] = booked[key]
-    return kept
+    """Drop the bookings that have stopped meaning anything."""
+    return {
+        key: booked[key]
+        for key, state in live_keys(tasks, task_sessions).items()
+        # `state` is None exactly when the task has no session, which is the same
+        # thing key.session being None says -- both come from the one newest_session().
+        if key in booked and booking_still_applies(state, now - booked[key], ttl)
+    }

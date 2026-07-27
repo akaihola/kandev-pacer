@@ -26,6 +26,7 @@ from .config import (
 )
 from .quota import parse_windows, quota_verdict, tick_record, window_records
 from .workflow import (
+    ActionKey,
     Board,
     action_key,
     backed_off,
@@ -255,8 +256,8 @@ class Pacer:
 
     def book(self, task_id, step, session_id, now):
         """Record a spent turn, and forget this task's failures -- something worked."""
-        self.booked[(task_id, step, session_id)] = now
-        for key in [key for key in self.failed if key[0] == task_id]:
+        self.booked[ActionKey(task_id, step, session_id)] = now
+        for key in [key for key in self.failed if key.task == task_id]:
             del self.failed[key]
 
     def note_failure(self, key, task, reason, now):
