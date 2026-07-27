@@ -30,7 +30,6 @@ from .workflow import (
     action_key,
     backed_off,
     fail_backoff,
-    has_custom_sort_view,
     is_launchable,
     launch_target,
     lint_workflow,
@@ -41,6 +40,7 @@ from .workflow import (
     prune_failures,
     queue_step_id,
     select_action,
+    uses_manual_order,
 )
 
 log = logging.getLogger("kandev-pacer")
@@ -310,9 +310,7 @@ def dump_order(pacer):
     """Print the queue launches will work down, without spending a turn to find out."""
     board = pacer.board
     sidebar = client.user_settings(settings.order)
-    manual = bool(sidebar) and (
-        settings.order == "custom" or has_custom_sort_view(sidebar)
-    )
+    manual = uses_manual_order(sidebar, settings.order)
     placed = ((sidebar or {}).get("sidebar_task_prefs") or {}).get("ordered_task_ids") or []
     description = (
         f"manual sidebar order over board pull order ({len(placed)} task(s) placed by hand)"

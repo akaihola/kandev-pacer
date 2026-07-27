@@ -272,47 +272,52 @@ def pick_intent(sessions):
 
 
 def effective_sidebar_view(sidebar):
+    """The sidebar view the user is actually looking at.
+
+    An unsaved draft wins over the view it is based on: what is on screen is what the
+    user means, even if they have not saved it.
+    """
     views = sidebar.get("sidebar_views") or []
     active = next(
-        (
-            view
-            for view in views
-            if view.get("id") == sidebar.get("sidebar_active_view_id")
-        ),
-        None,
+        (view for view in views if view.get("id") == sidebar.get("sidebar_active_view_id")),
+        views[0] if views else None,
     )
-    active = active or (views[0] if views else None)
     if active is None:
         return None
-    draft = sidebar.get("sidebar_draft") or None
-    if draft and draft.get("base_view_id") == active.get("id"):
-        return {
-            **active,
-            "filters": draft.get("filters"),
-            "sort": draft.get("sort"),
-            "group": draft.get("group"),
-        }
-    return active
+    draft = sidebar.get("sidebar_draft") or {}
+    if draft.get("base_view_id") != active.get("id"):
+        return active
+    return {**active, **{key: draft.get(key) for key in ("filters", "sort", "group")}}
 
 
 def has_custom_sort_view(sidebar):
-    views = list(sidebar.get("sidebar_views") or [])
-    effective = effective_sidebar_view(sidebar)
-    if effective:
-        views.append(effective)
-    return any((view.get("sort") or {}).get("key") == "custom" for view in views)
+    """Whether any sidebar view sorts by hand -- i.e. whether a drag order exists to follow."""
+    views = [*(sidebar.get("sidebar_views") or []), effective_sidebar_view(sidebar)]
+    # `or {}` twice, not .get(default): the payload carries explicit nulls.
+    return any(((view or {}).get("sort") or {}).get("key") == "custom" for view in views)
+
+
+def uses_manual_order(sidebar, mode):
+    """Whether the sidebar drag order overrides the board's pull order this run.
+
+    Shared by the pacer and by --dump-order, so the report cannot claim one thing
+    while the loop does another.
+    """
+    if mode == "board" or not sidebar:
+        return False
+    return mode == "custom" or has_custom_sort_view(sidebar)
 
 
 def _rank(tasks, ordered_ids):
+    """Tasks in the order `ordered_ids` gives; anything unlisted keeps its place, at the end."""
     index = {task_id: position for position, task_id in enumerate(ordered_ids)}
-    listed = sorted(
-        (task for task in tasks if task["id"] in index),
-        key=lambda task: index[task["id"]],
-    )
-    return listed + [task for task in tasks if task["id"] not in index]
+    # Unlisted tasks all score len(index), and sorted() is stable, so they stay in
+    # their incoming order behind every listed one.
+    return sorted(tasks, key=lambda task: index.get(task["id"], len(index)))
 
 
 def visible_task_order(tasks, pinned_ids, ordered_ids, subtask_order=None):
+    """The sidebar's own reading order: pinned first, then dragged, each parent before its children."""
     subtask_order = subtask_order or {}
     ids = {task["id"] for task in tasks}
     roots, children = [], {}
@@ -329,21 +334,21 @@ def visible_task_order(tasks, pinned_ids, ordered_ids, subtask_order=None):
             return
         seen.add(task["id"])
         ordered.append(task)
-        child_order = subtask_order.get(task["id"]) or []
-        for child in _rank(children.get(task["id"], []), child_order):
+        for child in _rank(children.get(task["id"], []), subtask_order.get(task["id"]) or []):
             visit(child)
 
     for task in _rank(_rank(roots, ordered_ids), pinned_ids):
         visit(task)
+    # Tasks in a parent loop (A's parent is B, B's parent is A) are nobody's root, so
+    # nothing above reaches them. They still have to launch.
     ordered.extend(task for task in tasks if task["id"] not in seen)
     return ordered
 
 
 def ordered_tasks(tasks, sidebar, mode, ranks=None):
+    """The queue launches work down: the board's pull order, with your drag order on top."""
     base = sorted(tasks, key=lambda task: task_order_key(task, ranks or {}))
-    if mode == "board" or not sidebar:
-        return base
-    if mode != "custom" and not has_custom_sort_view(sidebar):
+    if not uses_manual_order(sidebar, mode):
         return base
     prefs = sidebar.get("sidebar_task_prefs") or {}
     return visible_task_order(
