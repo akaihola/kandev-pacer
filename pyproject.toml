@@ -23,6 +23,7 @@ dev = [
     "graylint",
     "pytest>=9.1.1",
     "pytest-cov>=7.1.0",
+    "ty>=0.0.64",
 ]
 
 [tool.ruff]
@@ -56,7 +57,11 @@ revision = "main..."
 # graylint parses.
 src = ["src", "tests"]
 revision = "main..."
-lint = ["ruff check --output-format concise"]
+# Both need `concise` to emit the path:line:col: message shape graylint parses.
+lint = [
+    "ruff check --output-format concise",
+    "ty check --output-format concise",
+]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

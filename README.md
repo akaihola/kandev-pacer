@@ -149,15 +149,20 @@ that spends a turn.
 uv run pytest                              # the whole suite (no network, no quota, no server)
 uv run pytest tests/test_quota.py -k alpha # one file, or one test by name
 uv run ruff check src tests                # style and dead code, whole tree
+uv run ty check src tests                  # types, whole tree
 uv run darker                              # reformat what this branch changed
-uv run graylint                            # ruff findings this branch introduced
+uv run graylint                            # ruff + ty findings this branch introduced
 ```
 
-`darker` and `graylint` rather than formatting and linting everything: both compare
+`darker` and `graylint` rather than formatting and checking everything: both compare
 against the branch point and act only on what the branch touched, so style converges as
 code is edited instead of arriving as one sweep nobody can review, and a pre-existing
-warning in a file you edited does not become your problem. All three are configured in
-`pyproject.toml` — the formatter aims for 88 columns, the linter only errors past 100.
+warning in a file you edited does not become your problem. All of it is configured in
+`pyproject.toml` — the formatter aims for 88 columns, the linter only errors past 100,
+and graylint runs `ruff` and `ty` together.
+
+Coverage is one flag away and worth running when adding tests:
+`uv run pytest --cov=kandev_pacer --cov-report=term-missing`.
 
 [kandev]: https://github.com/kdlbs/kandev
 [docs/design.md]: docs/design.md
