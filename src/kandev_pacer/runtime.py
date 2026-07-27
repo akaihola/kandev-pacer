@@ -1,5 +1,6 @@
 """Stateful pacing loop and command-line interface."""
 
+import argparse
 import json
 import sys
 import time
@@ -433,6 +434,18 @@ def _dump_order(entries, skipped):
 
 
 def main():
+    parser = argparse.ArgumentParser(
+        prog="kandev-pacer",
+        description="Pace kandev task launches against the subscription quota. "
+                    "Configured entirely through the environment; see the README.",
+    )
+    parser.add_argument(
+        "--dump-order",
+        action="store_true",
+        help="print the queue launches will work down, then exit (spends no quota)",
+    )
+    args = parser.parse_args()
+
     if ORDER not in ("auto", "custom", "board"):
         print(
             f"lint: PACER_ORDER={ORDER!r} unknown -> treating it as 'auto'",
@@ -442,7 +455,7 @@ def main():
 
     entries = client.workflow_entries()
     skipped = resolve_globals(entries)
-    if "--dump-order" in sys.argv:
+    if args.dump_order:
         _dump_order(entries, skipped)
         return None
     if not _SCOPE:
