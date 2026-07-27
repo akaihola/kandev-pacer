@@ -18,17 +18,12 @@ from support import run_tests
 
 from kandev_pacer import runtime  # noqa: E402  -- the fakes must be up before config is read
 from kandev_pacer.config import FAIL_BACKOFF, MAX_ATTEMPTS
-from kandev_pacer.workflow import (
-    admission_target, fail_backoff, paced_step_ids, queue_step_id, step_names, step_ranks,
-)
+from kandev_pacer.workflow import fail_backoff
 
-runtime._SCOPE = ["wf"]
-runtime._WORK_STEPS = paced_step_ids(STEPS)
-runtime._QUEUE_STEPS = {queue_step_id(STEPS)}
-runtime._ADMISSION = {"wf": admission_target(STEPS)}
-runtime._WF_NAMES = {"wf": "Paced"}
-runtime._STEP_NAMES = step_names(STEPS)
-runtime._STEP_RANKS = step_ranks(STEPS)
+# Wire the loop's scope for the fake board the way startup does, rather than assigning the
+# globals by hand -- so what tick() runs against is what resolve_scope() would really produce.
+runtime.resolve_globals([({"id": "wf", "name": "Paced"}, STEPS)])
+assert (runtime._SCOPE, runtime._WORK_STEPS, runtime._ADMISSION) == (["wf"], {"ip"}, {"wf": "ip"})
 
 # These tests drive runtime.tick() with fake IO, so their records are fixtures, not
 # observations -- writing them to the real log would poison the very dataset the
