@@ -5,7 +5,7 @@ No network.
 from support import sess as _sess, step as _step, task as _task
 
 from kandev_pacer.workflow import (
-    action_key, admission_target, backed_off, effective_sidebar_view, fail_backoff,
+    Board, action_key, admission_target, backed_off, effective_sidebar_view, fail_backoff,
     has_custom_sort_view, is_drainable, is_launchable, is_paced_step, is_work_step,
     launch_target, lint_workflow, newest_session, ordered_tasks, paced_step_ids,
     pick_intent, priority_rank, prune_booked, prune_failures, queue_step_id, resolve_scope,
@@ -198,25 +198,23 @@ def test_unknown_step_sorts_last():
 
 # --- launchability ---
 
-WORK = {"ip"}
-# Sets, not single ids: with several workflows paced at once there is one queue step per board.
-QUEUE = {"bk"}
-# workflow id -> admission step. The fixture tasks below live in workflow "wf".
-ADMIT = {"wf": "ip"}
+# Sets, not single ids: with several workflows paced at once there is one queue step per
+# board, and admission is per workflow. The fixture tasks below live in workflow "wf".
+BOARD = Board(work_steps={"ip"}, queue_steps={"bk"}, admission={"wf": "ip"})
 
 def test_is_launchable_work_step():
     booked = set()
     at_ip = {"id": "t", "workflow_step_id": "ip"}
-    assert is_launchable(at_ip, [_sess("s", "WAITING_FOR_INPUT")], WORK, QUEUE,booked)
-    assert not is_launchable(at_ip, [_sess("s", "RUNNING")], WORK, QUEUE,booked)   # in flight
-    assert not is_launchable(at_ip, [], WORK, QUEUE,booked)                        # no session
+    assert is_launchable(at_ip, [_sess("s", "WAITING_FOR_INPUT")], BOARD, booked)
+    assert not is_launchable(at_ip, [_sess("s", "RUNNING")], BOARD, booked)   # in flight
+    assert not is_launchable(at_ip, [], BOARD, booked)                        # no session
 
 def test_is_launchable_queue_admission():
     booked = set()
     at_bk = {"id": "t", "workflow_step_id": "bk"}
-    assert is_launchable(at_bk, [], WORK, QUEUE,booked)                            # new task
-    assert is_launchable(at_bk, [_sess("s", "WAITING_FOR_INPUT")], WORK, QUEUE,booked)  # re-queued
-    assert not is_launchable(at_bk, [_sess("s", "RUNNING")], WORK, QUEUE,booked)
+    assert is_launchable(at_bk, [], BOARD, booked)                            # new task
+    assert is_launchable(at_bk, [_sess("s", "WAITING_FOR_INPUT")], BOARD, booked)  # re-queued
+    assert not is_launchable(at_bk, [_sess("s", "RUNNING")], BOARD, booked)
 
 def test_is_launchable_created_session():
     """Kandev prepares a session at task creation, so a never-run task arrives CREATED.
@@ -228,35 +226,35 @@ def test_is_launchable_created_session():
     """
     booked = set()
     at_bk = {"id": "t", "workflow_step_id": "bk"}
-    assert is_launchable(at_bk, [_sess("s", "CREATED")], WORK, QUEUE,booked)
+    assert is_launchable(at_bk, [_sess("s", "CREATED")], BOARD, booked)
     # Same story one step over: a new task dragged straight to a work step is prepared,
     # not running, and would otherwise be ignored forever.
     at_ip = {"id": "t", "workflow_step_id": "ip"}
-    assert is_launchable(at_ip, [_sess("s", "CREATED")], WORK, QUEUE,booked)
+    assert is_launchable(at_ip, [_sess("s", "CREATED")], BOARD, booked)
     # The dup-guard still applies to it.
-    assert not is_launchable(at_bk, [_sess("s", "CREATED")], WORK, QUEUE,{("t", "bk", "s")})
+    assert not is_launchable(at_bk, [_sess("s", "CREATED")], BOARD, {("t", "bk", "s")})
 
 def test_is_launchable_parked_and_booked():
     at_rv = {"id": "t", "workflow_step_id": "rv"}
-    assert not is_launchable(at_rv, [_sess("s", "WAITING_FOR_INPUT")], WORK, QUEUE,set())  # terminal
+    assert not is_launchable(at_rv, [_sess("s", "WAITING_FOR_INPUT")], BOARD, set())  # terminal
     at_ip = {"id": "t", "workflow_step_id": "ip"}
     booked = {("t", "ip", "s")}
-    assert not is_launchable(at_ip, [_sess("s", "WAITING_FOR_INPUT")], WORK, QUEUE,booked)  # dup-guard
+    assert not is_launchable(at_ip, [_sess("s", "WAITING_FOR_INPUT")], BOARD, booked)  # dup-guard
 
 def test_launch_target():
     at_ip = {"workflow_step_id": "ip", "workflow_id": "wf"}
     at_bk = {"workflow_step_id": "bk", "workflow_id": "wf"}
-    assert launch_target(at_ip, WORK, ADMIT) == "ip"    # in place
-    assert launch_target(at_bk, WORK, ADMIT) == "ip"    # admit to its own workflow's target
+    assert launch_target(at_ip, BOARD) == "ip"    # in place
+    assert launch_target(at_bk, BOARD) == "ip"    # admit to its own workflow's target
 
 def test_launch_target_is_per_workflow():
     """Admission must resolve through the task's OWN workflow. One global target would drag a
     queued task onto another workflow's board."""
-    admit = {"wf1": "ip1", "wf2": "ip2"}
-    assert launch_target({"workflow_step_id": "bk", "workflow_id": "wf2"}, WORK, admit) == "ip2"
+    two_boards = Board(work_steps={"ip"}, admission={"wf1": "ip1", "wf2": "ip2"})
+    assert launch_target({"workflow_step_id": "bk", "workflow_id": "wf2"}, two_boards) == "ip2"
     # A task whose workflow has no admission target must yield None -- the caller skips it
     # rather than launching in place, which would start a turn on a parked queue step.
-    assert launch_target({"workflow_step_id": "bk", "workflow_id": "wf3"}, WORK, admit) is None
+    assert launch_target({"workflow_step_id": "bk", "workflow_id": "wf3"}, two_boards) is None
 
 # --- queued-prompt release ---
 
@@ -295,16 +293,16 @@ def test_select_action_prefers_drain():
     at_ip = {"id": "t", "workflow_step_id": "ip", "created_at": "1"}
     sessions = {"t": [_sess("s", "WAITING_FOR_INPUT")]}
     # Same task is both launchable (work step, idle) and drainable (queue non-empty) -> drain.
-    kind, chosen = select_action(_ord([at_ip]), sessions, {"s": 1}, WORK, QUEUE, set())
+    kind, chosen = select_action(_ord([at_ip]), sessions, {"s": 1}, BOARD,  set())
     assert (kind, chosen["id"]) == ("drain", "t")
     # Empty queue -> falls through to the launch path unchanged.
-    assert select_action(_ord([at_ip]), sessions, {}, WORK, QUEUE, set())[0] == "launch"
+    assert select_action(_ord([at_ip]), sessions, {}, BOARD,  set())[0] == "launch"
     # Kind beats column: the drainable task sits in the LEFTMOST column, which pull ordering
     # would rank last, and it still wins over a launchable task further downstream.
     at_bk = {"id": "u", "workflow_step_id": "bk", "created_at": "9"}
     kind, chosen = select_action(_ord([at_ip, at_bk]), {"t": [_sess("a", "WAITING_FOR_INPUT")],
                                                  "u": [_sess("b", "WAITING_FOR_INPUT")]},
-                                {"b": 1}, WORK, QUEUE, set())
+                                {"b": 1}, BOARD,  set())
     assert (kind, chosen["id"]) == ("drain", "u")
 
 def test_select_action_uses_board_pull_order():
@@ -313,24 +311,24 @@ def test_select_action_uses_board_pull_order():
     new = {"id": "new", "workflow_step_id": "ip", "created_at": "2"}
     sessions = {"old": [_sess("a", "WAITING_FOR_INPUT")], "new": [_sess("b", "WAITING_FOR_INPUT")]}
     # Same column and position -> falls through to created_at, so the older one goes first.
-    assert select_action(_ord([new, old]), sessions, {}, WORK, QUEUE, set())[1]["id"] == "old"
-    assert select_action(_ord([new, old]), sessions, {"a": 1, "b": 1}, WORK, QUEUE, set())[1]["id"] == "old"
+    assert select_action(_ord([new, old]), sessions, {}, BOARD,  set())[1]["id"] == "old"
+    assert select_action(_ord([new, old]), sessions, {"a": 1, "b": 1}, BOARD,  set())[1]["id"] == "old"
     # A drag outranks age: position 0 wins even though it was created later.
     dragged = dict(new, position=0)
     aged = dict(old, position=1)
     assert select_action(_ord([aged, dragged]), sessions, {"a": 1, "b": 1},
-                         WORK, QUEUE, set())[1]["id"] == "new"
+                         BOARD, set())[1]["id"] == "new"
     # Rightmost column first: a queued prompt at Review beats one still in Backlog.
     at_rv = {"id": "rv1", "workflow_step_id": "rv", "created_at": "5"}
     at_bk = {"id": "bk1", "workflow_step_id": "bk", "created_at": "1"}
     both = {"rv1": [_sess("x", "WAITING_FOR_INPUT")], "bk1": [_sess("y", "WAITING_FOR_INPUT")]}
     assert select_action(_ord([at_bk, at_rv]), both, {"x": 1, "y": 1},
-                         WORK, QUEUE, set())[1]["id"] == "rv1"
+                         BOARD, set())[1]["id"] == "rv1"
     # Nothing to do at all.
-    assert select_action([], {}, {}, WORK, QUEUE, set()) == (None, None)
+    assert select_action([], {}, {}, BOARD,  set()) == (None, None)
     # Parked, nothing queued -> not actionable (today's behaviour, unchanged).
     assert select_action([at_rv], {"rv1": [_sess("s", "WAITING_FOR_INPUT")]},
-                         {}, WORK, QUEUE, set()) == (None, None)
+                         {}, BOARD,  set()) == (None, None)
 
 def test_pick_intent():
     assert pick_intent([]) == ("start", None)
@@ -420,9 +418,9 @@ def test_a_backed_off_task_stops_being_selected(backoff_100):
     broken = {"id": "b", "workflow_step_id": "ip", "created_at": "1"}
     ok = {"id": "g", "workflow_step_id": "ip", "created_at": "2"}
     sessions = {"b": [_sess("s1", "CREATED")], "g": [_sess("s2", "WAITING_FOR_INPUT")]}
-    assert select_action(_ord([broken, ok]), sessions, {}, WORK, QUEUE, set())[1]["id"] == "b"
+    assert select_action(_ord([broken, ok]), sessions, {}, BOARD,  set())[1]["id"] == "b"
     held = backed_off({("b", "ip", "s1"): _fail(1000.0)}, 1050.0)
-    assert select_action(_ord([broken, ok]), sessions, {}, WORK, QUEUE, held)[1]["id"] == "g"
+    assert select_action(_ord([broken, ok]), sessions, {}, BOARD,  held)[1]["id"] == "g"
 
 def test_prune_failures_keeps_the_count_while_the_situation_holds():
     tasks = [{"id": "t", "workflow_step_id": "ip"}]
@@ -527,10 +525,10 @@ def test_sidebar_order_reaches_drain_selection():
     queued = {"sa": 1, "sb": 1}                      # both have a prompt parked
     dragged = _settings(ordered=["b"])               # user put b on top
     ordered = ordered_tasks([a, b], dragged, "auto", RANKS)
-    kind, chosen = select_action(ordered, sessions, queued, WORK, QUEUE, set())
+    kind, chosen = select_action(ordered, sessions, queued, BOARD,  set())
     assert (kind, chosen["id"]) == ("drain", "b")
     # Without the drag, pull order decides (equal here -> id tiebreak keeps it total).
-    kind, chosen = select_action(_ord([a, b]), sessions, queued, WORK, QUEUE, set())
+    kind, chosen = select_action(_ord([a, b]), sessions, queued, BOARD,  set())
     assert (kind, chosen["id"]) == ("drain", "a")
 
 def test_ordered_tasks_layers_manual_over_board_pull_order():

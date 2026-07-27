@@ -125,12 +125,7 @@ class Pacer:
             self.board.step_ranks,
         )
         return select_action(
-            ordered,
-            snapshot.sessions,
-            queued,
-            self.board.work_steps,
-            self.board.queue_steps,
-            self.skip_keys(snapshot.now),
+            ordered, snapshot.sessions, queued, self.board, self.skip_keys(snapshot.now)
         )
 
     # --- 3. act ---
@@ -148,9 +143,7 @@ class Pacer:
             1
             for task in snapshot.tasks
             if is_launchable(
-                task, snapshot.sessions[task["id"]],
-                self.board.work_steps, self.board.queue_steps,
-                self.skip_keys(snapshot.now),
+                task, snapshot.sessions[task["id"]], self.board, self.skip_keys(snapshot.now)
             )
         )
 
@@ -235,7 +228,7 @@ class Pacer:
                  {"task": task["id"], "session": newest["id"], "step": step})
             return True
 
-        target = launch_target(fresh, self.board.work_steps, self.board.admission)
+        target = launch_target(fresh, self.board)
         if target is None:
             self.note_failure(key, fresh, "no admission target in workflow "
                               f"{self.board.name_of(fresh.get('workflow_id'))!r}", now)

@@ -1,6 +1,6 @@
 """Workflow classification, task ordering, and launch eligibility."""
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import NamedTuple
 
 from .config import (
@@ -53,15 +53,17 @@ class Board:
     a person edits a workflow. `steps` keeps the raw scan so startup can report on it.
     """
 
-    scope: list          # workflow ids being paced
-    work_steps: set      # every pace-eligible step id, across all workflows
-    queue_steps: set     # the parked start step of each, where admission picks tasks up
-    admission: dict      # workflow id -> the step a queued task is admitted into
-    step_names: dict     # step id -> name, for readable log lines
-    step_ranks: dict     # step id -> position, for the board's pull order
-    workflow_names: dict
-    skipped: list        # (workflow, reason) for everything out of scope
-    steps: dict          # workflow id -> its steps, as scanned
+    # Every field defaults to empty -- that is a real state (nothing enrolled), and it
+    # lets a test name only the parts it is about.
+    scope: list = field(default_factory=list)          # workflow ids being paced
+    work_steps: set = field(default_factory=set)       # pace-eligible step ids, all workflows
+    queue_steps: set = field(default_factory=set)      # the parked start step of each board
+    admission: dict = field(default_factory=dict)      # workflow id -> its admission step
+    step_names: dict = field(default_factory=dict)     # step id -> name, for readable logs
+    step_ranks: dict = field(default_factory=dict)     # step id -> position, for pull order
+    workflow_names: dict = field(default_factory=dict)
+    skipped: list = field(default_factory=list)        # (workflow, reason), out of scope
+    steps: dict = field(default_factory=dict)          # workflow id -> its steps, as scanned
 
     @classmethod
     def scan(cls, entries, restrict=()):
@@ -219,19 +221,21 @@ def newest_session(sessions):
     return max(sessions, key=lambda session: session.get("started_at", "")) if sessions else None
 
 
-def is_launchable(task, sessions, work_steps, queue_steps, skip):
+def is_launchable(task, sessions, board, skip):
+    """Whether starting a turn on this task now is both allowed and meaningful."""
     step = task.get("workflow_step_id", "")
     newest = newest_session(sessions)
     session_id = newest["id"] if newest else None
     if ActionKey(task["id"], step, session_id) in skip:
         return False
     state = newest["state"] if newest else None
-    if step in work_steps:
+    if step in board.work_steps:
         return state in IDLE_STATES
-    return step in queue_steps and (newest is None or state in IDLE_STATES)
+    return step in board.queue_steps and (newest is None or state in IDLE_STATES)
 
 
 def is_drainable(task, sessions, queued, skip):
+    """Whether this task has a user prompt parked and waiting to be released."""
     newest = newest_session(sessions)
     if newest is None or newest.get("state") not in DRAINABLE_STATES:
         return False
@@ -240,21 +244,25 @@ def is_drainable(task, sessions, queued, skip):
     return ActionKey(task["id"], task.get("workflow_step_id", ""), newest["id"]) not in skip
 
 
-def select_action(ordered, task_sessions, queued, work_steps, queue_steps, skip):
+def select_action(ordered, task_sessions, queued, board, skip):
+    """The one turn to spend now, or (None, None).
+
+    Drains come first, in full: launching a task that has a prompt queued spends the
+    turn on the step prompt and lets the queued entry leak out un-paced afterwards.
+    """
     for task in ordered:
         if is_drainable(task, task_sessions.get(task["id"], []), queued, skip):
             return "drain", task
     for task in ordered:
-        if is_launchable(
-            task, task_sessions.get(task["id"], []), work_steps, queue_steps, skip
-        ):
+        if is_launchable(task, task_sessions.get(task["id"], []), board, skip):
             return "launch", task
     return None, None
 
 
-def launch_target(task, work_steps, admission):
+def launch_target(task, board):
+    """The step to launch the task into: where it already sits, or its board's admission step."""
     step = task.get("workflow_step_id", "")
-    return step if step in work_steps else admission.get(task.get("workflow_id", ""))
+    return step if step in board.work_steps else board.admission.get(task.get("workflow_id", ""))
 
 
 def pick_intent(sessions):
