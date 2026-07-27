@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Annotated, Literal
 
 from pydantic import Field, field_validator, model_validator
-from pydantic_settings import BaseSettings, NoDecode
+from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 
 class Settings(BaseSettings):
@@ -19,6 +19,10 @@ class Settings(BaseSettings):
     traceback out of whichever line first used it -- an unattended loop that runs all
     week should not start at all on a typo'd number.
     """
+
+    # Field names work as keyword arguments too, so a test can write Settings(alpha=0.5)
+    # instead of Settings(PACER_ALPHA=0.5).
+    model_config = SettingsConfigDict(populate_by_name=True)
 
     url: str = Field("http://127.0.0.1:38429", alias="KANDEV_URL")
     ws_url: str = Field("", alias="KANDEV_WS_URL")

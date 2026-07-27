@@ -3,9 +3,10 @@
 No network.
 """
 
+from kandev_pacer.config import Settings
 from kandev_pacer.quota import (
     binding_label, ceiling_breached, clamp01, elapsed_frac,
-    gate_open, headroom, parse_windows, provider_missing, tick_record,
+    gate_open, headroom, parse_windows, provider_missing, quota_verdict, tick_record,
     usage_providers, window_records, worst_headroom,
 )
 
@@ -122,3 +123,49 @@ def test_tick_record_separates_gate_from_action():
     assert r["launched"] is None
     # No windows at all (blind tick): still a valid record, no crash on min() of empty.
     assert tick_record(1.0, "blind", "withheld", [], 0, 0, 1, 0)["wh"] == 1.0
+
+
+# --- the whole quota decision, as one pure call ---
+
+def _windows(consumed, resets_in=9000, label="5-hour"):
+    return [{"label": label, "consumed_frac": consumed,
+             "resets_at": 1000.0 + resets_in, "duration_s": 18000}]
+
+
+def _usage(provider="anthropic"):
+    return {"agents": [{"usage": {"provider": provider, "windows": []}}]}
+
+
+def test_quota_verdict_open_when_under_the_burn_line():
+    # Half elapsed, 10% consumed -> well ahead of steady.
+    verdict = quota_verdict(_usage(), _windows(0.10), 1000.0, True, Settings())
+    assert verdict.is_open and verdict.gate == "open"
+    assert round(verdict.headroom, 3) == 0.4
+    assert verdict.message == ""
+
+
+def test_quota_verdict_pauses_when_over_it():
+    verdict = quota_verdict(_usage(), _windows(0.80), 1000.0, True, Settings())
+    assert not verdict.is_open and verdict.gate == "paused"
+    assert "PAUSED" in verdict.message
+
+
+def test_quota_verdict_ceiling_outranks_a_healthy_burn_line():
+    """Consumption past the backstop withholds even when headroom is positive."""
+    verdict = quota_verdict(_usage(), _windows(0.99, resets_in=1), 1000.0, True, Settings())
+    assert verdict.gate == "ceiling" and not verdict.is_open
+
+
+def test_quota_verdict_is_blind_when_the_provider_is_missing():
+    """A PACER_PROVIDER typo must read as 'cannot see quota', not as 'plenty of room'."""
+    verdict = quota_verdict(_usage("openai"), [], 1000.0, True, Settings())
+    assert verdict.gate == "blind" and not verdict.is_open
+    assert "PACER_PROVIDER" in verdict.message
+
+
+def test_quota_verdict_honours_the_resume_margin():
+    """Reopening needs more than bare zero, or the gate flaps around h == 0."""
+    config = Settings(resume_margin=0.05)
+    barely = _windows(0.4999)                       # h ~ +0.0001, above 0 but under margin
+    assert quota_verdict(_usage(), barely, 1000.0, True, config).is_open    # already open
+    assert not quota_verdict(_usage(), barely, 1000.0, False, config).is_open  # was paused

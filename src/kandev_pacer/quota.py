@@ -1,5 +1,6 @@
 """Quota math, usage parsing, and structured observation records."""
 
+from dataclasses import dataclass
 from datetime import datetime
 
 from .config import WINDOW_DURATIONS, settings
@@ -38,6 +39,43 @@ def ceiling_breached(windows, backstop):
     return backstop < 1.0 and any(
         window["consumed_frac"] > backstop for window in windows
     )
+
+
+@dataclass(frozen=True)
+class Verdict:
+    """What the quota says about launching right now.
+
+    `gate` is the reason, not just a yes/no, because the log and the operator both
+    need to tell "we are ahead of the curve" apart from "we cannot see the quota at
+    all" -- the second is a misconfiguration that looks identical if you only record
+    that nothing launched.
+    """
+
+    gate: str        # open | paused | ceiling | blind
+    headroom: float
+    message: str     # the line to print; empty when the gate is open
+
+    @property
+    def is_open(self):
+        return self.gate == "open"
+
+
+def quota_verdict(usage, windows, now, was_open, config):
+    """Read the usage payload against the burn line. Pure: no I/O, no state."""
+    if not windows and provider_missing(usage, config.provider):
+        return Verdict("blind", 1.0, (
+            f"provider {config.provider!r} not in usage "
+            f"{sorted(usage_providers(usage))} -> WITHHOLDING (check PACER_PROVIDER)"
+        ))
+    worst = worst_headroom(windows, now, config.alpha)
+    if ceiling_breached(windows, config.backstop):
+        return Verdict("ceiling", worst, (
+            f"headroom={worst:+.3f} CEILING (consumed>{config.backstop:.2f}) "
+            "-> withholding"
+        ))
+    if not gate_open(worst, was_open, config.resume_margin):
+        return Verdict("paused", worst, f"headroom={worst:+.3f} PAUSED")
+    return Verdict("open", worst, "")
 
 
 def window_records(windows, now, alpha=1.0):

@@ -1,5 +1,7 @@
 """Workflow classification, task ordering, and launch eligibility."""
 
+from dataclasses import dataclass
+
 from .config import (
     CREATED_STATE,
     DRAINABLE_STATES,
@@ -40,6 +42,57 @@ def admission_target(steps, override=None):
         return override
     work = [step for step in steps if is_paced_step(step)]
     return min(work, key=lambda step: step.get("position", 0))["id"] if work else None
+
+
+@dataclass(frozen=True)
+class Board:
+    """What one startup scan of kandev's workflows established: who gets paced, and how.
+
+    Fixed for the life of the process -- re-reading it per tick would mean re-linting
+    and re-deriving admission targets every two minutes for a board that changes when
+    a person edits a workflow. `steps` keeps the raw scan so startup can report on it.
+    """
+
+    scope: list          # workflow ids being paced
+    work_steps: set      # every pace-eligible step id, across all workflows
+    queue_steps: set     # the parked start step of each, where admission picks tasks up
+    admission: dict      # workflow id -> the step a queued task is admitted into
+    step_names: dict     # step id -> name, for readable log lines
+    step_ranks: dict     # step id -> position, for the board's pull order
+    workflow_names: dict
+    skipped: list        # (workflow, reason) for everything out of scope
+    steps: dict          # workflow id -> its steps, as scanned
+
+    @classmethod
+    def scan(cls, entries, restrict=(), override=None):
+        """Build from `client.workflow_entries()`: a (workflow, steps) pair per workflow."""
+        scope, work, queues, admission, skipped = resolve_scope(entries, restrict, override)
+        return cls(
+            scope=scope,
+            work_steps=work,
+            queue_steps=queues,
+            admission=admission,
+            step_names={
+                step_id: name
+                for _, steps in entries
+                for step_id, name in step_names(steps).items()
+            },
+            step_ranks={
+                step_id: rank
+                for _, steps in entries
+                for step_id, rank in step_ranks(steps).items()
+            },
+            workflow_names={
+                workflow["id"]: workflow.get("name") or workflow["id"]
+                for workflow, _ in entries
+            },
+            skipped=skipped,
+            steps={workflow["id"]: steps for workflow, steps in entries},
+        )
+
+    def name_of(self, id_):
+        """A step or workflow id as its readable name, or the id when unknown."""
+        return self.step_names.get(id_) or self.workflow_names.get(id_, id_)
 
 
 def resolve_scope(entries, restrict=(), override=None):
