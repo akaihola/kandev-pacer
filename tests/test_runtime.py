@@ -5,6 +5,7 @@ itself, booking, the no-turn-spent paths, and what a launch kandev refuses does 
 No real kandev, no agent turn, no quota.
 """
 import json
+from dataclasses import replace
 
 import pytest
 from conftest import CLEAN
@@ -12,7 +13,7 @@ from conftest import board_task as _task
 from conftest import one_session as _sess
 
 from kandev_pacer.config import MAX_ATTEMPTS, settings
-from kandev_pacer.runtime import Pacer
+from kandev_pacer.runtime import Pacer, dump_order
 from kandev_pacer.selection import fail_backoff
 from kandev_pacer.workflow import Board
 
@@ -215,3 +216,34 @@ def _expire_backoff(pacer):
     """Jump to the far side of every recorded backoff instead of waiting it out."""
     for failure in pacer.failed.values():
         failure["at"] -= max(settings.fail_backoff, fail_backoff(failure["attempts"])) + 1
+
+
+# --- --dump-order, the report you check a drag against ---
+
+def test_dump_order_lists_the_queue_in_launch_order(pacer, board, capsys):
+    board.load([_task("b", "ip", "Second", created="2"),
+                _task("a", "ip", "First", created="1")], {}, {})
+    dump_order(pacer)
+    lines = capsys.readouterr().out.splitlines()
+    assert lines[0].startswith("order=auto ->")
+    assert [line.split(". ", 1)[1] for line in lines if ". " in line] == ["First", "Second"]
+
+
+def test_dump_order_names_a_dragged_task_that_will_never_launch(pacer, board, capsys):
+    """The failure this report exists for: dragged to the top, in an unpaced workflow.
+
+    The sidebar shows it first either way, so nothing on screen says it cannot run.
+    """
+    unpaced = ({"id": "wf-off", "name": "Not Enrolled"}, "not enrolled: ...")
+    pacer.board = replace(pacer.board, skipped=[unpaced])
+    stranded = {"id": "t-off", "title": "Stranded", "workflow_step_id": "ip"}
+    board.load([_task("a", "ip", "In Scope")], {}, {})
+    board.tasks_elsewhere = [stranded]
+    board.sidebar = {"sidebar_views": [{"id": "v", "sort": {"key": "custom"}}],
+                     "sidebar_task_prefs": {"ordered_task_ids": ["t-off", "a"]}}
+
+    dump_order(pacer)
+    out = capsys.readouterr().out
+    assert "not paced: 1 workflow(s) out of scope" in out
+    assert "Not Enrolled: not enrolled" in out
+    assert "! placed by hand but not paced: 'Stranded' (in 'Not Enrolled')" in out

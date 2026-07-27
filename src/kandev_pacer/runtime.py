@@ -337,34 +337,41 @@ def dump_order(pacer):
     """Print the queue launches will work down, without spending a turn to find out."""
     board = pacer.board
     sidebar = client.user_settings(settings.order)
-    manual = uses_manual_order(sidebar, settings.order)
     placed = ((sidebar or {}).get("sidebar_task_prefs") or {}).get("ordered_task_ids") or []
-    description = (
-        f"manual sidebar order over board pull order ({len(placed)} task(s) placed by hand)"
-        if manual
-        else "board pull order (sidebar order not consulted)"
-    )
+    if uses_manual_order(sidebar, settings.order):
+        description = (
+            f"manual sidebar order over board pull order "
+            f"({len(placed)} task(s) placed by hand)"
+        )
+    else:
+        description = "board pull order (sidebar order not consulted)"
     print(f"order={settings.order} -> {description}")
     print(f"scope: {[board.name_of(workflow) for workflow in board.scope]}")
-    tasks = client.paced_tasks(board.scope)
-    for index, task in enumerate(
-        ordered_tasks(tasks, sidebar, settings.order, board.step_ranks), start=1
-    ):
-        print(f"{index:3}. {label(task)}")
-    if not board.skipped:
-        return
 
-    in_scope = {task["id"] for task in tasks}
+    tasks = client.paced_tasks(board.scope)
+    ordered = ordered_tasks(tasks, sidebar, settings.order, board.step_ranks)
+    for index, task in enumerate(ordered, start=1):
+        print(f"{index:3}. {label(task)}")
+    if board.skipped:
+        report_out_of_scope(board, {task["id"] for task in tasks}, placed)
+
+
+def report_out_of_scope(board, in_scope, placed):
+    """The workflows not being paced -- and any task you dragged that sits in one.
+
+    Worth its own pass over the board because it costs a tasks call per unpaced
+    workflow, and because a task dragged to the top of the sidebar that will never
+    launch looks identical, in the sidebar, to one that will.
+    """
+    print(f"\nnot paced: {len(board.skipped)} workflow(s) out of scope")
+    for workflow, reason in board.skipped:
+        print(f"  - {board.label_of(workflow)}: {reason}")
+
     elsewhere = {
         task["id"]: (task, workflow)
         for workflow, _ in board.skipped
         for task in client.tasks_of(workflow["id"])
     }
-    print(f"\nnot paced: {len(board.skipped)} workflow(s) out of scope")
-    for workflow, reason in board.skipped:
-        print(f"  - {board.label_of(workflow)}: {reason}")
-    # A task dragged to the top of the sidebar but sitting in an unpaced workflow will
-    # never launch, and the sidebar gives no hint of that. Say so by name.
     for task_id in placed:
         if task_id in in_scope or task_id not in elsewhere:
             continue

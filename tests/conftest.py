@@ -126,6 +126,8 @@ class FakeBoard:
         self.ws_log = []       # (action, payload) per action the pacer sent
         self.origins = []      # the Origin header each connection presented
         self.paths = []        # every REST path fetched, for counting round trips
+        self.sidebar = {}      # what GET /user/settings answers
+        self.tasks_elsewhere = []   # tasks belonging to workflows outside the scope
 
     def load(self, tasks, sessions, queues):
         self.tasks, self.sessions, self.queues = tasks, dict(sessions), dict(queues)
@@ -145,6 +147,10 @@ class FakeBoard:
             return {"steps": CLEAN}
         if path == "/api/v1/workflows/wf/tasks":
             return {"tasks": self.tasks}
+        if path.endswith("/tasks"):        # any other workflow: the out-of-scope ones
+            return {"tasks": self.tasks_elsewhere}
+        if path == "/api/v1/user/settings":
+            return {"settings": self.sidebar}
         if "/sessions" in path:
             return {"sessions": self.sessions.get(path.split("/")[-2], [])}
         return {}
