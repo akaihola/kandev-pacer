@@ -64,6 +64,33 @@ and branch immediately and parks the session in `CREATED` — prepared, agent ne
 alongside `WAITING_FOR_INPUT`. Getting this wrong is silent and total: tasks sit in the queue
 forever while the pacer cheerfully logs `nothing to launch` every tick.
 
+**A launch kandev refuses is one task's problem, not the board's.** Some tasks can't be
+launched at all — a `CREATED` session whose `executors_running` row is missing (prepared
+without `launch_workspace`, or cleaned up) makes `ensureSessionRunning` fall through to
+"session is not resumable: no executor record", and no amount of retrying the same call will
+change that. Because candidates are drawn oldest-first, such a task is the top pick *every*
+tick, so treating the refusal as a failed tick wedged the pacer completely: nothing else ever
+launched and the only symptom was a repeating `tick error` line on stderr. Instead:
+
+- **A refusal spends no quota, so the tick isn't over.** The pacer records the failure, moves
+  on to the next candidate, and keeps the gate open — up to three candidates per tick, so a
+  board full of broken cards can't turn one tick into a long walk.
+- **Failures are tracked apart from bookings.** A booking means "a turn was spent here, don't
+  spend another"; a failure means "this didn't work, back off". One map meaning both would make
+  every "did we already launch?" question ambiguous. The backoff starts at `PACER_FAIL_BACKOFF`
+  (default 3 ticks) and doubles per consecutive failure up to 8×, then flattens — a hopeless
+  task still gets an occasional "has the user fixed it yet?" retry. It's forgotten the moment
+  anything real changes (the task moves step, a new session appears) or something succeeds.
+- **After `PACER_BLOCK_AFTER` failures (default 2) the task is flagged `BLOCKED`** via kandev's
+  own `task.state` action — the same state its MCP tools set, rendered as a "Blocked" warning
+  on the card. A task the pacer has given up on is something you want to *see*, not something
+  you find by reading stderr. Kandev clears it by itself: whatever runs the task next moves it
+  to `SCHEDULING`/`IN_PROGRESS`. Set `PACER_BLOCK_AFTER=0` to keep the pacer read-only.
+
+The same treatment covers a rejected `message.queue.drain` and a task whose workflow has no
+admission target — both would otherwise keep a task selected forever and starve every launch
+behind it.
+
 ## Scope: every enrolled workflow, not one hardcoded board
 
 A step is **pace-eligible** when it satisfies *both* halves, and the pacer paces every workflow
@@ -251,6 +278,24 @@ launches until the turn is observed to start.
   `DrainQueuedMessage` requires a promptable session (`checkSessionPromptable`) — `CREATED` is
   not one. Entries persist in the `queued_messages` table, and `.add` does **not** validate
   `session_id`. Cap 10/session (`KANDEV_QUEUE_MAX_PER_SESSION`), over-cap → `queue_full`.
+- **Task state** (2026-07-27) `task.state` over the *same* `/ws` connection as everything above —
+  the task handlers register into `gateway.Dispatcher` (`backendapp/helpers.go:881`), the one
+  `session.launch` uses too (`backendapp/gateway.go:149`), built once in
+  `gateway/websocket/setup.go:29`. Payload `{id, state}`, handler
+  `wsUpdateTaskState` (`task/handlers/task_ws_handlers.go:441`) → `service.UpdateTaskState`.
+  `BLOCKED` is one of the valid states (`pkg/api/v1/task.go:14`) and the same one kandev's own
+  MCP task tools set (`mcp/handlers/config_task_handlers.go:374`). It writes the state column
+  and publishes `task.state_changed`, nothing else — its doc comment claims it "moves it to the
+  matching column", but the code doesn't (`UPDATE tasks SET state`, `repository/sqlite/task.go:1248`),
+  and no automation trigger listens for the event. So the flag can't move a card out from under
+  the pacer's own step logic. The web board renders task
+  state as a card icon (`web/components/kanban-card-content.tsx` → `getTaskStateIcon`), where
+  `BLOCKED` is an amber alert-circle labelled "Blocked" (`web/lib/ui/state-icons.tsx:35`).
+  Kandev overwrites the state on the task's next run (`SCHEDULING` in
+  `orchestrator/task_operations.go:610`, `IN_PROGRESS` in `scheduler/scheduler.go:303`), so the
+  flag clears itself. The pacer never writes `title` or `description`: the description **is**
+  the agent's prompt (`task_operations.go:409`), so a note left there would end up in the
+  agent's context.
 - **Usage** `GET /api/v1/agents/usage` →
   `agents[].usage{provider, windows[]{label, utilization_pct, reset_at}}`; `utilization_pct`
   is *consumed*; labels `"5-hour"`, `"7-day"`, `"7-day (Fable)"`.
@@ -297,7 +342,10 @@ Config via env: `KANDEV_URL`, `KANDEV_WS_URL` (default derives `ws://host/ws`),
 `PACED_WORKFLOW_ID` (comma-separated ids or names; unset = every enrolled workflow),
 `PACER_PROVIDER` (default `anthropic`), `PACER_CONCURRENCY`, `PACER_ALPHA`,
 `PACER_RESUME_MARGIN`, `PACER_BACKSTOP`, `PACER_INTERVAL`, `PACER_ORDER`
-(`auto` | `custom` | `board`, default `auto`), and optional `PACER_ADMISSION_STEP_ID`
+(`auto` | `custom` | `board`, default `auto`), `PACER_FAIL_BACKOFF` (seconds before a refused
+launch is retried, default 3 ticks, doubling per failure), `PACER_BLOCK_AFTER` (consecutive
+failures before the card is flagged `BLOCKED`, default 2; `0` = never write to the board), and
+optional `PACER_ADMISSION_STEP_ID`
 (else the lowest-position pace-eligible step; applies only to the workflow that owns it).
 
 ## Packaging as a kandev plugin

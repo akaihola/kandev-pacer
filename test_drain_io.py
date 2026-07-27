@@ -95,6 +95,17 @@ async def _ws_handler(conn):
             if took:
                 QUEUES[sid] -= 1
             body = {"session_id": sid, "drained": took}
+        elif action == "task.state" and str(p.get("id", "")).startswith("boomflag"):
+            await conn.send(json.dumps({"id": rid, "type": "error", "action": action,
+                                        "payload": {"message": "no"}}))
+            continue
+        elif action == "session.launch" and str(p.get("task_id", "")).startswith("boom"):
+            # What kandev answers for a CREATED session with no executors_running row: the
+            # launch is refused outright, and no retry of the same call will ever work.
+            await conn.send(json.dumps({"id": rid, "type": "error", "action": action,
+                                        "payload": {"message": "session is not resumable: "
+                                                               "no executor record"}}))
+            continue
         else:
             body = {"success": True, "state": "STARTING"}
         await conn.send(json.dumps({"id": rid, "type": "response", "action": action, "payload": body}))
@@ -141,12 +152,15 @@ def _load(tasks, sessions, queues):
     QUEUES.update(queues)
 
 
+LAST = {}  # what the last _tick() returned, for the tests that care whether the gate stayed open
+
+
 def _tick(tasks, sessions, queues):
     """Run one tick against the fakes; return the actions it took (queue reads excluded)."""
     _load(tasks, sessions, queues)
     WS_LOG.clear()
-    pacer._BOOKED = {}
-    pacer.tick(was_open=True)
+    pacer._BOOKED, pacer._FAILED = {}, {}
+    LAST["open"] = pacer.tick(was_open=True)
     return [a for a, _, _ in WS_LOG if a != "message.queue.get"]
 
 
@@ -236,6 +250,74 @@ def test_never_run_task_is_launched_not_drained():
 def test_concurrency_cap_short_circuits_before_any_queue_read():
     acts = _tick([_task("t4", "ip", "Busy")], {"t4": _sess("s4", "RUNNING")}, {"s4": 1})
     assert acts == [] and WS_LOG == [], WS_LOG
+
+
+# --- a launch kandev refuses ---
+
+def test_a_refused_launch_does_not_wedge_the_board():
+    """The bug: the refused task is the oldest, so it is re-picked every tick and nothing runs.
+
+    The refusal costs no quota, so the tick still owes the board a turn -- it must move on to
+    the next candidate instead of ending, and must leave the gate open.
+    """
+    acts = _tick([_task("boom1", "ip", "Broken", created="1"),
+                  _task("t9", "ip", "Fine", created="2")],
+                 {"boom1": _sess("sa", "CREATED"), "t9": _sess("sb", "WAITING_FOR_INPUT")}, {})
+    assert acts == ["session.launch", "session.launch"], acts
+    assert [p["task_id"] for a, p, _ in WS_LOG if a == "session.launch"] == ["boom1", "t9"]
+    assert LAST["open"] is True, "one task's problem must not pause the whole gate"
+    assert ("t9", "ip", "sb") in pacer._BOOKED
+    assert not any(k[0] == "boom1" for k in pacer._BOOKED), "a refused launch spends no turn"
+    assert pacer._FAILED[("boom1", "ip", "sa")]["attempts"] == 1
+
+
+def test_a_refused_launch_is_left_alone_next_tick():
+    _load([_task("boom2", "ip", "Broken")], {"boom2": _sess("sb2", "CREATED")}, {})
+    pacer._BOOKED, pacer._FAILED = {}, {}
+    pacer.tick(was_open=True)
+    WS_LOG.clear()
+    pacer.tick(was_open=True)
+    assert [a for a, _, _ in WS_LOG if a == "session.launch"] == [], WS_LOG
+
+
+def test_repeated_refusals_flag_the_task_blocked_on_the_board():
+    """A card the pacer has given up on has to be visible somewhere other than stderr."""
+    _load([_task("boom3", "ip", "Broken")], {"boom3": _sess("sb3", "CREATED")}, {})
+    pacer._BOOKED, pacer._FAILED = {}, {}
+    pacer.tick(was_open=True)
+    assert not any(a == "task.state" for a, _, _ in WS_LOG), "one hiccup must not flag a card"
+    # Jump to the far side of the backoff instead of waiting it out.
+    for f in pacer._FAILED.values():
+        f["at"] -= pacer.FAIL_BACKOFF + 1
+    WS_LOG.clear()
+    assert pacer.tick(was_open=True) is True
+    assert [p for a, p, _ in WS_LOG if a == "task.state"] == [{"id": "boom3", "state": "BLOCKED"}]
+    # Flagged once, not once per retry.
+    for f in pacer._FAILED.values():
+        f["at"] -= pacer.fail_backoff(f["attempts"]) + 1
+    WS_LOG.clear()
+    pacer.tick(was_open=True)
+    assert not any(a == "task.state" for a, _, _ in WS_LOG), WS_LOG
+
+
+def test_a_failed_flag_does_not_stop_pacing():
+    """Reporting the problem must not become a second problem -- the state write can fail too."""
+    _load([_task("boomflag", "ip", "Broken")], {"boomflag": _sess("sf", "CREATED")}, {})
+    pacer._BOOKED, pacer._FAILED = {}, {}
+    pacer.tick(was_open=True)
+    for f in pacer._FAILED.values():
+        f["at"] -= pacer.FAIL_BACKOFF + 1
+    assert pacer.tick(was_open=True) is True
+    assert pacer._FAILED[("boomflag", "ip", "sf")]["flagged"] is False, \
+        "a flag that didn't stick must be tried again, not remembered as done"
+
+
+def test_a_tick_gives_up_after_max_attempts():
+    """A board of broken tasks must not turn one tick into a walk of the whole backlog."""
+    acts = _tick([_task(f"boom{i}", "ip", "Broken", created=str(i)) for i in range(5)],
+                 {f"boom{i}": _sess(f"sm{i}", "CREATED") for i in range(5)}, {})
+    assert acts.count("session.launch") == pacer.MAX_ATTEMPTS, acts
+    assert LAST["open"] is True
 
 
 if __name__ == "__main__":

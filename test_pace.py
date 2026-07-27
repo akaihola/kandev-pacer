@@ -12,6 +12,7 @@ from pacer import (
     step_names, named, step_ranks, priority_rank, task_order_key,
     effective_sidebar_view, has_custom_sort_view, visible_task_order, ordered_tasks,
     is_drainable, select_action,
+    action_key, fail_backoff, backed_off, prune_failures,
 )
 
 # --- pacing math (unchanged) ---
@@ -493,6 +494,59 @@ def test_prune_booked_created_admission():
     # Turn actually started -> state leaves CREATED -> guard no longer needed.
     running = {"t": [_sess("s", "RUNNING")]}
     assert prune_booked({("t", "bk", "s"): 900.0}, at_bk, running, now, ttl) == {}
+
+# --- rejected launches: backoff and moving on ---
+
+def _fail(at, attempts=1, flagged=False):
+    return {"at": at, "attempts": attempts, "flagged": flagged}
+
+def test_action_key_is_the_same_shape_as_a_booking():
+    assert action_key({"id": "t", "workflow_step_id": "ip"},
+                      [_sess("a", "WAITING_FOR_INPUT", "1"),
+                       _sess("b", "WAITING_FOR_INPUT", "2")]) == ("t", "ip", "b")
+    # No session at all is a real, distinct key -- that is the admission case.
+    assert action_key({"id": "t"}, []) == ("t", "", None)
+
+def test_fail_backoff_doubles_then_flattens():
+    assert fail_backoff(1, base=100) == 100
+    assert fail_backoff(2, base=100) == 200
+    assert fail_backoff(3, base=100) == 400
+    # Flattens instead of growing forever: a task that stays broken should keep costing an
+    # occasional retry, not drift out to one attempt a week.
+    assert fail_backoff(99, base=100) == 100 * 8
+
+def test_backed_off_holds_a_task_only_until_its_wait_is_up():
+    failures = {("t", "ip", "s"): _fail(1000.0)}
+    assert backed_off(failures, 1050.0, base=100) == {("t", "ip", "s")}
+    assert backed_off(failures, 1150.0, base=100) == set()
+    # A second failure buys a longer wait, so a hopeless task stops costing round trips.
+    assert backed_off({("t", "ip", "s"): _fail(1000.0, attempts=2)}, 1150.0, base=100)
+
+def test_a_backed_off_task_stops_being_selected():
+    """The wedge, in one assertion: the broken task IS the top candidate, every tick.
+
+    Sorted oldest-first, a task kandev refuses to launch is picked again and again, so nothing
+    else on the board ever gets the turn. Excluding it is what lets the next one through.
+    """
+    broken = {"id": "b", "workflow_step_id": "ip", "created_at": "1"}
+    ok = {"id": "g", "workflow_step_id": "ip", "created_at": "2"}
+    sessions = {"b": [_sess("s1", "CREATED")], "g": [_sess("s2", "WAITING_FOR_INPUT")]}
+    assert select_action(_ord([broken, ok]), sessions, {}, WORK, QUEUE, set())[1]["id"] == "b"
+    held = backed_off({("b", "ip", "s1"): _fail(1000.0)}, 1050.0, base=100)
+    assert select_action(_ord([broken, ok]), sessions, {}, WORK, QUEUE, held)[1]["id"] == "g"
+
+def test_prune_failures_keeps_the_count_while_the_situation_holds():
+    tasks = [{"id": "t", "workflow_step_id": "ip"}]
+    sessions = {"t": [_sess("s", "CREATED")]}
+    failures = {("t", "ip", "s"): _fail(1000.0, attempts=3, flagged=True)}
+    # Nothing changed -> keep it, attempt count and all. Expiring it would reset the backoff
+    # to its shortest wait and retry a hopeless task at that pace forever.
+    assert prune_failures(failures, tasks, sessions) == failures
+    # The task moved, a new session appeared, the task is gone: each is a new situation that
+    # deserves a fresh attempt, and each stops the key from matching.
+    assert prune_failures(failures, [{"id": "t", "workflow_step_id": "rv"}], sessions) == {}
+    assert prune_failures(failures, tasks, {"t": [_sess("s2", "CREATED", "9")]}) == {}
+    assert prune_failures(failures, [], {}) == {}
 
 # --- launch order from the sidebar TASKS list ---
 

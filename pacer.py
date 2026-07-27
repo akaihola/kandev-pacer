@@ -47,6 +47,22 @@ ORDER = (os.environ.get("PACER_ORDER") or "auto").lower()
 # (Kandev starts it in a background goroutine, detached from our launch call), short enough
 # that a launch that silently failed still gets another shot instead of wedging forever.
 BOOKING_TTL = 3 * INTERVAL
+# How long a task whose launch was *rejected* is left alone before the pacer tries it again,
+# doubling with each consecutive failure up to FAIL_BACKOFF_MAX_MULT x the base. Failures are
+# tracked separately from bookings on purpose: a booking means "we spent a turn here, don't
+# spend another", a failure means "this one didn't work, back off" -- one map meaning both
+# would make every "did we already launch?" question ambiguous.
+FAIL_BACKOFF = int(os.environ.get("PACER_FAIL_BACKOFF", str(3 * INTERVAL)))
+FAIL_BACKOFF_MAX_MULT = 8
+# Consecutive failures before the task is flagged BLOCKED on the board. Not the first one: a
+# single WebSocket hiccup should not paint a card red. 0 disables the flagging entirely.
+BLOCK_AFTER = int(os.environ.get("PACER_BLOCK_AFTER", "2"))
+# Kandev task state used for that flag -- it renders as a "Blocked" warning icon on the card.
+BLOCKED_STATE = "BLOCKED"
+# How many candidates one tick may try before giving up. A rejected launch spends no quota, so
+# moving on to the next task is what keeps one bad card from starving the whole board; the cap
+# stops a board full of broken tasks from turning one tick into a long run of round trips.
+MAX_ATTEMPTS = 3
 ADMISSION_OVERRIDE = os.environ.get("PACER_ADMISSION_STEP_ID") or None
 WS_URL = os.environ.get("KANDEV_WS_URL") or (
     URL.replace("https://", "wss://").replace("http://", "ws://") + "/ws")
@@ -344,14 +360,18 @@ def newest_session(sessions):
         return None
     return max(sessions, key=lambda s: s.get("started_at", ""))
 
-def is_launchable(task, sessions, work_steps, queue_steps, booked):
+def is_launchable(task, sessions, work_steps, queue_steps, skip):
     """Can the pacer start a turn for this task now?
 
     - at a work step: only when its newest session is idle -- WAITING_FOR_INPUT (in-place next
       turn) or CREATED (a fresh task dragged straight onto the step, prepared but never run).
     - at the parked queue (start step): a task with no session at all, or one whose newest
       session is idle -- CREATED for a new task, WAITING_FOR_INPUT for a re-queued one.
-    Excludes anything already booked for this exact (task, step, session).
+
+    `skip` is the set of (task, step, session) keys this tick may not act on: live bookings
+    (we already spent a turn there) plus tasks inside a post-failure backoff. Both answer the
+    same question -- "is this a candidate right now?" -- which is why they share one argument,
+    while the state behind them stays in two maps that mean two different things.
 
     CREATED counts as launchable because kandev prepares a session up front, so "never run"
     no longer means "no session". Treating it as unlaunchable is what left new tasks parked
@@ -360,7 +380,7 @@ def is_launchable(task, sessions, work_steps, queue_steps, booked):
     step = task.get("workflow_step_id", "")
     newest = newest_session(sessions)
     sid = newest["id"] if newest else None
-    if (task["id"], step, sid) in booked:
+    if (task["id"], step, sid) in skip:
         return False
     state = newest["state"] if newest else None
     if step in work_steps:
@@ -369,7 +389,7 @@ def is_launchable(task, sessions, work_steps, queue_steps, booked):
         return newest is None or state in IDLE_STATES
     return False
 
-def is_drainable(task, sessions, queued, booked):
+def is_drainable(task, sessions, queued, skip):
     """Is a user-queued prompt parked on this task, releasable as its next turn?
 
     Deliberately ignores the workflow step. A prompt queued while the task sits at Review or
@@ -385,9 +405,9 @@ def is_drainable(task, sessions, queued, booked):
         return False
     if queued.get(newest["id"], 0) <= 0:
         return False
-    return (task["id"], task.get("workflow_step_id", ""), newest["id"]) not in booked
+    return (task["id"], task.get("workflow_step_id", ""), newest["id"]) not in skip
 
-def select_action(ordered, task_sessions, queued, work_steps, queue_steps, booked):
+def select_action(ordered, task_sessions, queued, work_steps, queue_steps, skip):
     """('drain'|'launch', task) for the one turn this tick may spend, else (None, None).
 
     `ordered` is the caller's launch-priority order (ordered_tasks), applied to *both* kinds --
@@ -402,10 +422,10 @@ def select_action(ordered, task_sessions, queued, work_steps, queue_steps, booke
     keeps it at one turn per admitted decision.
     """
     for t in ordered:
-        if is_drainable(t, task_sessions.get(t["id"], []), queued, booked):
+        if is_drainable(t, task_sessions.get(t["id"], []), queued, skip):
             return ("drain", t)
     for t in ordered:
-        if is_launchable(t, task_sessions.get(t["id"], []), work_steps, queue_steps, booked):
+        if is_launchable(t, task_sessions.get(t["id"], []), work_steps, queue_steps, skip):
             return ("launch", t)
     return (None, None)
 
@@ -543,6 +563,59 @@ def ordered_tasks(tasks, settings, mode, ranks=None):
                               prefs.get("ordered_task_ids") or [],
                               prefs.get("subtask_order_by_parent_id") or {})
 
+def action_key(task, sessions):
+    """The (task, step, session) triple every guard is keyed on -- selection, bookings, failures.
+
+    Keeping one shape for all three is what lets a failure suppress the *same* candidate
+    selection would pick next, rather than a near-miss that never matches.
+    """
+    newest = newest_session(sessions)
+    return (task["id"], task.get("workflow_step_id", ""), newest["id"] if newest else None)
+
+def live_keys(tasks, task_sessions):
+    """{action key: newest session state (None when there is no session)} for the board as it
+    reads right now. Both prune passes work off this: a key that no longer describes any task
+    can never match again, so holding it would just leak memory."""
+    out = {}
+    for t in tasks:
+        sessions = task_sessions.get(t["id"], [])
+        out[action_key(t, sessions)] = (newest_session(sessions) or {}).get("state")
+    return out
+
+def fail_backoff(attempts, base=None):
+    """Seconds to leave a task alone after `attempts` consecutive failed launches.
+
+    Doubles per failure and then flattens. A task that is broken for good (a session kandev
+    refuses to resume, say) otherwise costs a WebSocket round trip every few ticks forever;
+    with the doubling it settles into an occasional retry, which is all a "did the user fix
+    it yet?" check needs to be.
+    """
+    base = FAIL_BACKOFF if base is None else base
+    return base * min(2 ** max(attempts - 1, 0), FAIL_BACKOFF_MAX_MULT)
+
+def backed_off(failures, now, base=None):
+    """Keys still inside their retry backoff -- not candidates this tick.
+
+    Handed to select_action together with the live bookings. This is the half of the fix that
+    lets the pacer move past a task it cannot launch: without it the same failing task is
+    re-selected every tick, because it is genuinely the top candidate every tick.
+    """
+    return {k for k, f in failures.items()
+            if now - f["at"] < fail_backoff(f["attempts"], base)}
+
+def prune_failures(failures, tasks, task_sessions):
+    """Drop failures whose key no longer describes the board.
+
+    Kept while the key matches, with no deadline, because the attempt count is the whole point:
+    expiring it would reset the backoff to its shortest value and retry forever at that pace.
+    The key stops matching as soon as anything real changes -- the task moves step, a new
+    session appears, the task is deleted -- and any of those is a new situation that deserves a
+    fresh attempt. A launch that *succeeds* is cleared separately, by the caller: success does
+    not change the key (same task, same step, same session), so nothing here would notice it.
+    """
+    live = live_keys(tasks, task_sessions)
+    return {k: v for k, v in failures.items() if k in live}
+
 def prune_booked(booked, tasks, task_sessions, now, ttl):
     """Keep a booking (key -> booked_at) only while it still guards against a double start.
 
@@ -558,14 +631,10 @@ def prune_booked(booked, tasks, task_sessions, now, ttl):
       lets a launch that silently failed retry instead of wedging the task forever.
     """
     keep = {}
-    for t in tasks:
-        newest = newest_session(task_sessions.get(t["id"], []))
-        sid = newest["id"] if newest else None
-        st = newest["state"] if newest else None
-        key = (t["id"], t.get("workflow_step_id", ""), sid)
+    for key, st in live_keys(tasks, task_sessions).items():
         if key not in booked:
             continue
-        if sid is None or st == CREATED_STATE:
+        if key[2] is None or st == CREATED_STATE:
             if now - booked[key] < ttl:
                 keep[key] = booked[key]
         elif st == READY_STATE:
@@ -651,6 +720,10 @@ def ws_launch(task_id, intent, session_id, workflow_step_id, req_id="pace-1"):
         payload["session_id"] = session_id
     return ws_request("session.launch", payload, req_id)
 
+def ws_set_state(task_id, state, req_id="state-1"):
+    """Set the task's state (kandev's own `task.state` action, the one its MCP tools use)."""
+    return ws_request("task.state", {"id": task_id, "state": state}, req_id)
+
 def ws_drain(session_id, req_id="drain-1"):
     """Release the head queued prompt as this session's next turn.
 
@@ -696,7 +769,8 @@ def queued_counts(task_sessions):
 
 # --- pacing loop ---
 
-_BOOKED = {}             # (task_id, step_id, session_id) -> booked_at (launch issued)
+_BOOKED = {}             # (task_id, step_id, session_id) -> booked_at (turn actually spent)
+_FAILED = {}             # (task_id, step_id, session_id) -> {at, attempts, reason, flagged}
 _SCOPE = []              # workflow ids being paced
 _WORK_STEPS = set()      # pace-eligible step ids, unioned across the scope
 _QUEUE_STEPS = set()     # each scoped workflow's start step (its parked queue)
@@ -705,8 +779,135 @@ _STEP_NAMES = {}         # step id -> name, for logging only
 _WF_NAMES = {}           # workflow id -> name, for logging only
 _STEP_RANKS = {}         # step id -> board position, for cross-column launch ordering
 
+def label(task):
+    """What to call a task in the log: its title, or its id when it has none."""
+    return task.get("title") or task["id"]
+
+def flag_blocked(task, reason):
+    """Flag the task BLOCKED on the kandev board, so a stuck card is visible without stderr.
+
+    Kandev renders that state as a "Blocked" warning icon on the card, and it is the same
+    state its own MCP tools set, so nothing here is a private convention. It also clears
+    itself: the next launch that works moves the task to SCHEDULING/IN_PROGRESS, whether the
+    pacer or the user starts it.
+
+    Returns whether the flag stuck. A failure to flag is logged and otherwise ignored --
+    reporting a problem must never become a second problem that stops pacing.
+    """
+    try:
+        ws_set_state(task["id"], BLOCKED_STATE, "pace-block")
+    except Exception as e:
+        print(f"could not flag {label(task)!r} {BLOCKED_STATE} ({e})", file=sys.stderr, flush=True)
+        return False
+    print(f"flagged {label(task)!r} {BLOCKED_STATE} on the board: {reason}",
+          file=sys.stderr, flush=True)
+    return True
+
+def note_failure(key, task, reason, now):
+    """Record a rejected launch/drain, back the task off, and flag it once it looks permanent.
+
+    Deliberately not a booking. A booking says a turn was spent and the quota went with it; a
+    rejected launch spent nothing. Keeping them apart is what lets the booking stay a plain
+    "already launched, don't launch again" while failures carry their own retry schedule.
+    """
+    prev = _FAILED.get(key) or {}
+    attempts = prev.get("attempts", 0) + 1
+    _FAILED[key] = {"at": now, "attempts": attempts, "flagged": prev.get("flagged", False)}
+    print(f"kandev refused to start {label(task)!r} ({reason}) -- failure {attempts}, "
+          f"holding it for {fail_backoff(attempts)}s", file=sys.stderr, flush=True)
+    if BLOCK_AFTER and attempts >= BLOCK_AFTER and not _FAILED[key]["flagged"]:
+        _FAILED[key]["flagged"] = flag_blocked(task, reason)
+
+def attempt(kind, task, key, wh, running, now):
+    """Carry out one selected action. True when the tick is finished, False to try the next task.
+
+    False means only one thing: this candidate was rejected, no quota was spent, and the tick
+    still has a turn to give someone else. It is never returned for a race (the task moved, the
+    session started a turn) -- those mean the board changed under us, and re-reading everything
+    next tick is the honest response.
+    """
+    # Re-read the task's current step immediately before launching. The workflow_step_id we
+    # pass is an unvalidated move, so acting on the top-of-tick snapshot could drag a task
+    # that was moved in between (human board edit, another agent's move_task) back to a stale
+    # step. If it moved since selection, skip and re-evaluate next tick. Resolve the newest
+    # live session now too -- a profile-switch step spawns a fresh one on entry.
+    fresh = next((t for t in paced_tasks() if t["id"] == task["id"]), None)
+    if fresh is None or fresh.get("workflow_step_id", "") != task.get("workflow_step_id", ""):
+        print(f"headroom={wh:+.3f} open, {label(task)!r} moved since selection -> skip", flush=True)
+        return True
+    step = fresh.get("workflow_step_id", "")
+    sessions = sessions_of(task["id"])
+
+    if kind == "drain":
+        # The re-read above only re-checked the step. The session must still be the one whose
+        # queue we counted and still idle, or the drain would target a stale session or race a
+        # turn that started since selection (kandev would reject it, but skipping is quieter).
+        newest = newest_session(sessions)
+        if newest is None or newest.get("state") not in DRAINABLE_STATES:
+            print(f"headroom={wh:+.3f} open, {label(fresh)!r} no longer idle -> skip drain",
+                  flush=True)
+            return True
+        # A rejected drain is handled here rather than by the loop's catch-all, which would
+        # pause the gate for a tick. session_busy / session_not_promptable is usually a benign
+        # race (a turn started since we counted). But drain outranks launch, so an entry that
+        # fails *every* time would keep this task selected and starve every launch on the
+        # board -- so it is recorded as a failure, backed off, and eventually flagged, exactly
+        # like a failed launch.
+        try:
+            drained = bool((ws_drain(newest["id"]) or {}).get("drained"))
+        except Exception as e:
+            note_failure(key, fresh, f"drain rejected: {e}", now)
+            return False
+        if not drained:
+            # Queue emptied between the count and the take (the UI's "Send now", or another
+            # client). No turn was spent, so don't book -- the task stays eligible.
+            print(f"headroom={wh:+.3f} open, queue for {label(fresh)!r} already empty "
+                  f"-> no turn spent", flush=True)
+            return True
+        _BOOKED[(task["id"], step, newest["id"])] = now
+        _clear_failures(task["id"])
+        print(f"headroom={wh:+.3f} open -> drained queued prompt for {label(fresh)!r} "
+              f"at {named(step, _STEP_NAMES)!r} ({running + 1}/{CONCURRENCY})", flush=True)
+        return True
+
+    # Resolved here, not before the drain branch: a drain needs no launch target, so a workflow
+    # without one must not block draining a prompt parked in it. A missing target is a failure
+    # rather than a plain skip because it does not fix itself: the task is at the head of the
+    # queue, stays launchable, and would be re-picked every tick while nothing else ran.
+    target = launch_target(fresh, _WORK_STEPS, _ADMISSION)
+    if target is None:
+        note_failure(key, fresh, "no admission target in workflow "
+                     f"{named(fresh.get('workflow_id'), _WF_NAMES)!r}", now)
+        return False
+    intent, sid = pick_intent(sessions)
+    try:
+        ws_launch(task["id"], intent, sid, target)
+    except Exception as e:
+        # The case this exists for: kandev refusing the launch outright (a CREATED session with
+        # no executor record answers "session is not resumable"). Before, that exception reached
+        # main(), closed the gate, and left the same task at the head of the queue next tick --
+        # one bad card and the whole board stopped.
+        note_failure(key, fresh, str(e), now)
+        return False
+    _BOOKED[(task["id"], step, sid)] = now
+    _clear_failures(task["id"])
+    print(f"headroom={wh:+.3f} open -> launched {label(fresh)!r} "
+          f"intent={intent} workflow={named(fresh.get('workflow_id'), _WF_NAMES)!r} "
+          f"target={named(target, _STEP_NAMES)!r} ({running + 1}/{CONCURRENCY})", flush=True)
+    return True
+
+def _clear_failures(task_id):
+    """Forget a task's failure history once something worked for it.
+
+    Has to be explicit: a successful launch leaves the key (task, step, session) untouched, so
+    prune_failures cannot see the difference, and a stale backoff would then suppress a task
+    that is working again.
+    """
+    for k in [k for k in _FAILED if k[0] == task_id]:
+        del _FAILED[k]
+
 def tick(was_open):
-    global _BOOKED
+    global _BOOKED, _FAILED
     usage = _req("GET", "/api/v1/agents/usage")
     now = time.time()
     windows = parse_windows(usage)
@@ -726,77 +927,30 @@ def tick(was_open):
     tasks = paced_tasks()
     task_sessions = {t["id"]: sessions_of(t["id"]) for t in tasks}
     _BOOKED = prune_booked(_BOOKED, tasks, task_sessions, now, BOOKING_TTL)
+    _FAILED = prune_failures(_FAILED, tasks, task_sessions)
     running = sum(1 for t in tasks for s in task_sessions[t["id"]] if s.get("state") in RUNNING_STATES)
     if running >= CONCURRENCY:
         print(f"headroom={wh:+.3f} open, full ({running}/{CONCURRENCY})", flush=True)
         return is_open
 
     ordered = ordered_tasks(tasks, user_settings(), ORDER, _STEP_RANKS)
-    kind, task = select_action(ordered, task_sessions, queued_counts(task_sessions),
-                               _WORK_STEPS, _QUEUE_STEPS, _BOOKED)
-    if kind is None:
-        print(f"headroom={wh:+.3f} open, nothing to launch ({running}/{CONCURRENCY} running)", flush=True)
-        return is_open
-
-    # Re-read the task's current step immediately before launching. The workflow_step_id we
-    # pass is an unvalidated move, so acting on the top-of-tick snapshot could drag a task
-    # that was moved in between (human board edit, another agent's move_task) back to a stale
-    # step. If it moved since selection, skip and re-evaluate next tick. Resolve the newest
-    # live session now too -- a profile-switch step spawns a fresh one on entry.
-    fresh = next((t for t in paced_tasks() if t["id"] == task["id"]), None)
-    if fresh is None or fresh.get("workflow_step_id", "") != task.get("workflow_step_id", ""):
-        print(f"headroom={wh:+.3f} open, {task.get('title') or task['id']!r} moved since selection "
-              f"-> skip", flush=True)
-        return is_open
-    step = fresh.get("workflow_step_id", "")
-    sessions = sessions_of(task["id"])
-
-    if kind == "drain":
-        # The re-read above only re-checked the step. The session must still be the one whose
-        # queue we counted and still idle, or the drain would target a stale session or race a
-        # turn that started since selection (kandev would reject it, but skipping is quieter).
-        newest = newest_session(sessions)
-        if newest is None or newest.get("state") not in DRAINABLE_STATES:
-            print(f"headroom={wh:+.3f} open, {fresh.get('title') or task['id']!r} no longer idle "
-                  f"-> skip drain", flush=True)
+    queued = queued_counts(task_sessions)
+    # Work down the candidate list rather than stopping at the first one: each rejection adds
+    # the task to the backoff set, which is what makes the next select_action pick someone else.
+    for _ in range(MAX_ATTEMPTS):
+        skip = set(_BOOKED) | backed_off(_FAILED, now)
+        kind, task = select_action(ordered, task_sessions, queued,
+                                   _WORK_STEPS, _QUEUE_STEPS, skip)
+        if kind is None:
+            held = f", {len(_FAILED)} held after a failed launch" if _FAILED else ""
+            print(f"headroom={wh:+.3f} open, nothing to launch "
+                  f"({running}/{CONCURRENCY} running{held})", flush=True)
             return is_open
-        # Handle a rejected drain here rather than letting it reach the loop's catch-all,
-        # which would pause the gate for a tick. session_busy / session_not_promptable is a
-        # benign race (a turn started since we counted), not a reason to stop pacing.
-        # Caveat: drain outranks launch, so an entry that somehow fails every attempt would
-        # keep this task selected and starve launches. The log names the task and kandev's
-        # reason; removing the entry from the UI's queue panel clears it.
-        try:
-            drained = bool((ws_drain(newest["id"]) or {}).get("drained"))
-        except Exception as e:
-            print(f"headroom={wh:+.3f} open, drain rejected for "
-                  f"{fresh.get('title') or task['id']!r} ({e}) -> skip", file=sys.stderr, flush=True)
+        if attempt(kind, task, action_key(task, task_sessions.get(task["id"], [])),
+                   wh, running, now):
             return is_open
-        if not drained:
-            # Queue emptied between the count and the take (the UI's "Send now", or another
-            # client). No turn was spent, so don't book -- the task stays eligible.
-            print(f"headroom={wh:+.3f} open, queue for {fresh.get('title') or task['id']!r} "
-                  f"already empty -> no turn spent", flush=True)
-            return is_open
-        _BOOKED[(task["id"], step, newest["id"])] = now
-        print(f"headroom={wh:+.3f} open -> drained queued prompt for "
-              f"{fresh.get('title') or task['id']!r} at {named(step, _STEP_NAMES)!r} "
-              f"({running + 1}/{CONCURRENCY})", flush=True)
-        return is_open
-
-    # Resolved here, not before the drain branch: a drain needs no launch target, so a workflow
-    # without one must not block draining a prompt parked in it.
-    target = launch_target(fresh, _WORK_STEPS, _ADMISSION)
-    if target is None:
-        print(f"headroom={wh:+.3f} open, {task.get('title') or task['id']!r} has no admission "
-              f"target in workflow {named(fresh.get('workflow_id'), _WF_NAMES)!r} -> skip", flush=True)
-        return is_open
-    intent, sid = pick_intent(sessions)
-    ws_launch(task["id"], intent, sid, target)
-    _BOOKED[(task["id"], step, sid)] = now
-    print(f"headroom={wh:+.3f} open -> launched {fresh.get('title') or task['id']!r} "
-          f"intent={intent} workflow={named(fresh.get('workflow_id'), _WF_NAMES)!r} "
-          f"target={named(target, _STEP_NAMES)!r} ({running + 1}/{CONCURRENCY})", flush=True)
+    print(f"headroom={wh:+.3f} open, {MAX_ATTEMPTS} candidates rejected this tick "
+          f"-> waiting for the next one", file=sys.stderr, flush=True)
     return is_open
 
 def resolve_globals(entries):
