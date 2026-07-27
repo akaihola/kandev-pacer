@@ -2,19 +2,30 @@
 
 No network.
 """
-from conftest import CLEAN, ENTRIES, FEATURE_DEV, step as _step
+
+from conftest import CLEAN, ENTRIES, FEATURE_DEV
+from conftest import step as _step
 
 from kandev_pacer.workflow import (
-    admission_target, is_paced_step, is_work_step, lint_workflow, paced_step_ids,
-    queue_step_id, resolve_scope, step_names,
+    admission_target,
+    is_paced_step,
+    is_work_step,
+    lint_workflow,
+    paced_step_ids,
+    queue_step_id,
+    resolve_scope,
+    step_names,
 )
 
+
 def test_paced_step_ids():
-    assert paced_step_ids(CLEAN) == {"ip"}                      # only In Progress routes on complete
+    # only In Progress routes on complete
+    assert paced_step_ids(CLEAN) == {"ip"}
     assert is_work_step(_step("x", "X", otc=["move_to_next"]))      # every transition kind counts
     assert is_work_step(_step("x", "X", otc=["move_to_previous"]))
     assert is_work_step(_step("x", "X", otc=["move_to_step"]))
-    assert not is_work_step(_step("x", "X", ots=["move_to_step"]))  # on_turn_start is not routing-away
+    # on_turn_start is not routing-away
+    assert not is_work_step(_step("x", "X", ots=["move_to_step"]))
 
 def test_is_paced_step_needs_both_halves():
     """The tag is the enrollment marker; the routing is the safety property. Neither alone.
@@ -27,7 +38,8 @@ def test_is_paced_step_needs_both_halves():
     assert not is_paced_step(_step("x", "X", stage="work"))                    # tagged, parked
     assert not is_paced_step(_step("x", "X", otc=["move_to_next"]))            # routes, untagged
     assert not is_paced_step(_step("x", "X", otc=["move_to_next"], stage="review"))
-    assert is_paced_step(_step("x", "X", otc=["move_to_next"], stage="WORK"))  # tag is case-insensitive
+    # tag is case-insensitive
+    assert is_paced_step(_step("x", "X", otc=["move_to_next"], stage="WORK"))
 
 def test_step_names():
     names = step_names(CLEAN)
@@ -42,7 +54,8 @@ def test_resolve_scope_enrolls_only_tagged_workflows():
     assert scope == ["wf-ck", "wf-fd"]                 # Priority Kanban is not enrolled
     assert work == {"ip", "fd-spec", "fd-work"}        # unioned; step ids are globally unique
     assert queues == {"bk", "fd-todo"}                 # one start step per scoped workflow
-    assert admission == {"wf-ck": "ip", "wf-fd": "fd-spec"}   # lowest-position paced step, per board
+    # lowest-position paced step, per board
+    assert admission == {"wf-ck": "ip", "wf-fd": "fd-spec"}
     assert [wf["name"] for wf, _ in skipped] == ["Priority Kanban"]
     assert "make-paced" in skipped[0][1]               # the reason is actionable, not just a drop
 
@@ -86,7 +99,16 @@ def test_lint_workflow():
                    stage="work", pos=0)]
     assert any("auto_start_agent" in w for w in lint_workflow(dirty))
     # profile switch + prompt on a work step -> bypass.
-    ps = [_step("ip", "In Progress", otc=["move_to_step"], stage="work", profile="p", prompt="do it")]
+    ps = [
+        _step(
+            "ip",
+            "In Progress",
+            otc=["move_to_step"],
+            stage="work",
+            profile="p",
+            prompt="do it",
+        )
+    ]
     assert any("agent-profile" in w for w in lint_workflow(ps))
     # tagged work but parked (no transition) -> mismatch.
     assert any("stage_type='work'" in w for w in lint_workflow([_step("x", "X", stage="work")]))
@@ -109,8 +131,10 @@ def test_lint_workflow():
     # A start step that is itself pace-eligible has no holding area, so the backlog executes
     # instead of queueing. This is the shape Priority Kanban takes once make_paced tags it --
     # every other check passes, so without this one the hazard ships silently.
-    executing_queue = [_step("bk", "Backlog", otc=["move_to_step"], stage="work", start=True, pos=0),
-                       _step("ip", "In Progress", otc=["move_to_step"], stage="work", pos=1)]
+    executing_queue = [
+        _step("bk", "Backlog", otc=["move_to_step"], stage="work", start=True, pos=0),
+        _step("ip", "In Progress", otc=["move_to_step"], stage="work", pos=1),
+    ]
     assert any("parked queue will execute" in w for w in lint_workflow(executing_queue))
     # clean workflow -> no warnings.
     assert lint_workflow(CLEAN) == []

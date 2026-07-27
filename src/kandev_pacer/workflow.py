@@ -8,6 +8,7 @@ from dataclasses import dataclass, field
 
 from .config import TRANSITION_KINDS
 
+
 def is_work_step(step):
     events = step.get("events") or {}
     return any(

@@ -7,7 +7,9 @@ No real kandev, no agent turn, no quota.
 import json
 
 import pytest
-from conftest import CLEAN, board_task as _task, one_session as _sess
+from conftest import CLEAN
+from conftest import board_task as _task
+from conftest import one_session as _sess
 
 from kandev_pacer.config import MAX_ATTEMPTS, settings
 from kandev_pacer.runtime import Pacer
@@ -75,7 +77,13 @@ def test_drains_prompt_parked_at_review(pacer, board):
 
 
 def test_parked_with_empty_queue_still_does_nothing(pacer, board):
-    tick(pacer, board, [_task("t1", "rv", "Feedback")], {"t1": _sess("s1", "WAITING_FOR_INPUT")}, {})
+    tick(
+        pacer,
+        board,
+        [_task("t1", "rv", "Feedback")],
+        {"t1": _sess("s1", "WAITING_FOR_INPUT")},
+        {},
+    )
     assert actions(board) == []
 
 
@@ -97,8 +105,13 @@ def test_stale_count_spends_no_turn(pacer, board):
     The fake reports one pending entry for sStale but takes nothing, which is exactly the
     race: kandev answers drained:false and no turn is spent.
     """
-    tick(pacer, board, [_task("t1", "rv", "Feedback")], {"t1": _sess("sStale", "WAITING_FOR_INPUT")},
-         {})
+    tick(
+        pacer,
+        board,
+        [_task("t1", "rv", "Feedback")],
+        {"t1": _sess("sStale", "WAITING_FOR_INPUT")},
+        {},
+    )
     assert actions(board) == ["message.queue.drain"]
     assert pacer.booked == {}, "drained:false spends no turn, so it must not book"
 
@@ -176,7 +189,13 @@ def test_repeated_refusals_flag_the_task_blocked_on_the_board(pacer, board):
 
 def test_a_failed_flag_does_not_stop_pacing(pacer, board):
     """Reporting the problem must not become a second problem -- the state write can fail too."""
-    tick(pacer, board, [_task("boomflag", "ip", "Broken")], {"boomflag": _sess("sf", "CREATED")}, {})
+    tick(
+        pacer,
+        board,
+        [_task("boomflag", "ip", "Broken")],
+        {"boomflag": _sess("sf", "CREATED")},
+        {},
+    )
     _expire_backoff(pacer)
     assert pacer.tick(was_open=True) is True
     assert pacer.failed[("boomflag", "ip", "sf")]["flagged"] is False, \

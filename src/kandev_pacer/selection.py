@@ -146,7 +146,10 @@ def _rank(tasks, ordered_ids):
 
 
 def visible_task_order(tasks, pinned_ids, ordered_ids, subtask_order=None):
-    """The sidebar's own reading order: pinned first, then dragged, each parent before its children."""
+    """The sidebar's own reading order.
+
+    Pinned first, then dragged, each parent immediately before its children.
+    """
     subtask_order = subtask_order or {}
     ids = {task["id"] for task in tasks}
     roots, children = [], {}

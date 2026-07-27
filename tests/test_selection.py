@@ -2,13 +2,29 @@
 
 Everything under test here is a pure function over plain dictionaries. No network.
 """
-from conftest import CLEAN, sess as _sess, task as _task
+
+from conftest import CLEAN
+from conftest import sess as _sess
+from conftest import task as _task
 
 from kandev_pacer.selection import (
-    action_key, backed_off, effective_sidebar_view, fail_backoff,
-    has_custom_sort_view, is_drainable, is_launchable, launch_target, newest_session,
-    ordered_tasks, pick_intent, priority_rank, prune_booked, prune_failures,
-    select_action, task_order_key, visible_task_order,
+    action_key,
+    backed_off,
+    effective_sidebar_view,
+    fail_backoff,
+    has_custom_sort_view,
+    is_drainable,
+    is_launchable,
+    launch_target,
+    newest_session,
+    ordered_tasks,
+    pick_intent,
+    priority_rank,
+    prune_booked,
+    prune_failures,
+    select_action,
+    task_order_key,
+    visible_task_order,
 )
 from kandev_pacer.workflow import Board, step_ranks
 
@@ -35,14 +51,19 @@ def test_priority_rank():
     assert priority_rank({"priority": "LOW  "}) == priority_rank({"priority": "low"})  # case/space
     # kandev's query ranks 'none' and anything unrecognized identically (ELSE 4).
     assert priority_rank({"priority": "none"}) == priority_rank({"priority": "weird"})
-    assert priority_rank({}) == priority_rank({"priority": None}) == priority_rank({"priority": "none"})
+    assert (
+        priority_rank({})
+        == priority_rank({"priority": None})
+        == priority_rank({"priority": "none"})
+    )
+
 
 def test_order_by_position_within_a_step():
     """The headline rule: the board's manual drag order decides, lowest position first."""
     assert _order([_task("c", pos=2), _task("a", pos=0), _task("b", pos=1)]) == ["a", "b", "c"]
 
 def test_position_beats_priority_and_age():
-    """position outranks both, exactly as in kandev's pull query -- a drag is an explicit decision."""
+    """position outranks both, as in kandev's pull query: a drag is explicit."""
     assert _order([_task("dragged_down", pos=5, prio="critical", created="2020-01-01T00:00:00Z"),
                    _task("dragged_up", pos=0, prio="low", created="2026-06-01T00:00:00Z")]) \
         == ["dragged_up", "dragged_down"]
@@ -58,7 +79,7 @@ def test_created_at_breaks_priority_ties():
 
 def test_id_makes_the_order_total():
     """Fully tied tasks must still order deterministically, or the pick flaps tick to tick."""
-    same = dict(pos=0, prio="medium", created="2026-01-01T00:00:00Z")
+    same = {"pos": 0, "prio": "medium", "created": "2026-01-01T00:00:00Z"}
     assert _order([_task("b", **same), _task("a", **same)]) == ["a", "b"]
 
 def test_missing_and_zero_position_tie_at_the_top():
@@ -82,8 +103,19 @@ def test_downstream_column_wins_across_steps():
                    _task("in_flight", step="ip", pos=0)]) == ["in_flight", "queued"]
     # Even a queue task dragged to the very top, made critical and years older stays behind:
     # the column ordering is applied before any of it.
-    assert _order([_task("queued", step="bk", pos=0, prio="critical", created="2020-01-01T00:00:00Z"),
-                   _task("in_flight", step="ip", pos=9, prio="low")]) == ["in_flight", "queued"]
+    assert _order(
+        [
+            _task(
+                "queued",
+                step="bk",
+                pos=0,
+                prio="critical",
+                created="2020-01-01T00:00:00Z",
+            ),
+            _task("in_flight", step="ip", pos=9, prio="low"),
+        ]
+    ) == ["in_flight", "queued"]
+
 
 def test_multi_work_step_drains_right_to_left():
     """With several work steps, tasks deepest in the pipeline advance before new ones enter."""
@@ -175,10 +207,14 @@ def test_is_drainable_parked_step():
 
 def test_is_drainable_requires_queue_and_idle_session():
     at_rv = {"id": "t", "workflow_step_id": "rv"}
-    assert not is_drainable(at_rv, [_sess("s", "WAITING_FOR_INPUT")], {}, set())          # empty queue
-    assert not is_drainable(at_rv, [_sess("s", "WAITING_FOR_INPUT")], {"s": 0}, set())    # counted zero
-    assert not is_drainable(at_rv, [_sess("s", "RUNNING")], {"s": 1}, set())              # turn in flight
-    assert not is_drainable(at_rv, [], {"s": 1}, set())                                   # no session
+    # empty queue
+    assert not is_drainable(at_rv, [_sess("s", "WAITING_FOR_INPUT")], {}, set())
+    # counted zero
+    assert not is_drainable(at_rv, [_sess("s", "WAITING_FOR_INPUT")], {"s": 0}, set())
+    # turn in flight
+    assert not is_drainable(at_rv, [_sess("s", "RUNNING")], {"s": 1}, set())
+    # no session
+    assert not is_drainable(at_rv, [], {"s": 1}, set())
     # CREATED is prepared-but-never-run: launchable, but NOT promptable -- kandev answers
     # session_not_promptable, so its queued prompt must wait for the admission turn.
     assert not is_drainable(at_rv, [_sess("s", "CREATED")], {"s": 1}, set())
@@ -216,7 +252,8 @@ def test_select_action_uses_board_pull_order():
     sessions = {"old": [_sess("a", "WAITING_FOR_INPUT")], "new": [_sess("b", "WAITING_FOR_INPUT")]}
     # Same column and position -> falls through to created_at, so the older one goes first.
     assert select_action(_ord([new, old]), sessions, {}, BOARD,  set())[1]["id"] == "old"
-    assert select_action(_ord([new, old]), sessions, {"a": 1, "b": 1}, BOARD,  set())[1]["id"] == "old"
+    picked = select_action(_ord([new, old]), sessions, {"a": 1, "b": 1}, BOARD, set())
+    assert picked[1]["id"] == "old"
     # A drag outranks age: position 0 wins even though it was created later.
     dragged = dict(new, position=0)
     aged = dict(old, position=1)
@@ -244,14 +281,16 @@ def test_newest_session():
     # Must sort on the real payload field. Keying on a field the API doesn't have makes
     # every key equal, so max() silently returns the FIRST session -- and the pacer then
     # hands a stale session_id to session.launch once a step spawns a second session.
-    assert newest_session([_sess("a", "X", "1"), _sess("b", "X", "3"), _sess("c", "X", "2")])["id"] == "b"
+    sessions = [_sess("a", "X", "1"), _sess("b", "X", "3"), _sess("c", "X", "2")]
+    assert newest_session(sessions)["id"] == "b"
 
 def test_prune_booked():
     now, ttl = 1000.0, 360.0
     tasks = [{"id": "t", "workflow_step_id": "ip"}]
     # still WAITING at same (step, session) -> booking retained (launch not yet taken effect)
     ts_waiting = {"t": [_sess("s", "WAITING_FOR_INPUT")]}
-    assert prune_booked({("t", "ip", "s"): 990.0}, tasks, ts_waiting, now, ttl) == {("t", "ip", "s"): 990.0}
+    booked = {("t", "ip", "s"): 990.0}
+    assert prune_booked(booked, tasks, ts_waiting, now, ttl) == booked
     # turn started (RUNNING) -> booking cleared
     ts_running = {"t": [_sess("s", "RUNNING")]}
     assert prune_booked({("t", "ip", "s"): 990.0}, tasks, ts_running, now, ttl) == {}
@@ -260,9 +299,11 @@ def test_prune_booked_never_run_admission():
     """W1: a never-run admission booking (sid None) must survive while its session is invisible."""
     now, ttl = 1000.0, 360.0
     at_bk = [{"id": "t", "workflow_step_id": "bk"}]
-    no_sess = {"t": []}                                     # session not yet surfaced (detached goroutine)
+    # session not yet surfaced (detached goroutine)
+    no_sess = {"t": []}
     # within TTL -> retained, so is_launchable stays guarded and no second intent:start fires
-    assert prune_booked({("t", "bk", None): 900.0}, at_bk, no_sess, now, ttl) == {("t", "bk", None): 900.0}
+    fresh = {("t", "bk", None): 900.0}
+    assert prune_booked(fresh, at_bk, no_sess, now, ttl) == fresh
     # older than TTL -> expired, so a silently-failed launch can retry instead of wedging
     assert prune_booked({("t", "bk", None): 500.0}, at_bk, no_sess, now, ttl) == {}
     # session surfaced -> the None key no longer matches the task's key -> dropped naturally
@@ -280,7 +321,8 @@ def test_prune_booked_created_admission():
     now, ttl = 1000.0, 360.0
     at_bk = [{"id": "t", "workflow_step_id": "bk"}]
     created = {"t": [_sess("s", "CREATED")]}
-    assert prune_booked({("t", "bk", "s"): 900.0}, at_bk, created, now, ttl) == {("t", "bk", "s"): 900.0}
+    fresh = {("t", "bk", "s"): 900.0}
+    assert prune_booked(fresh, at_bk, created, now, ttl) == fresh
     assert prune_booked({("t", "bk", "s"): 500.0}, at_bk, created, now, ttl) == {}
     # Turn actually started -> state leaves CREATED -> guard no longer needed.
     running = {"t": [_sess("s", "RUNNING")]}
@@ -396,10 +438,17 @@ def test_visible_task_order_keeps_unplaced_behind_in_fifo():
     """"Not placed" means "not prioritized": those tasks keep the FIFO order they came in
     with, behind everything the user did place. Copying the sidebar's own newest-first
     fallback here would let merely creating a task jump a deliberately-set order."""
-    fifo = [_task("old", created="2026-01-01T00:00:00Z"), _task("new", created="2026-02-01T00:00:00Z"),
-            _task("placed", created="2026-03-01T00:00:00Z")]
-    assert [t["id"] for t in visible_task_order(fifo, [], ["placed"], {})] == \
-        ["placed", "old", "new"]
+    fifo = [
+        _task("old", created="2026-01-01T00:00:00Z"),
+        _task("new", created="2026-02-01T00:00:00Z"),
+        _task("placed", created="2026-03-01T00:00:00Z"),
+    ]
+    assert [t["id"] for t in visible_task_order(fifo, [], ["placed"], {})] == [
+        "placed",
+        "old",
+        "new",
+    ]
+
 
 def test_visible_task_order_pinned_float_to_top():
     tasks = [_task("a"), _task("b"), _task("c")]
@@ -449,7 +498,8 @@ def test_ordered_tasks_layers_manual_over_board_pull_order():
     in_flight = _task("wip", step="ip", pos=0)
     tasks = [queued_a, queued_b, in_flight]
     # Nothing placed by hand -> pure pull order: the in-flight column drains first.
-    assert [t["id"] for t in ordered_tasks(tasks, _settings(), "auto", ranks)] == ["wip", "qa", "qb"]
+    ordered = ordered_tasks(tasks, _settings(), "auto", ranks)
+    assert [t["id"] for t in ordered] == ["wip", "qa", "qb"]
     # Dragging a queued task to the top outranks the pull preference -- an explicit
     # instruction beats a heuristic, and the unplaced rest keeps pull order behind it.
     dragged = _settings(ordered=["qb"])
@@ -459,8 +509,11 @@ def test_ordered_tasks_layers_manual_over_board_pull_order():
 
 def test_ordered_tasks_modes():
     # Passed in newest-first to prove the mode, not the input order, decides the result.
-    tasks = [_task("new", created="2026-02-01T00:00:00Z"), _task("old", created="2026-01-01T00:00:00Z")]
-    fifo = ["old", "new"]   # equal step/position/priority -> created_at decides
+    tasks = [
+        _task("new", created="2026-02-01T00:00:00Z"),
+        _task("old", created="2026-01-01T00:00:00Z"),
+    ]
+    fifo = ["old", "new"]  # equal step/position/priority -> created_at decides
     manual = _settings(ordered=["new", "old"])
     assert [t["id"] for t in ordered_tasks(tasks, manual, "auto")] == ["new", "old"]
     assert [t["id"] for t in ordered_tasks(tasks, manual, "custom")] == ["new", "old"]

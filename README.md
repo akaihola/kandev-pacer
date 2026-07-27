@@ -145,7 +145,14 @@ that spends a turn.
 ```bash
 uv run pytest                              # the whole suite (no network, no quota, no server)
 uv run pytest tests/test_quota.py -k alpha # one file, or one test by name
+uv run ruff check src tests                # style and dead code
+uv run darker                              # reformat just the lines you changed
 ```
+
+`darker` rather than `ruff format`: it formats only the lines a change touches, so style
+converges as the code is edited instead of arriving as one sweep nobody can review. Both
+are configured in `pyproject.toml` — the formatter aims for 88 columns, the linter only
+errors past 100.
 
 [kandev]: https://github.com/kdlbs/kandev
 [docs/design.md]: docs/design.md

@@ -5,9 +5,19 @@ No network.
 
 from kandev_pacer.config import Settings, settings
 from kandev_pacer.quota import (
-    binding_label, ceiling_breached, clamp01, elapsed_frac,
-    gate_open, headroom, parse_windows, provider_missing, quota_verdict, tick_record,
-    usage_providers, window_records, worst_headroom,
+    binding_label,
+    ceiling_breached,
+    clamp01,
+    elapsed_frac,
+    gate_open,
+    headroom,
+    parse_windows,
+    provider_missing,
+    quota_verdict,
+    tick_record,
+    usage_providers,
+    window_records,
+    worst_headroom,
 )
 
 # --- pacing math (unchanged) ---
@@ -91,9 +101,11 @@ def test_provider_guard():
     """A PACER_PROVIDER that matches nothing must be caught, not silently fail open."""
     assert usage_providers(USAGE) == {"anthropic", "openai"}
     assert usage_providers({"agents": []}) == set()
-    assert provider_missing(USAGE, "claude")            # typo -> present providers, ours absent -> guard fires
+    # typo -> present providers, ours absent -> guard fires
+    assert provider_missing(USAGE, "claude")
     assert not provider_missing(USAGE, "anthropic")     # ours is present -> fine
-    assert not provider_missing({"agents": []}, "anthropic")  # empty payload -> can't tell -> don't withhold
+    # empty payload -> can't tell -> don't withhold
+    assert not provider_missing({"agents": []}, "anthropic")
 
 # --- structured log records ---
 

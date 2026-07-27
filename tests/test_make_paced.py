@@ -1,6 +1,12 @@
 """Pure planning tests for make_paced.py (no database)."""
 
-from kandev_pacer.make_paced import plan_changes, planned_steps, strip_auto_start, target_stage
+from kandev_pacer.make_paced import (
+    plan_changes,
+    planned_steps,
+    strip_auto_start,
+    target_stage,
+)
+
 
 def _step(id, name, events=None, stage="custom"):
     return {"id": id, "name": name, "events": events or {}, "stage_type": stage,
