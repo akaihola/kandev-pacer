@@ -92,18 +92,17 @@ def test_resolve_scope_restrict_by_id_or_name():
     # A restriction naming an unenrolled workflow still yields nothing to pace.
     assert resolve_scope(ENTRIES, restrict=["Priority Kanban"])[0] == []
 
-def test_resolve_scope_override_applies_only_to_its_own_workflow():
-    """An override names a step in one workflow; applying it everywhere would admit other
-    workflows' tasks into a step they don't own."""
-    _, _, _, admission, _ = resolve_scope(ENTRIES, override="fd-work")
-    assert admission == {"wf-ck": "ip", "wf-fd": "fd-work"}   # Paced Kanban keeps its own target
+def test_resolve_scope_gives_each_workflow_its_own_admission_step():
+    """Admission is per workflow: a queued task has to enter a step of its own board."""
+    _, _, _, admission, _ = resolve_scope(ENTRIES)
+    # Each lands on its own lowest-position work step: Feature Dev admits into Spec, not Work.
+    assert admission == {"wf-ck": "ip", "wf-fd": "fd-spec"}
 
 def test_queue_and_admission_target():
     assert queue_step_id(CLEAN) == "bk"
     assert admission_target(CLEAN) == "ip"                      # lowest-position paced step
     assert admission_target([_step("a", "A", otc=["move_to_next"], stage="work", pos=5),
                              _step("b", "B", otc=["move_to_next"], stage="work", pos=2)]) == "b"
-    assert admission_target(CLEAN, override="forced") == "forced"
     assert admission_target([_step("bk", "Backlog", start=True)]) is None  # no paced step
     # Work-shaped but untagged is not an admission target either -- admitting a task into an
     # un-enrolled step would start turns the pacer then cannot track as paced work.

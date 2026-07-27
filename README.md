@@ -54,7 +54,6 @@ pacer with the variable's name in the message rather than failing hours later.
 | `PACER_FAIL_BACKOFF` | 3 ticks | seconds before a refused launch is retried; doubles per consecutive failure, up to 8× |
 | `PACER_BLOCK_AFTER` | `2` | consecutive failures before the card is flagged `BLOCKED`. `0` keeps the pacer read-only |
 | `PACER_LOG` | `~/.local/state/kandev-pacer/pacer.jsonl` | JSONL event log. Empty disables it |
-| `PACER_ADMISSION_STEP_ID` | *(derived)* | force the step queued tasks are admitted into, instead of the lowest-position work step |
 | `KANDEV_DB` | `~/.kandev/data/kandev.db` | the database `make-paced` edits |
 
 ## Which task goes next

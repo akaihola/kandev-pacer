@@ -37,9 +37,8 @@ def queue_step_id(steps):
     )
 
 
-def admission_target(steps, override=None):
-    if override:
-        return override
+def admission_target(steps):
+    """The step a task admitted from the parked queue lands on: the first work step."""
     work = [step for step in steps if is_paced_step(step)]
     return min(work, key=lambda step: step.get("position", 0))["id"] if work else None
 
@@ -64,9 +63,9 @@ class Board:
     steps: dict          # workflow id -> its steps, as scanned
 
     @classmethod
-    def scan(cls, entries, restrict=(), override=None):
+    def scan(cls, entries, restrict=()):
         """Build from `client.workflow_entries()`: a (workflow, steps) pair per workflow."""
-        scope, work, queues, admission, skipped = resolve_scope(entries, restrict, override)
+        scope, work, queues, admission, skipped = resolve_scope(entries, restrict)
         return cls(
             scope=scope,
             work_steps=work,
@@ -95,7 +94,7 @@ class Board:
         return self.step_names.get(id_) or self.workflow_names.get(id_, id_)
 
 
-def resolve_scope(entries, restrict=(), override=None):
+def resolve_scope(entries, restrict=()):
     wanted = [value.lower() for value in restrict]
     scope, work, queues, admission, skipped = [], set(), set(), {}, []
     for workflow, steps in entries:
@@ -121,8 +120,7 @@ def resolve_scope(entries, restrict=(), override=None):
         queue = queue_step_id(steps)
         if queue:
             queues.add(queue)
-        own_override = override if override in {step["id"] for step in steps} else None
-        target = admission_target(steps, own_override)
+        target = admission_target(steps)
         if target:
             admission[workflow["id"]] = target
     return scope, work, queues, admission, skipped
@@ -143,10 +141,8 @@ def _has_on_enter(step, kind):
     )
 
 
-def lint_workflow(steps, admission_override=None):
+def lint_workflow(steps):
     """Everything suspicious about a workflow the pacer is about to run against."""
-    if admission_override is None:
-        admission_override = settings.admission_step_id
     works = paced_step_ids(steps)
     warnings = []
     for step in steps:
@@ -188,7 +184,7 @@ def lint_workflow(steps, admission_override=None):
             "no pace-eligible step (stage_type=work + on_turn_complete transition) "
             "-- nothing to pace"
         )
-    if admission_target(steps, admission_override) is None:
+    if admission_target(steps) is None:
         warnings.append("no admission target derivable")
     queue = queue_step_id(steps)
     if queue is None:

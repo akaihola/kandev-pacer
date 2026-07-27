@@ -388,7 +388,7 @@ def main():
         log.error(f"cannot reach kandev at {settings.url} ({error}). "
                   "Is it running? Set KANDEV_URL if it listens elsewhere.")
         return 1
-    board = Board.scan(entries, settings.paced_workflows, settings.admission_step_id)
+    board = Board.scan(entries, settings.paced_workflows)
     pacer = Pacer(board)
     if args.dump_order:
         dump_order(pacer)

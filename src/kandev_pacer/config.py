@@ -56,8 +56,6 @@ class Settings(BaseSettings):
         str(Path.home() / ".local" / "state" / "kandev-pacer" / "pacer.jsonl"),
         alias="PACER_LOG",
     )
-    # Normally derived: the lowest-position work step of each workflow.
-    admission_step_id: str = Field("", alias="PACER_ADMISSION_STEP_ID")
 
     @property
     def booking_ttl(self):
