@@ -36,18 +36,32 @@ slope, headroom moves as `dh/de = α − N·r`:
 **Turn shape** (349 completed turns, 96.1 h): median **11 s**, mean **124 s**, p90 **316 s**,
 max **75 min**. Heavily skewed — most turns are trivially short, a few very long.
 
-**The queue was deep.** Replaying the 302 turns across 18 tasks in the two paced workflows
-(`--history`), counting a task as a candidate in the gap between two of its own turns — a later
-turn exists, so work was genuinely pending, which is what `is_launchable` tests:
+**Whether the cap can bind at all is decided by workflow routing, not by queue depth.** A
+finished turn either leaves a task on another work step — where it is launchable again and the
+pacer can drive it onward by itself — or parks it until a human moves the card. `--history`
+calls these *chained* and *gated*, and the two boards here differ:
 
-| candidates waiting at once | 0 | 1 | 2 | 3 | 4 | 6 | 8 | 10 |
-|---|---|---|---|---|---|---|---|---|
-| share of span | 0.6 % | 3.7 % | 4.8 % | 25.5 % | 27.8 % | 8.0 % | 12.2 % | 11.1 % |
+| workflow | shape | routing | turns |
+|---|---|---|---|
+| `Paced Kanban` | **gated** | `In Progress` → `Review` (parked) | 276 (91 %) |
+| `Feature Dev` | **chained** | `Spec → Work → Review → QA → PR`, all work steps | 28 |
 
-**Two or more candidates were waiting 95.6 % of the span**, with the mode at 3–4. These are not
-conversational pauses: gaps under 5 minutes are 73 % of the *gaps* but only **0.2 % of
-candidate-seconds**, while 95.5 % of candidate-time comes from gaps over two hours — genuinely
-parked work.
+On the gated board the pacer gets **one turn per human hand-off**, no matter what the cap is.
+Two tasks can only run at once there if a human has put two cards on `In Progress`. On the
+chained board the pacer can run a task through five steps unattended, so the cap binds as soon
+as two tasks are in flight — but only two tasks have ever existed there.
+
+**A previous version of this document claimed the queue was deep 95.6 % of the time. That was
+wrong and is withdrawn.** It counted the gap between a task's turns as candidate time, which is
+only an upper bound: `is_launchable` also requires the task to be at a work step, and 91 % of
+the history is on the gated board, where a finished turn parks the task at `Review` and almost
+none of that gap is launchable. The exact figure is unrecoverable — `session_step_history` is
+empty, so where a task sat during a gap is not recorded. `--history` now prints the bound as a
+bound, with the routing shape beside it.
+
+What can be said: the gaps are parked work rather than conversational pauses (gaps under
+5 minutes are 73 % of the *gaps* but 0.2 % of candidate-seconds), and the live board at the time
+of writing had **0 launchable tasks** with 8 of 10 in Done.
 
 **Burn per stream ≈ 1× steady, order of magnitude only.** Correlating a usage probe against
 turn-seconds in flight gave 1.22, then 1.07, then 0.89 as busy time accrued with no further
@@ -82,8 +96,9 @@ This is an argument for `N ≥ 2` that is independent of quota entirely.
 ## Simulated
 
 `sim_concurrency.py` runs the real gate (`worst_headroom`, `gate_open`, `ceiling_breached`)
-over a 5-hour window, resampling durations from the 349 real turns, with a deep backlog — an
-assumption the history above supports. Turns completed / final consumption, `dead_time=300 s`:
+over a 5-hour window, resampling durations from the 349 real turns, with a deep backlog. Read
+it as *what a higher cap is worth when there is work to give it* — the section above is exactly
+the argument that this precondition is not established here. Turns completed / final consumption, `dead_time=300 s`:
 
 | burn | N=1 | N=2 | N=4 | N=8 |
 |-----:|:----|:----|:----|:----|
@@ -117,13 +132,17 @@ nothing for the occupied-slot problem above, so the two are complements, not alt
 
 1. **Nothing here has been exercised.** The pacer is not running. Before tuning its cap, run
    it — the JSONL log will answer in days what history can only approximate.
-2. **The premise is correct: the cap would bind.** Two or more tasks were launchable at once
-   95.6 % of the span. A single live snapshot showing zero launchable tasks was taken after the
-   board had drained (8 of 10 in Done) and is not representative.
-3. **Raise it to 2, for the interlock more than the quota.** At cap 1 a human working in a
-   paced workflow blocks the backlog entirely. Two slots decouple those, and the simulation
-   says the second slot is also where the throughput is (+47 %); the third and fourth are
-   nearly free but nearly worthless.
+2. **Whether the cap binds is a board-usage question, and history cannot answer it.** On the
+   gated board that carries 91 % of the history, the pacer gets one turn per hand-off and the
+   cap is irrelevant unless a human parks two cards on a work step at once. On the chained
+   board it binds as soon as two tasks are in flight. Both are choices about how the boards get
+   used — and since the pacer has never run, usage has never had reason to adapt to it. The
+   earlier statistical case for a deep queue does not survive scrutiny and is withdrawn.
+3. **Raise it to 2 anyway, for the interlock.** That argument is structural and needs no
+   queue-depth estimate: at cap 1 a human working in a paced workflow blocks the backlog
+   entirely, because their own session fills the slot. Two slots decouple those. The simulation
+   independently puts the throughput at the second slot (+47 %) should the queue ever be deep;
+   the third and fourth are nearly free but nearly worthless.
 4. **Prefer the tick rate for further throughput.** Same gain, no overshoot amplification,
    keeps cache locality. Event-driven launch on turn completion is the endpoint.
 5. **Size any dynamic cap from measured `r`.** `N ≤ (α + h·D/T) / r`: headroom converted to

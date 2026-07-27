@@ -30,7 +30,7 @@ import sys
 from datetime import datetime
 from pathlib import Path
 
-from pacer import ceiling_breached, gate_open, worst_headroom
+from pacer import ceiling_breached, gate_open, is_work_step, worst_headroom
 
 WINDOW = 18000.0          # 5-hour window, seconds
 INTERVAL = 120            # PACER_INTERVAL default
@@ -118,32 +118,66 @@ def levers(durations):
     print(f"\n  turns per 5h window; the ceiling is {WINDOW / INTERVAL:.0f} at 120s, "
           f"{WINDOW / 30:.0f} at 30s. ! = peak c > 1.0")
 
+def routing_shape(con, workflow_id):
+    """'chained' if a work step routes into another work step, else 'gated'.
+
+    Decides whether a finished turn leaves the task launchable (the pacer can drive it
+    onward by itself) or parks it until a human moves the card. On a gated board the pacer
+    gets one turn per hand-off no matter what the cap is, so the cap cannot bind there.
+    """
+    steps = [{"id": i, "events": json.loads(e or "{}")} for i, e in con.execute(
+        "SELECT id, events FROM workflow_steps WHERE workflow_id = ?", (workflow_id,))]
+    work = {s["id"] for s in steps if is_work_step(s)}
+    for s in steps:
+        if s["id"] not in work:
+            continue
+        for a in s["events"].get("on_turn_complete") or []:
+            target = (a.get("config") or {}).get("step_id") or a.get("step_id")
+            # move_to_next has no explicit target; on these boards the next step is a work
+            # step wherever the work steps are contiguous, which is the chained case.
+            if target is None or target in work:
+                return "chained"
+    return "gated"
+
 def history(db=DB, workflows=None):
     """Replay kandev's turn history: would a cap of 1 actually have bound?
 
     The simulation assumes a backlog is always waiting, which is the assumption the whole
-    case rests on. This checks it against what really sat on the board. A task counts as a
-    launch candidate in the gap between two of its own turns -- a later turn exists, so work
-    was genuinely pending -- which is the same condition is_launchable tests: parked at a
-    work step with an idle session.
+    case rests on. This checks it against what really sat on the board: a task counts as a
+    candidate in the gap between two of its own turns, since a later turn exists and work
+    was therefore pending.
 
-    Note what this cannot show. Every turn in the history is human-driven; if the pacer was
-    never running, the idle time is the absence of a launcher, not a pacer that chose to
-    withhold. Check that before reading the running distribution as the pacer's behaviour.
+    That gap count is an UPPER BOUND on launchable time, not a measurement of it, and on a
+    review-gated board it is a wild one. is_launchable also requires the task to be sitting
+    at a work step, and kandev records no step-transition history (session_step_history is
+    empty), so where a task actually sat during a gap cannot be recovered. The routing shape
+    printed per workflow is what tells you how far off the bound is:
+
+    - chained  -- work steps route into other work steps, so a finished turn leaves the task
+      launchable again and the gap really is candidate time.
+    - gated    -- every work step routes to a parked step, so a finished turn parks the task
+      until a human moves it. Almost none of the gap is launchable, and the bound is junk.
+
+    Note also what none of this can show: every turn in the history is human-driven. If the
+    pacer was never running, idle time is the absence of a launcher, not a pacer choosing to
+    withhold, and board usage never had a chance to adapt to one.
     """
     con = sqlite3.connect(f"file:{db}?mode=ro", uri=True)
     paced = workflows or [r[0] for r in con.execute(
         "SELECT DISTINCT workflow_id FROM workflow_steps WHERE stage_type = 'work'")]
     marks = ",".join("?" * len(paced))
     rows = con.execute(
-        "SELECT t.task_id, t.started_at, t.completed_at FROM task_session_turns t"
+        "SELECT k.workflow_id, t.task_id, t.started_at, t.completed_at FROM task_session_turns t"
         f" JOIN tasks k ON k.id = t.task_id WHERE t.completed_at IS NOT NULL"
         f" AND k.workflow_id IN ({marks}) ORDER BY t.started_at", paced).fetchall()
+    shapes = {w: routing_shape(con, w) for w in paced}
+    names = dict(con.execute(f"SELECT id, name FROM workflows WHERE id IN ({marks})", paced))
     con.close()
     epoch = lambda s: datetime.fromisoformat(s.replace(" ", "T")).timestamp()  # noqa: E731
-    by_task = {}
-    for tid, a, b in rows:
+    by_task, by_wf = {}, {}
+    for wid, tid, a, b in rows:
         by_task.setdefault(tid, []).append((epoch(a), epoch(b)))
+        by_wf.setdefault(wid, {}).setdefault(tid, []).append((epoch(a), epoch(b)))
 
     runs, cands, gaps = [], [], []
     for turns in by_task.values():
@@ -178,7 +212,24 @@ def history(db=DB, workflows=None):
         print(f"    {k}: {100 * cand_occ[k] / span:5.1f}%")
     deep = sum(v for k, v in cand_occ.items() if k >= 2)
     print(f"\n  cap=1 would read FULL for {100 * (span - run_occ.get(0, 0)) / span:.1f}% of the span")
-    print(f"  2+ candidates waiting at once for {100 * deep / span:.1f}% of the span")
+    print(f"  2+ candidates waiting at once for {100 * deep / span:.1f}% of the span"
+          "   <- UPPER BOUND, see per-workflow below")
+
+    print("\n  per workflow (the routing shape decides how loose that bound is):")
+    for wid, tasks in sorted(by_wf.items(), key=lambda kv: -sum(map(len, kv[1].values()))):
+        iv = [g for tr in tasks.values() for g in
+              zip([e for _, e in sorted(tr)][:-1], [s2 for s2, _ in sorted(tr)][1:])]
+        n = sum(len(v) for v in tasks.values())
+        if not iv:
+            print(f"    {names.get(wid, wid)!r} [{shapes[wid]}]: {n} turns, no gaps")
+            continue
+        o = occupancy(iv)
+        sp = max(e for tr in tasks.values() for _, e in tr) - min(
+            s2 for tr in tasks.values() for s2, _ in tr)
+        d = sum(v for k, v in o.items() if k >= 2)
+        note = "" if shapes[wid] == "chained" else "  (gated: a finished turn parks, so ~none of this is launchable)"
+        print(f"    {names.get(wid, wid)!r} [{shapes[wid]}]: {n} turns, {len(tasks)} tasks, "
+              f"2+ for {100 * d / sp:.1f}% of its span, max depth {max(o)}{note}")
     # Short gaps are a human between prompts, not parked work. They dominate the count and
     # are negligible in time, so they inflate "how often" without inflating "how long" --
     # worth separating before reading the candidate pool as a backlog.
