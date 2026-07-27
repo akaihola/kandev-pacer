@@ -29,6 +29,7 @@ import argparse
 import json
 import sqlite3
 import sys
+from contextlib import closing
 from pathlib import Path
 
 from .config import settings
@@ -245,7 +246,12 @@ def build_parser():
 def main():
     args = build_parser().parse_args()
 
-    connection = connect(args.db, writable=args.apply)
+    with closing(connect(args.db, writable=args.apply)) as connection:
+        report(connection, args)
+
+
+def report(connection, args):
+    """List the workflows, or plan and optionally apply the change to one."""
     if not args.workflow:
         for row in connection.execute("SELECT id, name FROM workflows ORDER BY name"):
             print(f"{row['id']}  {row['name']}")

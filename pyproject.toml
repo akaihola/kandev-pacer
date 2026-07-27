@@ -22,6 +22,7 @@ dev = [
     "darker[ruff]>=3.0.0",
     "graylint",
     "pytest>=9.1.1",
+    "pytest-cov>=7.1.0",
 ]
 
 [tool.ruff]
@@ -59,6 +60,9 @@ lint = ["ruff check --output-format concise"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+# Coverage is how the untested HTTP layer and the untested gate-closed branch were
+# found; keep it one flag away.
+#   uv run pytest --cov=kandev_pacer --cov-report=term-missing
 # make_paced.py sits at the repo root and the helpers sit in tests/, so both join
 # the installed package on the import path.
 pythonpath = ["tests"]

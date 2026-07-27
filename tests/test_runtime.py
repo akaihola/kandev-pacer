@@ -12,6 +12,7 @@ from conftest import CLEAN
 from conftest import board_task as _task
 from conftest import one_session as _sess
 
+from kandev_pacer import client
 from kandev_pacer.config import MAX_ATTEMPTS, settings
 from kandev_pacer.runtime import Pacer, dump_order
 from kandev_pacer.selection import fail_backoff
@@ -298,3 +299,54 @@ def test_a_shut_gate_still_records_the_board(pacer, board, monkeypatch):
     assert written[0]["launchable"] == 1, "quota going unspent while work waits"
     assert written[0]["running"] == 0
     assert written[0]["windows"][0]["label"] == "5-hour"
+
+
+# --- refusals that are one task's problem, not the board's ---
+
+def test_a_refused_drain_holds_that_task_and_frees_the_tick(pacer, board):
+    """kandev can refuse a drain (session busy). That spends no quota either."""
+    tick(pacer, board, [_task("t1", "rv", "Feedback", created="1"),
+                        _task("t2", "ip", "Fine", created="2")],
+         {"t1": _sess("sBusy", "WAITING_FOR_INPUT"),
+          "t2": _sess("s2", "WAITING_FOR_INPUT")}, {"sBusy": 1})
+    assert actions(board) == ["message.queue.drain", "session.launch"], \
+        "the refused drain must not end the tick"
+    assert pacer.failed[("t1", "rv", "sBusy")]["attempts"] == 1
+    assert not any(key.task == "t1" for key in pacer.booked)
+
+
+def test_a_workflow_with_no_admission_target_does_not_starve_the_board(pacer, board):
+    """A task parked in a queue whose board has no work step can never be admitted.
+
+    Left selected it would be the top pick every tick, so it has to be recorded as a
+    failure and stepped over, exactly like a launch kandev refuses.
+    """
+    pacer.board = replace(pacer.board, admission={})
+    was_open = tick(pacer, board, [_task("q", "bk", "Queued")],
+                    {"q": _sess("sq", "CREATED")}, {})
+    assert actions(board) == [], "nothing to launch it into, so no turn is spent"
+    assert pacer.failed[("q", "bk", "sq")]["attempts"] == 1
+    assert pacer.booked == {}
+    assert was_open is True, "one unlaunchable task must not shut the gate"
+
+
+def test_a_task_that_moved_since_selection_is_skipped_not_launched(pacer, board, monkeypatch):
+    """Selection ran against a snapshot; a turn is expensive enough to re-check.
+
+    attempt() re-reads the board, so a task a human dragged between the snapshot and
+    the launch is skipped rather than started at a step it has already left.
+    """
+    board.load([_task("t", "ip", "Ready")], {"t": _sess("s", "WAITING_FOR_INPUT")}, {})
+    reads = []
+
+    def moving(path):
+        if path.endswith("/tasks"):
+            reads.append(path)
+            if len(reads) > 1:        # the re-read inside attempt(): it moved to Review
+                return {"tasks": [_task("t", "rv", "Ready")]}
+        return board.get(path)
+
+    monkeypatch.setattr(client, "get", moving)
+    assert pacer.tick(was_open=True) is True
+    assert actions(board) == [], "a task that moved spends nothing"
+    assert pacer.booked == {}
