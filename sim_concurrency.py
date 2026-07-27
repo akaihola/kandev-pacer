@@ -19,6 +19,7 @@ that were actually in flight. Everything else here is derived from the repo's ow
 
     ./sim_concurrency.py                 # policy sweep
     ./sim_concurrency.py --levers        # concurrency vs tick rate, side by side
+    ./sim_concurrency.py --history       # would the cap have bound? replayed from kandev.db
     ./sim_concurrency.py --measure LOG   # estimate burn from a pacer.jsonl + kandev.db
 """
 import json
@@ -117,6 +118,74 @@ def levers(durations):
     print(f"\n  turns per 5h window; the ceiling is {WINDOW / INTERVAL:.0f} at 120s, "
           f"{WINDOW / 30:.0f} at 30s. ! = peak c > 1.0")
 
+def history(db=DB, workflows=None):
+    """Replay kandev's turn history: would a cap of 1 actually have bound?
+
+    The simulation assumes a backlog is always waiting, which is the assumption the whole
+    case rests on. This checks it against what really sat on the board. A task counts as a
+    launch candidate in the gap between two of its own turns -- a later turn exists, so work
+    was genuinely pending -- which is the same condition is_launchable tests: parked at a
+    work step with an idle session.
+
+    Note what this cannot show. Every turn in the history is human-driven; if the pacer was
+    never running, the idle time is the absence of a launcher, not a pacer that chose to
+    withhold. Check that before reading the running distribution as the pacer's behaviour.
+    """
+    con = sqlite3.connect(f"file:{db}?mode=ro", uri=True)
+    paced = workflows or [r[0] for r in con.execute(
+        "SELECT DISTINCT workflow_id FROM workflow_steps WHERE stage_type = 'work'")]
+    marks = ",".join("?" * len(paced))
+    rows = con.execute(
+        "SELECT t.task_id, t.started_at, t.completed_at FROM task_session_turns t"
+        f" JOIN tasks k ON k.id = t.task_id WHERE t.completed_at IS NOT NULL"
+        f" AND k.workflow_id IN ({marks}) ORDER BY t.started_at", paced).fetchall()
+    con.close()
+    epoch = lambda s: datetime.fromisoformat(s.replace(" ", "T")).timestamp()  # noqa: E731
+    by_task = {}
+    for tid, a, b in rows:
+        by_task.setdefault(tid, []).append((epoch(a), epoch(b)))
+
+    runs, cands, gaps = [], [], []
+    for turns in by_task.values():
+        turns.sort()
+        runs += turns
+        for i in range(len(turns) - 1):
+            cands.append((turns[i][1], turns[i + 1][0]))
+            gaps.append(turns[i + 1][0] - turns[i][1])
+    if not runs:
+        sys.exit("no completed turns in paced workflows")
+
+    def occupancy(intervals):
+        # -d in the key opens before it closes at an identical timestamp; otherwise a
+        # back-to-back pair closes first and the count dips to a nonsensical -1.
+        ev = sorted([(s, 1) for s, _ in intervals] + [(e, -1) for _, e in intervals],
+                    key=lambda x: (x[0], -x[1]))
+        cur, out, prev = 0, {}, ev[0][0]
+        for t, d in ev:
+            out[cur] = out.get(cur, 0) + (t - prev)
+            prev, cur = t, cur + d
+        return out
+
+    span = max(e for _, e in runs) - min(s for s, _ in runs)
+    run_occ, cand_occ = occupancy(runs), occupancy(cands)
+    print(f"{len(rows)} turns, {len(by_task)} tasks, {len(paced)} paced workflow(s), "
+          f"{span / 3600:.1f}h span\n")
+    print("  concurrently running (what the cap counts):")
+    for k in sorted(run_occ):
+        print(f"    {k}: {100 * run_occ[k] / span:5.1f}%")
+    print("\n  launch candidates waiting at once:")
+    for k in sorted(cand_occ):
+        print(f"    {k}: {100 * cand_occ[k] / span:5.1f}%")
+    deep = sum(v for k, v in cand_occ.items() if k >= 2)
+    print(f"\n  cap=1 would read FULL for {100 * (span - run_occ.get(0, 0)) / span:.1f}% of the span")
+    print(f"  2+ candidates waiting at once for {100 * deep / span:.1f}% of the span")
+    # Short gaps are a human between prompts, not parked work. They dominate the count and
+    # are negligible in time, so they inflate "how often" without inflating "how long" --
+    # worth separating before reading the candidate pool as a backlog.
+    short = [g for g in gaps if g < 300]
+    print(f"  gaps <5min: {100 * len(short) / len(gaps):.0f}% of gaps but "
+          f"{100 * sum(short) / sum(gaps):.1f}% of candidate-seconds (a human between prompts)")
+
 def measure(log_path, db=DB):
     """Estimate `burn` from a real log: consumption per turn-second actually in flight.
 
@@ -153,6 +222,11 @@ def measure(log_path, db=DB):
     if busy <= 0:
         sys.exit("no turns ran during the sample; burn is unmeasurable from this log")
     burn = dc / (busy / WINDOW)
+    if burn <= 0:
+        # Routine, not exceptional: consumption is whole-percent quantized and arrives in
+        # lumps, so a short sample can easily span turns without spanning a step.
+        sys.exit(f"consumption did not move across this sample ({busy:.0f} turn-seconds ran)."
+                 "\nburn is unmeasurable until the log spans at least one step -- sample longer.")
     print(f"\nburn = {burn:.2f} x steady   "
           f"(one stream would spend the window in {WINDOW / 60 / burn:.0f} min)")
     if len(steps) < 3:
@@ -167,6 +241,8 @@ def measure(log_path, db=DB):
 if __name__ == "__main__":
     if "--measure" in sys.argv:
         measure(sys.argv[sys.argv.index("--measure") + 1])
+    elif "--history" in sys.argv:
+        history()
     else:
         d = turn_durations()
         d.sort()
