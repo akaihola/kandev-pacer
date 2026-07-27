@@ -20,6 +20,7 @@ uv sync                                   # create the environment, install the 
 uv run make-paced                         # list workflows in the kandev SQLite DB
 uv run make-paced 'Paced Kanban'          # dry run: show the edits pacing needs
 uv run make-paced 'Paced Kanban' --apply  # write them (the server can stay up; WAL)
+uv run make-paced 'Paced Kanban' --unpace --apply   # stop pacing that board
 
 uv run kandev-pacer --dump-order          # the queue launches will follow, spending nothing
 uv run kandev-pacer                       # start the pacing loop (lints on startup)
@@ -31,8 +32,11 @@ routes away on turn completion `stage_type=work`. Both edits go straight to
 `~/.kandev/data/kandev.db`, because `stage_type` has no API, UI or import surface. A
 workflow re-import silently resets it — re-run `make-paced` after one.
 
-The pacer paces **every** enrolled workflow it finds. It prints the ones it is pacing and
-the ones it is not, with the reason, at startup and in `--dump-order`.
+Enrollment is the *only* opt-in: the pacer paces every enrolled workflow and nothing else.
+`--unpace` is how a board stops being paced — it clears the `work` tag, leaving the board
+manual rather than self-starting, since `auto_start_agent` is not put back. The pacer prints
+the workflows it is pacing and the ones it is not, with the reason, at startup and in
+`--dump-order`.
 
 ## Configuration
 
@@ -43,7 +47,6 @@ pacer with the variable's name in the message rather than failing hours later.
 | --- | --- | --- |
 | `KANDEV_URL` | `http://127.0.0.1:38429` | where kandev listens |
 | `KANDEV_WS_URL` | derived from `KANDEV_URL` | the `/ws` endpoint, if it differs |
-| `PACED_WORKFLOW_ID` | *(unset)* | comma-separated ids or names to narrow the scope; unset paces every enrolled workflow |
 | `PACER_PROVIDER` | `anthropic` | which usage agent to gate on. A name matching nothing **fails closed** rather than pacing blind |
 | `PACER_CONCURRENCY` | `1` | how many paced turns may run at once |
 | `PACER_ALPHA` | `1.0` | target burn line. Below 1 aims under steady, finishing each window with quota spare |

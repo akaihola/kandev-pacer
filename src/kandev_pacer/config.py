@@ -6,10 +6,10 @@ changing one is a code change, not a configuration change.
 """
 
 from pathlib import Path
-from typing import Annotated, Literal
+from typing import Literal
 
 from pydantic import Field, field_validator, model_validator
-from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
+from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
@@ -26,12 +26,6 @@ class Settings(BaseSettings):
 
     url: str = Field("http://127.0.0.1:38429", alias="KANDEV_URL")
     ws_url: str = Field("", alias="KANDEV_WS_URL")
-    # ids or names; empty means "every enrolled workflow", which is the normal case.
-    # NoDecode: take the raw string, since pydantic would otherwise read a list field
-    # from the environment as JSON, and this is the comma-separated list a person types.
-    paced_workflows: Annotated[list[str], NoDecode] = Field(
-        default_factory=list, alias="PACED_WORKFLOW_ID"
-    )
     provider: str = Field("anthropic", alias="PACER_PROVIDER")
 
     # How many turns may be in flight at once.
@@ -72,15 +66,6 @@ class Settings(BaseSettings):
     @classmethod
     def _lowercase(cls, value):
         return value.lower() if isinstance(value, str) else value
-
-    @field_validator("paced_workflows", mode="before")
-    @classmethod
-    def _split_commas(cls, value):
-        # pydantic parses list fields from the environment as JSON; this is a plain
-        # comma-separated list, which is what a person types into a systemd unit.
-        if isinstance(value, str):
-            return [part.strip() for part in value.split(",") if part.strip()]
-        return value
 
     @model_validator(mode="after")
     def _derive(self):

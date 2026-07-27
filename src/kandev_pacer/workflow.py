@@ -60,9 +60,9 @@ class Board:
     steps: dict = field(default_factory=dict)          # workflow id -> its steps, as scanned
 
     @classmethod
-    def scan(cls, entries, restrict=()):
+    def scan(cls, entries):
         """Build from `client.workflow_entries()`: a (workflow, steps) pair per workflow."""
-        scope, work, queues, admission, skipped = resolve_scope(entries, restrict)
+        scope, work, queues, admission, skipped = resolve_scope(entries)
         return cls(
             scope=scope,
             work_steps=work,
@@ -96,17 +96,14 @@ class Board:
         return workflow.get("name") or workflow["id"]
 
 
-def resolve_scope(entries, restrict=()):
-    wanted = [value.lower() for value in restrict]
+def resolve_scope(entries):
+    """Split every workflow kandev knows into the paced ones and the reasons for the rest.
+
+    Enrollment is the only opt-in: a workflow is paced exactly when `make-paced` has
+    tagged a step, and `make-paced --unpace` is how it stops being paced.
+    """
     scope, work, queues, admission, skipped = [], set(), set(), {}, []
     for workflow, steps in entries:
-        if (
-            wanted
-            and workflow["id"].lower() not in wanted
-            and (workflow.get("name") or "").lower() not in wanted
-        ):
-            skipped.append((workflow, "not named in PACED_WORKFLOW_ID"))
-            continue
         eligible = paced_step_ids(steps)
         if not eligible:
             skipped.append(

@@ -66,15 +66,6 @@ def test_resolve_scope_never_paces_an_untagged_queue():
     assert "pk-bk" not in work
     assert "pk-ip" not in work
 
-def test_resolve_scope_restrict_by_id_or_name():
-    scope, _, _, _, skipped = resolve_scope(ENTRIES, restrict=["Feature Dev"])
-    assert scope == ["wf-fd"]                          # matched by name, case-insensitively
-    assert {wf["name"] for wf, _ in skipped} == {"Priority Kanban", "Paced Kanban"}
-    assert resolve_scope(ENTRIES, restrict=["wf-ck"])[0] == ["wf-ck"]          # by id
-    assert resolve_scope(ENTRIES, restrict=["feature dev"])[0] == ["wf-fd"]    # case-insensitive
-    # A restriction naming an unenrolled workflow still yields nothing to pace.
-    assert resolve_scope(ENTRIES, restrict=["Priority Kanban"])[0] == []
-
 def test_resolve_scope_gives_each_workflow_its_own_admission_step():
     """Admission is per workflow: a queued task has to enter a step of its own board."""
     _, _, _, admission, _ = resolve_scope(ENTRIES)

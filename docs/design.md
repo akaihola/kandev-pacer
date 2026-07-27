@@ -114,9 +114,18 @@ Parked steps (Review/Done, the queue) must route via `on_turn_start`/`on_comment
 one flat set; **admission is per workflow**, since a queued task must be admitted into a step of
 its own board.
 
-`PACED_WORKFLOW_ID` (comma-separated ids *or* names) narrows the scope; unset — the default —
-paces every enrolled workflow. **This changed:** it used to default to one hardcoded workflow id.
-Enrollment, not this variable, is now the normal way to opt a workflow in.
+**Enrollment is the only opt-in, and there is exactly one of it.** The pacer paces every
+enrolled workflow and nothing else. `make-paced '<workflow>' --apply` enrolls one;
+`make-paced '<workflow>' --unpace --apply` stops it, by clearing the `work` tag that made it
+eligible. Earlier versions also had a `PACED_WORKFLOW_ID` environment variable narrowing the
+scope, which meant two different answers to "is this board paced?" — the database said one
+thing, the environment another. It was removed once `--unpace` existed to cover the case it
+was really being kept for.
+
+Unpacing deliberately does **not** restore `auto_start_agent`: nothing records what was there
+before, and putting it back would let tasks start turns on their own — the opposite of what
+someone stopping the pacer wants. An unpaced board is a manual one; a finished turn waits for
+a person.
 
 On startup, and in `--dump-order`, the pacer prints the workflows it is pacing **and the ones it
 is not, with the reason** — a workflow silently out of scope is how a task dragged to the top of

@@ -20,9 +20,10 @@ so the change is visible immediately. A workflow re-import resets stage_type
 to 'custom' -- rerun this script after any import.
 
 Usage:
-    uv run make-paced                      # list workflows
-    uv run make-paced 'Paced Kanban'       # dry run (name or id)
-    uv run make-paced 'Paced Kanban' --apply
+    uv run make-paced                              # list workflows
+    uv run make-paced 'Paced Kanban'               # dry run (name or id)
+    uv run make-paced 'Paced Kanban' --apply       # enrol it
+    uv run make-paced 'Paced Kanban' --unpace --apply   # stop pacing it
 """
 import argparse
 import json
@@ -93,6 +94,29 @@ def plan_changes(steps, review_names=frozenset({"review"}), approval_names=froze
                             "events": events, "removed": removed,
                             "stage_from": step.get("stage_type"), "stage_to": stage})
     return changes
+
+
+def plan_unpace(steps):
+    """Change records that un-enrol a workflow: drop the 'work' tag from every step.
+
+    The pacer paces a workflow exactly while some step is tagged 'work', so clearing
+    the tag is the whole of stopping. `auto_start_agent` is deliberately *not* put
+    back: nothing records what was there, and restoring it would let tasks start
+    turns by themselves, which is the opposite of what someone stopping the pacer
+    wants. An unpaced board is a manual one -- a finished turn waits for a person.
+    """
+    return [
+        {
+            "id": step["id"],
+            "name": step.get("name", ""),
+            "events": step.get("events") or {},
+            "removed": 0,
+            "stage_from": step.get("stage_type"),
+            "stage_to": "custom",
+        }
+        for step in steps
+        if (step.get("stage_type") or "").lower() == "work"
+    ]
 
 
 def planned_steps(steps, changes):
@@ -178,19 +202,43 @@ def describe(step, change):
 def main():
     parser = argparse.ArgumentParser(
         prog="make-paced",
-        description="Make a Kandev workflow paced: strip auto_start_agent, set stage_type.")
-    parser.add_argument("workflow", nargs="?",
-                        help="workflow id or name (omit to list workflows)")
-    parser.add_argument("--db", default=settings.db_path, metavar="PATH",
-                        help=f"kandev SQLite database (default: {settings.db_path})")
-    parser.add_argument("--review", action="append", default=[], metavar="NAME",
-                        help="additional step name to tag stage_type='review' (repeatable;"
-                             " 'Review' is always included)")
-    parser.add_argument("--approval", action="append", default=[], metavar="NAME",
-                        help="step name to tag stage_type='approval' (repeatable). A step"
-                             " already tagged 'approval' by hand is kept without this.")
-    parser.add_argument("--apply", action="store_true",
-                        help="write the changes (default: dry run)")
+        description="Make a Kandev workflow paced: strip auto_start_agent, set stage_type.",
+    )
+    parser.add_argument(
+        "workflow", nargs="?", help="workflow id or name (omit to list workflows)"
+    )
+    parser.add_argument(
+        "--db",
+        default=settings.db_path,
+        metavar="PATH",
+        help=f"kandev SQLite database (default: {settings.db_path})",
+    )
+    parser.add_argument(
+        "--review",
+        action="append",
+        default=[],
+        metavar="NAME",
+        help="additional step name to tag stage_type='review' (repeatable;"
+        " 'Review' is always included)",
+    )
+    parser.add_argument(
+        "--approval",
+        action="append",
+        default=[],
+        metavar="NAME",
+        help="step name to tag stage_type='approval' (repeatable). A step"
+        " already tagged 'approval' by hand is kept without this.",
+    )
+    parser.add_argument(
+        "--unpace",
+        action="store_true",
+        help="stop pacing this workflow: clear stage_type='work' from"
+        " every step. Leaves auto_start_agent off, so the board"
+        " becomes manual rather than self-starting.",
+    )
+    parser.add_argument(
+        "--apply", action="store_true", help="write the changes (default: dry run)"
+    )
     args = parser.parse_args()
 
     connection = connect(args.db, writable=args.apply)
@@ -201,22 +249,38 @@ def main():
 
     workflow = resolve_workflow(connection, args.workflow)
     steps = load_steps(connection, workflow["id"])
-    review_names = {"review"} | {name.strip().lower() for name in args.review}
-    approval_names = {name.strip().lower() for name in args.approval}
-    changes = plan_changes(steps, review_names, approval_names)
+    if args.unpace:
+        changes = plan_unpace(steps)
+    else:
+        changes = plan_changes(
+            steps,
+            {"review"} | {name.strip().lower() for name in args.review},
+            {name.strip().lower() for name in args.approval},
+        )
     by_id = {change["id"]: change for change in changes}
 
     print(f"workflow {workflow['name']!r} ({workflow['id']})")
     for step in steps:
         print(describe(step, by_id.get(step["id"])))
-    for warning in lint_workflow(planned_steps(steps, changes)):
-        print(f"lint: {warning}", file=sys.stderr)
+    # Linting an un-enrolled workflow would warn about every step for not being paced,
+    # which is the point of unpacing rather than a problem with it.
+    if not args.unpace:
+        for warning in lint_workflow(planned_steps(steps, changes)):
+            print(f"lint: {warning}", file=sys.stderr)
 
     if not changes:
-        print("already paced; nothing to do")
+        print(
+            "not paced; nothing to do"
+            if args.unpace
+            else "already paced; nothing to do"
+        )
     elif args.apply:
         apply_changes(connection, changes)
-        print(f"applied {len(changes)} step update(s)"
-              " (a workflow re-import resets stage_type; rerun after one)")
+        print(f"applied {len(changes)} step update(s)")
+        print(
+            "no longer paced"
+            if args.unpace
+            else "a workflow re-import resets stage_type; rerun after one"
+        )
     else:
         print("dry run; pass --apply to write")
