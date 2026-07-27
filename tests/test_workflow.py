@@ -7,7 +7,7 @@ from support import sess as _sess, step as _step, task as _task
 from kandev_pacer.workflow import (
     action_key, admission_target, backed_off, effective_sidebar_view, fail_backoff,
     has_custom_sort_view, is_drainable, is_launchable, is_paced_step, is_work_step,
-    launch_target, lint_workflow, named, newest_session, ordered_tasks, paced_step_ids,
+    launch_target, lint_workflow, newest_session, ordered_tasks, paced_step_ids,
     pick_intent, priority_rank, prune_booked, prune_failures, queue_step_id, resolve_scope,
     select_action, step_names, step_ranks, task_order_key, visible_task_order,
 )
@@ -45,9 +45,8 @@ def test_is_paced_step_needs_both_halves():
 def test_step_names():
     names = step_names(CLEAN)
     assert names["ip"] == "In Progress"
-    assert named("ip", names) == "In Progress"
-    assert named("gone", names) == "gone"            # unknown id stays identifiable in the log
-    assert named(None, names) is None                # no queue/admission step -> prints None
+    # An unknown id has to stay identifiable in the log rather than vanish.
+    assert names.get("gone", "gone") == "gone"
     assert step_names([{"id": "x"}])["x"] == "x"     # nameless step falls back to its id
 
 # The three live workflows on gogo, which between them cover every scope case.
@@ -398,22 +397,22 @@ def test_action_key_is_the_same_shape_as_a_booking():
     # No session at all is a real, distinct key -- that is the admission case.
     assert action_key({"id": "t"}, []) == ("t", "", None)
 
-def test_fail_backoff_doubles_then_flattens():
-    assert fail_backoff(1, base=100) == 100
-    assert fail_backoff(2, base=100) == 200
-    assert fail_backoff(3, base=100) == 400
+def test_fail_backoff_doubles_then_flattens(backoff_100):
+    assert fail_backoff(1) == 100
+    assert fail_backoff(2) == 200
+    assert fail_backoff(3) == 400
     # Flattens instead of growing forever: a task that stays broken should keep costing an
     # occasional retry, not drift out to one attempt a week.
-    assert fail_backoff(99, base=100) == 100 * 8
+    assert fail_backoff(99) == 100 * 8
 
-def test_backed_off_holds_a_task_only_until_its_wait_is_up():
+def test_backed_off_holds_a_task_only_until_its_wait_is_up(backoff_100):
     failures = {("t", "ip", "s"): _fail(1000.0)}
-    assert backed_off(failures, 1050.0, base=100) == {("t", "ip", "s")}
-    assert backed_off(failures, 1150.0, base=100) == set()
+    assert backed_off(failures, 1050.0) == {("t", "ip", "s")}
+    assert backed_off(failures, 1150.0) == set()
     # A second failure buys a longer wait, so a hopeless task stops costing round trips.
-    assert backed_off({("t", "ip", "s"): _fail(1000.0, attempts=2)}, 1150.0, base=100)
+    assert backed_off({("t", "ip", "s"): _fail(1000.0, attempts=2)}, 1150.0)
 
-def test_a_backed_off_task_stops_being_selected():
+def test_a_backed_off_task_stops_being_selected(backoff_100):
     """The wedge, in one assertion: the broken task IS the top candidate, every tick.
 
     Sorted oldest-first, a task kandev refuses to launch is picked again and again, so nothing
@@ -423,7 +422,7 @@ def test_a_backed_off_task_stops_being_selected():
     ok = {"id": "g", "workflow_step_id": "ip", "created_at": "2"}
     sessions = {"b": [_sess("s1", "CREATED")], "g": [_sess("s2", "WAITING_FOR_INPUT")]}
     assert select_action(_ord([broken, ok]), sessions, {}, WORK, QUEUE, set())[1]["id"] == "b"
-    held = backed_off({("b", "ip", "s1"): _fail(1000.0)}, 1050.0, base=100)
+    held = backed_off({("b", "ip", "s1"): _fail(1000.0)}, 1050.0)
     assert select_action(_ord([broken, ok]), sessions, {}, WORK, QUEUE, held)[1]["id"] == "g"
 
 def test_prune_failures_keeps_the_count_while_the_situation_holds():

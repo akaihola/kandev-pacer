@@ -122,8 +122,9 @@ def _epoch(timestamp):
     return datetime.fromisoformat(timestamp.replace("Z", "+00:00")).timestamp()
 
 
-def parse_windows(usage, provider=None):
-    provider = settings.provider if provider is None else provider
+def parse_windows(usage):
+    """The quota windows for the configured provider, as fractions and epoch seconds."""
+    provider = settings.provider
     windows = []
     for agent in usage.get("agents", []):
         agent_usage = agent.get("usage") or {}

@@ -17,6 +17,7 @@ import pytest
 import websocket
 
 from kandev_pacer import client
+from kandev_pacer.config import settings
 
 STEPS = [
     {"id": "bk", "name": "Backlog", "is_start_step": True, "position": 0, "events": {}},
@@ -136,6 +137,12 @@ def _frame(rid, kind, action, payload):
 
 def _iso_in(seconds):
     return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time() + seconds))
+
+
+@pytest.fixture
+def backoff_100(monkeypatch):
+    """A round PACER_FAIL_BACKOFF, so the doubling is readable in the assertions."""
+    monkeypatch.setattr(settings, "fail_backoff", 100)
 
 
 @pytest.fixture

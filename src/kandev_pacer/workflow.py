@@ -136,10 +136,6 @@ def step_names(steps):
     return {step["id"]: step.get("name") or step["id"] for step in steps}
 
 
-def named(id_, names):
-    return names.get(id_, id_)
-
-
 def _has_on_enter(step, kind):
     events = step.get("events") or {}
     return any(
@@ -147,7 +143,8 @@ def _has_on_enter(step, kind):
     )
 
 
-def lint_workflow(steps, enrolled_only=True, admission_override=None):
+def lint_workflow(steps, admission_override=None):
+    """Everything suspicious about a workflow the pacer is about to run against."""
     if admission_override is None:
         admission_override = settings.admission_step_id
     works = paced_step_ids(steps)
@@ -175,7 +172,7 @@ def lint_workflow(steps, enrolled_only=True, admission_override=None):
                 f"step {name!r} routes on on_turn_complete (work-shaped) "
                 f"but is tagged stage_type={stage!r}"
             )
-        elif routes and enrolled_only:
+        elif routes:
             warnings.append(
                 f"step {name!r} routes on on_turn_complete but is tagged "
                 f"stage_type={stage or 'custom'!r} -> NOT paced "
@@ -186,8 +183,6 @@ def lint_workflow(steps, enrolled_only=True, admission_override=None):
                 f"step {name!r} is tagged stage_type='work' but has no "
                 "on_turn_complete transition (parked)"
             )
-    if not enrolled_only:
-        return warnings
     if not works:
         warnings.append(
             "no pace-eligible step (stage_type=work + on_turn_complete transition) "
@@ -200,7 +195,7 @@ def lint_workflow(steps, enrolled_only=True, admission_override=None):
         warnings.append("no start step (parked queue) found")
     elif queue in works:
         warnings.append(
-            f"start step {named(queue, step_names(steps))!r} is itself pace-eligible "
+            f"start step {step_names(steps).get(queue, queue)!r} is itself pace-eligible "
             "-- the parked queue will execute rather than hold (tasks never wait there)"
         )
     return warnings
@@ -377,16 +372,17 @@ def live_keys(tasks, task_sessions):
     }
 
 
-def fail_backoff(attempts, base=None):
-    base = settings.fail_backoff if base is None else base
-    return base * min(2 ** max(attempts - 1, 0), FAIL_BACKOFF_MAX_MULT)
+def fail_backoff(attempts):
+    """Seconds to hold a task after `attempts` consecutive refusals: doubling, then flat."""
+    return settings.fail_backoff * min(2 ** max(attempts - 1, 0), FAIL_BACKOFF_MAX_MULT)
 
 
-def backed_off(failures, now, base=None):
+def backed_off(failures, now):
+    """The action keys still inside their backoff window."""
     return {
         key
         for key, failure in failures.items()
-        if now - failure["at"] < fail_backoff(failure["attempts"], base)
+        if now - failure["at"] < fail_backoff(failure["attempts"])
     }
 
 

@@ -3,7 +3,7 @@
 No network.
 """
 
-from kandev_pacer.config import Settings
+from kandev_pacer.config import Settings, settings
 from kandev_pacer.quota import (
     binding_label, ceiling_breached, clamp01, elapsed_frac,
     gate_open, headroom, parse_windows, provider_missing, quota_verdict, tick_record,
@@ -70,19 +70,22 @@ USAGE = {"agents": [
         {"label": "7-day", "utilization_pct": 10, "reset_at": "2026-07-29T18:51:33+03:00"}]}}]}
 
 def test_parse_windows_real_shape():
-    ws = parse_windows(USAGE, provider="anthropic")
+    ws = parse_windows(USAGE)
     assert len(ws) == 3                                   # all 3 anthropic windows, codex dropped
     assert [round(w["consumed_frac"], 2) for w in ws] == [0.09, 0.21, 0.09]
     assert [w["duration_s"] for w in ws] == [18000, 604800, 604800]
 
-def test_parse_windows_provider_filter():
-    assert len(parse_windows(USAGE, provider="openai")) == 1   # only codex survives
-    assert parse_windows(USAGE, provider="nobody") == []
+def test_parse_windows_provider_filter(monkeypatch):
+    """One payload carries every agent's usage, so the provider filter is what picks ours."""
+    monkeypatch.setattr(settings, "provider", "openai")
+    assert len(parse_windows(USAGE)) == 1                 # only codex survives
+    monkeypatch.setattr(settings, "provider", "nobody")
+    assert parse_windows(USAGE) == []
 
 def test_parse_windows_skips_unknown_label():
     u = {"agents": [{"usage": {"provider": "anthropic", "windows": [
         {"label": "1-minute", "utilization_pct": 5, "reset_at": "2026-07-23T19:39:59Z"}]}}]}
-    assert parse_windows(u, provider="anthropic") == []
+    assert parse_windows(u) == []
 
 def test_provider_guard():
     """A PACER_PROVIDER that matches nothing must be caught, not silently fail open."""
@@ -96,7 +99,7 @@ def test_provider_guard():
 
 def test_parse_windows_carries_label():
     """The log names the binding window and matches windows across ticks -- both need the label."""
-    assert [w["label"] for w in parse_windows(USAGE, provider="anthropic")] == [
+    assert [w["label"] for w in parse_windows(USAGE)] == [
         "5-hour", "7-day", "7-day (Fable)"]
 
 def test_window_records_keep_duration():
