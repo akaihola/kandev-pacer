@@ -183,6 +183,10 @@ nothing for the occupied-slot problem above, so the two are complements, not alt
    interactive sessions all count against it. At `exogenous=50 %` the simulation locks out at
    every cap for burn ≥ 1. Paced work is a minority of burn here, so any change to the paced
    queue has correspondingly less leverage than the headroom number suggests.
+   The same property is what makes a second pacer on a second kandev instance approximately
+   safe without any coordination — it sees the first one's burn in the shared number — and it
+   is why [`isolation-and-federation.md`] argues that federation buys global *ordering*, not
+   global pacing.
 
 ## If it is implemented
 
@@ -208,3 +212,5 @@ cap 1 that is largely masked, because the human's own turns keep the slot busy. 
 0.2 % of candidate-seconds, so the exposure is small and it exists at cap 1 already, but it is
 worth a look once the pacer is actually running: an unsolicited turn injected into a live
 conversation is a much more visible failure than a slow backlog.
+
+[`isolation-and-federation.md`]: isolation-and-federation.md

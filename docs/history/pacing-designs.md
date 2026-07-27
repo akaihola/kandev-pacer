@@ -446,6 +446,13 @@ with a cancelled session.
   only ACP-mode profiles.
 - Do not use history inference: Kandev does not store step history.
 
+Across **several Kandev instances** in separate trust domains, Design 13 stays the local
+enforcement mechanism and only the gate decision moves out of the domain — see
+[`isolation-and-federation.md`]. Design 12 is the interesting
+alternative there: an ACP turnstile intercepts below Kandev, so one turnstile paces every
+instance on a machine without any of them exposing an API to the pacer — at the cost of pacing
+only ACP-mode profiles and seeing nothing of the queue it is ordering.
+
 ## Side note: pausing fights the prompt cache
 
 To act on later, once a prototype works. This applies to every design above,
@@ -516,3 +523,4 @@ Practical consequences, in order of importance:
   TTL was actually in force.
 
 [`claude-code-hook-feasibility.md`]: claude-code-hook-feasibility.md
+[`isolation-and-federation.md`]: ../isolation-and-federation.md
