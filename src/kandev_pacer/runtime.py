@@ -165,52 +165,54 @@ class Pacer:
             )
         )
 
-        def emit(gate, action, launched=None):
-            self.log_event(tick_record(
-                snapshot.now, gate, action, records, snapshot.running, launchable,
-                self.config.concurrency, len(self.booked), launched,
-            ))
-
         verdict = quota_verdict(
             snapshot.usage, snapshot.windows, snapshot.now, was_open, self.config
         )
-        if not verdict.is_open:
-            suffix = f" ({snapshot.running} running)" if verdict.gate == "paused" else ""
-            log.info(verdict.message + suffix)
-            emit(verdict.gate, "withheld")
-            return verdict.is_open
 
-        headroom = verdict.headroom
+        def report(gate, outcome, extra="", warn=False):
+            """The one way a tick ends: say what happened, record it, hand back the gate.
+
+            An open gate's lines all share the headroom opening, so it is written here
+            once; a closed gate's message already reads as a whole sentence.
+            """
+            line = f"{outcome.message}{extra}"
+            if gate == "open":
+                line = f"headroom={verdict.headroom:+.3f} open, {line}"
+            (log.warning if warn else log.info)(line)
+            self.log_event(tick_record(
+                snapshot.now, gate, outcome.action, records, snapshot.running, launchable,
+                self.config.concurrency, len(self.booked), outcome.launched,
+            ))
+            return gate == "open"
+
+        if not verdict.is_open:
+            running = f" ({snapshot.running} running)" if verdict.gate == "paused" else ""
+            return report(verdict.gate, Outcome("withheld", verdict.message), running)
+
         cap = self.config.concurrency
         if snapshot.running >= cap:
-            log.info(f"headroom={headroom:+.3f} open, full ({snapshot.running}/{cap})")
-            emit("open", "full")
-            return True
-
-        # Every line below shares this opening, so it is written once here.
-        def report(outcome, occupancy=""):
-            log.info(f"headroom={headroom:+.3f} open, {outcome.message}{occupancy}")
-            emit("open", outcome.action, outcome.launched)
+            return report("open", Outcome("full", f"full ({snapshot.running}/{cap})"))
 
         queued = client.queued_counts(snapshot.sessions)
         for _ in range(MAX_ATTEMPTS):
             kind, task = self.next_action(snapshot, queued)
             if kind is None:
                 held = f", {len(self.failed)} held after a failed launch" if self.failed else ""
-                report(Outcome("nothing", "nothing to launch"),
-                       f" ({snapshot.running}/{cap} running{held})")
-                return True
+                return report("open", Outcome("nothing", "nothing to launch"),
+                              f" ({snapshot.running}/{cap} running{held})")
             key = action_key(task, snapshot.sessions.get(task["id"], []))
             outcome = self.attempt(kind, task, key, snapshot)
             if outcome is RETRY:
                 continue
             # The occupancy count only means anything when a turn was actually spent.
-            report(outcome, f" ({snapshot.running + 1}/{cap})" if outcome.launched else "")
-            return True
-        log.warning(f"headroom={headroom:+.3f} open, {MAX_ATTEMPTS} candidates rejected "
-                    "this tick -> waiting for the next one")
-        emit("open", "exhausted")
-        return True
+            spent = f" ({snapshot.running + 1}/{cap})" if outcome.launched else ""
+            return report("open", outcome, spent)
+        return report(
+            "open",
+            Outcome("exhausted",
+                    f"{MAX_ATTEMPTS} candidates rejected this tick -> waiting for the next one"),
+            warn=True,
+        )
 
     def attempt(self, kind, task, key, snapshot):
         """Try one action. Returns the Outcome; the caller reports it.
