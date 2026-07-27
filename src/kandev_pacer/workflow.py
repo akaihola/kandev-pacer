@@ -140,57 +140,78 @@ def _has_on_enter(step, kind):
     )
 
 
+def _bypass_warnings(step, name):
+    """Ways a step can start a turn behind the pacer's back, whatever else it is."""
+    if _has_on_enter(step, "auto_start_agent"):
+        yield f"step {name!r} still has on_enter:auto_start_agent (bypasses the gate)"
+    if step.get("agent_profile_id") and (step.get("prompt") or "").strip():
+        yield (
+            f"step {name!r} has both an agent-profile override and a prompt "
+            "(auto-launch bypass)"
+        )
+
+
+def _classification_warning(step, name, is_paced):
+    """The one thing to say about how this step is tagged versus how it behaves.
+
+    At most one, deliberately: a step is either paced, work-shaped but tagged
+    something else, or tagged work while parked. Saying two of those about the same
+    step would just be the same confusion described twice.
+    """
+    stage = (step.get("stage_type") or "").lower()
+    routes = is_work_step(step)
+    if is_paced:
+        if step.get("auto_advance_requires_signal"):
+            return f"work step {name!r} gates routing on the agent step_complete signal"
+        return None
+    if routes and stage in ("review", "approval"):
+        return (
+            f"step {name!r} routes on on_turn_complete (work-shaped) "
+            f"but is tagged stage_type={stage!r}"
+        )
+    if routes:
+        return (
+            f"step {name!r} routes on on_turn_complete but is tagged "
+            f"stage_type={stage or 'custom'!r} -> NOT paced "
+            "(make-paced tags it 'work')"
+        )
+    if stage == "work":
+        return (
+            f"step {name!r} is tagged stage_type='work' but has no "
+            "on_turn_complete transition (parked)"
+        )
+    return None
+
+
+def _shape_warnings(steps, works):
+    """Ways the workflow as a whole cannot support pacing, whatever its steps say."""
+    if not works:
+        yield (
+            "no pace-eligible step (stage_type=work + on_turn_complete transition) "
+            "-- nothing to pace"
+        )
+    if admission_target(steps) is None:
+        yield "no admission target derivable"
+    queue = queue_step_id(steps)
+    if queue is None:
+        yield "no start step (parked queue) found"
+    elif queue in works:
+        yield (
+            f"start step {step_names(steps).get(queue, queue)!r} is itself "
+            "pace-eligible -- the parked queue will execute rather than hold "
+            "(tasks never wait there)"
+        )
+
+
 def lint_workflow(steps):
     """Everything suspicious about a workflow the pacer is about to run against."""
     works = paced_step_ids(steps)
     warnings = []
     for step in steps:
         name = step.get("name", "?")
-        stage = (step.get("stage_type") or "").lower()
-        routes = is_work_step(step)
-        if _has_on_enter(step, "auto_start_agent"):
-            warnings.append(
-                f"step {name!r} still has on_enter:auto_start_agent (bypasses the gate)"
-            )
-        if step.get("agent_profile_id") and (step.get("prompt") or "").strip():
-            warnings.append(
-                f"step {name!r} has both an agent-profile override and a prompt "
-                "(auto-launch bypass)"
-            )
-        if step["id"] in works:
-            if step.get("auto_advance_requires_signal"):
-                warnings.append(
-                    f"work step {name!r} gates routing on the agent step_complete signal"
-                )
-        elif routes and stage in ("review", "approval"):
-            warnings.append(
-                f"step {name!r} routes on on_turn_complete (work-shaped) "
-                f"but is tagged stage_type={stage!r}"
-            )
-        elif routes:
-            warnings.append(
-                f"step {name!r} routes on on_turn_complete but is tagged "
-                f"stage_type={stage or 'custom'!r} -> NOT paced "
-                "(make-paced tags it 'work')"
-            )
-        elif stage == "work":
-            warnings.append(
-                f"step {name!r} is tagged stage_type='work' but has no "
-                "on_turn_complete transition (parked)"
-            )
-    if not works:
-        warnings.append(
-            "no pace-eligible step (stage_type=work + on_turn_complete transition) "
-            "-- nothing to pace"
-        )
-    if admission_target(steps) is None:
-        warnings.append("no admission target derivable")
-    queue = queue_step_id(steps)
-    if queue is None:
-        warnings.append("no start step (parked queue) found")
-    elif queue in works:
-        warnings.append(
-            f"start step {step_names(steps).get(queue, queue)!r} is itself pace-eligible "
-            "-- the parked queue will execute rather than hold (tasks never wait there)"
-        )
+        warnings.extend(_bypass_warnings(step, name))
+        classification = _classification_warning(step, name, step["id"] in works)
+        if classification:
+            warnings.append(classification)
+    warnings.extend(_shape_warnings(steps, works))
     return warnings
