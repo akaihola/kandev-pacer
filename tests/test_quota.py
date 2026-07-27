@@ -1,4 +1,4 @@
-"""Tests for kandev_pacer/quota.py: pacing math, usage parsing, tick/session records.
+"""Tests for kandev_pacer/quota.py: pacing math, usage parsing, and tick records.
 
 No network.
 """
@@ -20,7 +20,7 @@ from kandev_pacer.quota import (
     worst_headroom,
 )
 
-# --- pacing math (unchanged) ---
+# --- pacing math ---
 
 def test_elapsed():
     now = 1000.0

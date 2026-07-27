@@ -35,7 +35,9 @@ from .workflow import is_work_step, lint_workflow
 
 DEFAULT_DB = Path.home() / ".kandev" / "data" / "kandev.db"
 
+
 # --- pure planning (unit-tested in tests/test_make_paced.py) ---
+
 
 def strip_auto_start(events):
     """Drop every auto_start_agent action from an events dict.
@@ -56,6 +58,7 @@ def strip_auto_start(events):
 # already tagged one of these by hand is a hint we keep, not clobber (Design
 # 13: treat a hand-set stage_type as a corroborating hint, never destroy it).
 PARKED_STAGES = frozenset({"custom", "review", "approval"})
+
 
 def target_stage(step, review_names, approval_names=frozenset()):
     """The stage_type a paced step should carry.
@@ -78,6 +81,7 @@ def target_stage(step, review_names, approval_names=frozenset()):
     current = (step.get("stage_type") or "").lower()
     return current if current in PARKED_STAGES else "custom"
 
+
 def plan_changes(steps, review_names=frozenset({"review"}), approval_names=frozenset()):
     """Per-step change records for steps that need edits; already-paced steps are skipped.
 
@@ -93,6 +97,7 @@ def plan_changes(steps, review_names=frozenset({"review"}), approval_names=froze
                             "stage_from": step.get("stage_type"), "stage_to": stage})
     return changes
 
+
 def planned_steps(steps, changes):
     """The steps as they will look after the plan is applied (for linting)."""
     by_id = {change["id"]: change for change in changes}
@@ -103,7 +108,9 @@ def planned_steps(steps, changes):
         for step in steps
     ]
 
+
 # --- sqlite glue ---
+
 
 def connect(db_path, writable):
     """Open the kandev database. A dry run opens it read-only, so it cannot write."""
@@ -114,6 +121,7 @@ def connect(db_path, writable):
     connection.row_factory = sqlite3.Row
     return connection
 
+
 def resolve_workflow(connection, needle):
     """Workflow row for an exact id or a case-insensitive name; exits on miss/ambiguity."""
     rows = connection.execute("SELECT id, name FROM workflows").fetchall()
@@ -123,6 +131,7 @@ def resolve_workflow(connection, needle):
         return matches[0]
     listing = "\n".join(f"  {row['id']}  {row['name']}" for row in rows)
     sys.exit(f"error: {'ambiguous' if matches else 'no'} workflow {needle!r}; have:\n{listing}")
+
 
 def load_steps(connection, workflow_id):
     rows = connection.execute(
@@ -142,6 +151,7 @@ def load_steps(connection, workflow_id):
         steps.append({**dict(row), "events": events})
     return steps
 
+
 def apply_changes(connection, changes):
     with connection:  # one transaction; the server's WAL readers see it atomically
         for change in changes:
@@ -151,7 +161,9 @@ def apply_changes(connection, changes):
                 (json.dumps(change["events"], separators=(",", ":")),
                  change["stage_to"], change["id"]))
 
+
 # --- cli ---
+
 
 def describe(step, change):
     """The one line a step gets in the report: what will change, or that nothing will."""
@@ -163,6 +175,7 @@ def describe(step, change):
     if change["stage_to"] != change["stage_from"]:
         edits.append(f"stage_type {change['stage_from']} -> {change['stage_to']}")
     return f"  {step['name']}: " + "; ".join(edits)
+
 
 
 def main():
