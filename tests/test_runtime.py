@@ -7,11 +7,12 @@ No real kandev, no agent turn, no quota.
 import json
 
 import pytest
-from conftest import STEPS, board_task as _task, one_session as _sess
+from conftest import CLEAN, board_task as _task, one_session as _sess
 
 from kandev_pacer.config import MAX_ATTEMPTS, settings
 from kandev_pacer.runtime import Pacer
-from kandev_pacer.workflow import Board, fail_backoff
+from kandev_pacer.selection import fail_backoff
+from kandev_pacer.workflow import Board
 
 
 @pytest.fixture
@@ -24,7 +25,7 @@ def pacer(board, monkeypatch):
     poison the very dataset the log exists to collect.
     """
     monkeypatch.setattr(settings, "log_path", "")
-    scanned = Board.scan([({"id": "wf", "name": "Paced"}, STEPS)])
+    scanned = Board.scan([({"id": "wf", "name": "Paced"}, CLEAN)])
     assert (scanned.scope, scanned.work_steps, scanned.admission) == \
         (["wf"], {"ip"}, {"wf": "ip"})
     return Pacer(scanned)

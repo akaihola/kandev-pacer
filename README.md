@@ -126,8 +126,9 @@ normally.
 ```
 src/kandev_pacer/
   config.py     env-backed Settings, plus kandev's fixed vocabulary
-  quota.py      the pacing math and the tick's quota decision (pure)
-  workflow.py   step classification, scope, launch order, eligibility (pure)
+  quota.py      the pacing math and the tick's quota verdict (pure)
+  workflow.py   which workflows are paceable, and the startup lint (pure)
+  selection.py  which task goes next, whether we may, what we already spent (pure)
   client.py     every kandev HTTP and WebSocket call
   runtime.py    the Pacer object, the loop, the CLI
   make_paced.py the enrollment tool (`make-paced`)
@@ -135,9 +136,11 @@ tests/          one file per module, over conftest.py's fake kandev and builders
 docs/           design rationale and the investigations behind it
 ```
 
-One tick runs as **gather → decide → act**: `Pacer.read()` makes every call and returns a
-`Snapshot`, `quota_verdict()` and `select_action()` decide over it as pure functions, and
-`Pacer.attempt()` makes the single call that spends a turn.
+The three pure modules import nothing but `config`, so everything worth arguing about can
+be tested with plain dictionaries. One tick runs as **gather → decide → act**:
+`Pacer.read()` makes the calls and returns a `Snapshot`, `quota_verdict()` and
+`select_action()` decide over it, and `Pacer.drain()`/`Pacer.launch()` make the single call
+that spends a turn.
 
 ```bash
 uv run pytest                              # the whole suite (no network, no quota, no server)

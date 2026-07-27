@@ -7,7 +7,7 @@ import urllib.request
 import websocket
 
 from .config import DRAINABLE_STATES, settings
-from .workflow import newest_session
+from .selection import newest_session
 
 log = logging.getLogger("kandev-pacer")
 

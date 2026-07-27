@@ -19,13 +19,6 @@ import websocket
 from kandev_pacer import client
 from kandev_pacer.config import settings
 
-STEPS = [
-    {"id": "bk", "name": "Backlog", "is_start_step": True, "position": 0, "events": {}},
-    {"id": "ip", "name": "In Progress", "position": 1, "stage_type": "work",
-     "events": {"on_turn_complete": [{"type": "move_to_step"}]}},
-    {"id": "rv", "name": "Review", "position": 2,
-     "events": {"on_turn_start": [{"type": "move_to_step"}]}},
-]
 # 10% consumed against a half-elapsed window -> headroom positive, gate open.
 USAGE_PCT = 10
 
@@ -69,6 +62,36 @@ def one_session(sid, state):
 def board_task(tid, step_id, title="T", created="1"):
     """A task as the fake board serves it: titled, and owned by workflow "wf"."""
     return {**task(tid, step_id, created=created), "title": title, "workflow_id": "wf"}
+
+
+# --- workflow fixtures: the boards these tests run against ---
+
+# Enrolled (post-make_paced) Paced Kanban: In Progress routes away, tagged work, no auto-start.
+CLEAN = [
+    step("bk", "Backlog", start=True, pos=0),
+    step("ip", "In Progress", otc=["move_to_step"], stage="work", pos=1),
+    step("rv", "Review", ots=["move_to_step"], stage="review", pos=2),
+    step("dn", "Done", ots=["move_to_step"], pos=3),
+]
+
+
+# The three live workflows on gogo, which between them cover every scope case.
+# Feature Dev: enrolled, several work steps. Priority Kanban: never run through make_paced --
+# its Backlog even routes on turn complete, so routing alone would wrongly pace a parked queue.
+FEATURE_DEV = [
+    step("fd-todo", "Todo", start=True, pos=0),
+    step("fd-spec", "Spec", otc=["move_to_next"], stage="work", pos=1),
+    step("fd-work", "Work", otc=["move_to_next"], stage="work", pos=2),
+    step("fd-done", "Done", pos=3),
+]
+PRIORITY_KANBAN = [
+    step("pk-bk", "Backlog", otc=["move_to_step"], ots=["move_to_next"], pos=0),
+    step("pk-ip", "In Progress", oe=["auto_start_agent"], otc=["move_to_step"], start=True, pos=1),
+    step("pk-dn", "Done", ots=["move_to_step"], pos=2),
+]
+ENTRIES = [({"id": "wf-pk", "name": "Priority Kanban"}, PRIORITY_KANBAN),
+           ({"id": "wf-ck", "name": "Paced Kanban"}, CLEAN),
+           ({"id": "wf-fd", "name": "Feature Dev"}, FEATURE_DEV)]
 
 
 # --- the fake kandev ---
@@ -119,7 +142,7 @@ class FakeBoard:
         if path == "/api/v1/workflows":
             return {"workflows": [{"id": "wf", "name": "Fake Paced"}]}
         if path.endswith("/workflow/steps"):
-            return {"steps": STEPS}
+            return {"steps": CLEAN}
         if path == "/api/v1/workflows/wf/tasks":
             return {"tasks": self.tasks}
         if "/sessions" in path:
