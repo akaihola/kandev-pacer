@@ -47,9 +47,15 @@ class Settings(BaseSettings):
 
     # Seconds before a refused launch is retried; doubles per consecutive failure.
     # Unset means three ticks, so it scales with the interval.
-    fail_backoff: int = Field(0, alias="PACER_FAIL_BACKOFF", ge=0)
+    fail_backoff: int | None = Field(None, alias="PACER_FAIL_BACKOFF", ge=0)
     # Consecutive failures before the card is flagged BLOCKED. 0 keeps the pacer read-only.
     block_after: int = Field(2, alias="PACER_BLOCK_AFTER", ge=0)
+
+    # The database make-paced edits. kandev has no API for stage_type, so enrolling a
+    # workflow is a direct write -- see make_paced.py.
+    db_path: str = Field(
+        str(Path.home() / ".kandev" / "data" / "kandev.db"), alias="KANDEV_DB"
+    )
 
     # Empty disables logging.
     log_path: str = Field(
@@ -83,7 +89,7 @@ class Settings(BaseSettings):
             self.ws_url = (
                 self.url.replace("https://", "wss://").replace("http://", "ws://") + "/ws"
             )
-        if not self.fail_backoff:
+        if self.fail_backoff is None:
             self.fail_backoff = 3 * self.interval
         return self
 

@@ -26,15 +26,12 @@ Usage:
 """
 import argparse
 import json
-import os
 import sqlite3
 import sys
 from pathlib import Path
 
+from .config import settings
 from .workflow import is_work_step, lint_workflow
-
-DEFAULT_DB = Path.home() / ".kandev" / "data" / "kandev.db"
-
 
 # --- pure planning (unit-tested in tests/test_make_paced.py) ---
 
@@ -184,9 +181,8 @@ def main():
         description="Make a Kandev workflow paced: strip auto_start_agent, set stage_type.")
     parser.add_argument("workflow", nargs="?",
                         help="workflow id or name (omit to list workflows)")
-    parser.add_argument("--db", default=os.environ.get("KANDEV_DB", str(DEFAULT_DB)),
-                        metavar="PATH",
-                        help=f"kandev SQLite database (default: {DEFAULT_DB})")
+    parser.add_argument("--db", default=settings.db_path, metavar="PATH",
+                        help=f"kandev SQLite database (default: {settings.db_path})")
     parser.add_argument("--review", action="append", default=[], metavar="NAME",
                         help="additional step name to tag stage_type='review' (repeatable;"
                              " 'Review' is always included)")
