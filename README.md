@@ -320,6 +320,7 @@ launches until the turn is observed to start.
 ./pacer.py --dump-order     # show the queue order launches will follow
 ./pacer.py                  # start the pacing loop (lints the workflow on startup)
 ./pacer.py --watch-usage 30 # read-only usage sampler, 30s cadence (run alongside)
+./sim_concurrency.py       # is a higher PACER_CONCURRENCY worth it? (--levers, --measure)
 uv run test_pace.py         # pure pacing + classification tests (no network)
 uv run test_make_paced.py   # pure workflow-adaptation planning tests
 uv run test_make_paced_db.py  # SQLite round-trip tests (temp db, no server)
