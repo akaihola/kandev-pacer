@@ -57,6 +57,7 @@ class Snapshot:
     tasks: list
     sessions: dict       # task id -> its sessions
     running: int         # turns in flight right now
+    sidebar: dict | None  # the user's sidebar settings, or None if not consulted
 
 
 def label(task):
@@ -97,7 +98,12 @@ class Pacer:
     # --- 1. gather ---
 
     def read(self):
-        """Every kandev read one tick makes. The only place in a tick that fetches."""
+        """Everything a tick needs before it can decide anything.
+
+        One exception, deliberate: the per-session queue counts are fetched later, in
+        tick(), because they cost a WebSocket round trip per idle session and are only
+        needed once the gate is open and there is room to launch.
+        """
         usage = client.request("GET", "/api/v1/agents/usage")
         now = time.time()
         tasks = client.paced_tasks(self.board.scope)
@@ -108,7 +114,10 @@ class Pacer:
             for session in sessions[task["id"]]
             if session.get("state") in RUNNING_STATES
         )
-        return Snapshot(now, usage, parse_windows(usage), tasks, sessions, running)
+        # Read once per tick, not once per attempt: the drag order cannot change
+        # mid-tick, and MAX_ATTEMPTS candidates would otherwise mean three fetches.
+        sidebar = client.user_settings(self.config.order)
+        return Snapshot(now, usage, parse_windows(usage), tasks, sessions, running, sidebar)
 
     # --- 2. decide (the pure parts live in quota.py and workflow.py) ---
 
@@ -119,10 +128,7 @@ class Pacer:
     def next_action(self, snapshot, queued):
         """The (kind, task) to spend this turn on, or (None, None)."""
         ordered = ordered_tasks(
-            snapshot.tasks,
-            client.user_settings(self.config.order),
-            self.config.order,
-            self.board.step_ranks,
+            snapshot.tasks, snapshot.sidebar, self.config.order, self.board.step_ranks
         )
         return select_action(
             ordered, snapshot.sessions, queued, self.board, self.skip_keys(snapshot.now)

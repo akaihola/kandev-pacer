@@ -68,6 +68,7 @@ class FakeBoard:
         self.queues = {}
         self.ws_log = []       # (action, payload) per action the pacer sent
         self.origins = []      # the Origin header each connection presented
+        self.paths = []        # every REST path fetched, for counting round trips
 
     def load(self, tasks, sessions, queues):
         self.tasks, self.sessions, self.queues = tasks, dict(sessions), dict(queues)
@@ -75,6 +76,7 @@ class FakeBoard:
     # --- REST ---
 
     def request(self, method, path, body=None):
+        self.paths.append(path)
         if path.endswith("/agents/usage"):
             # A reset 2.5h out on a 5h window: half elapsed, 10% consumed.
             return {"agents": [{"usage": {"provider": "anthropic", "windows": [
