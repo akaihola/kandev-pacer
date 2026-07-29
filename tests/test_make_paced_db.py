@@ -7,12 +7,14 @@
 
 The pure planning is covered in test_make_paced.py; this exercises the parts
 that actually touch a database, on a throwaway temp file. Run:
-    uv run test_make_paced_db.py
+    uv run tests/test_make_paced_db.py
 """
 import json
 import sqlite3
 import tempfile
 from pathlib import Path
+
+from support import run_tests  # noqa: F401  -- sets up sys.path
 
 from make_paced import apply_changes, connect, load_steps, plan_changes, resolve_workflow
 
@@ -107,8 +109,4 @@ def test_resolve_errors_exit():
         con.close()
 
 if __name__ == "__main__":
-    tests = [(n, f) for n, f in sorted(globals().items()) if n.startswith("test_") and callable(f)]
-    for name, fn in tests:
-        fn()
-        print(f"ok {name}")
-    print(f"\n{len(tests)} passed")
+    run_tests(globals())

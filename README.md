@@ -318,19 +318,30 @@ launches until the turn is observed to start.
 ## Run
 
 ```bash
+uv sync                        # create the environment and install kandev-pacer
 ./make_paced.py             # list workflows in the kandev SQLite DB
 ./make_paced.py 'Paced Kanban'          # dry run: show the edits pacing needs
 ./make_paced.py 'Paced Kanban' --apply  # write them (server can stay up; WAL)
-./pacer.py --dump-usage     # inspect live usage payload first
-./pacer.py --dump-order     # show the queue order launches will follow
-./pacer.py                  # start the pacing loop (lints the workflow on startup)
-./pacer.py --watch-usage 30 # read-only usage sampler, 30s cadence (run alongside)
-./sim_concurrency.py       # is a higher PACER_CONCURRENCY worth it? (--levers, --measure)
-uv run test_pace.py         # pure pacing + classification tests (no network)
-uv run test_make_paced.py   # pure workflow-adaptation planning tests
-uv run test_make_paced_db.py  # SQLite round-trip tests (temp db, no server)
-uv run test_drain_io.py     # queued-prompt release vs a fake kandev (loopback, no quota)
+uv run kandev-pacer --dump-usage     # inspect live usage payload first
+uv run kandev-pacer --dump-order     # show the queue order launches will follow
+uv run kandev-pacer                  # start the pacing loop (lints on startup)
+uv run kandev-pacer --watch-usage 30 # read-only usage sampler (run alongside)
+./sim_concurrency.py       # is a higher PACER_CONCURRENCY worth it?
+                            #   --levers | --history | --measure <pacer.jsonl>
+uv run tests/test_quota.py    # pacing math, usage parsing, log records (no network)
+uv run tests/test_workflow.py # step classification, ordering, selection, lint (no network)
+uv run tests/test_client.py   # the WebSocket layer vs a fake kandev (loopback, no quota)
+uv run tests/test_runtime.py  # the event log and tick() end to end vs the same fake
+uv run tests/test_make_paced.py     # pure workflow-adaptation planning tests
+uv run tests/test_make_paced_db.py  # SQLite round-trip tests (temp db, no server)
 ```
+
+`./pacer.py` remains as a compatibility entry point. The installed code lives in
+`src/kandev_pacer/`: `quota.py` and `workflow.py` hold the pure rules, `client.py`
+owns Kandev I/O, and `runtime.py` owns mutable loop state and the CLI. `tests/` mirrors
+that split one file per module, over shared helpers in `tests/support.py` (import path,
+runner, payload fixtures) and `tests/fake_kandev.py` (the loopback HTTP + WebSocket fake
+the `client`/`runtime` tests run against).
 
 **Workflow setup:** `make_paced.py` adapts an existing workflow in place: it strips every
 `on_enter: auto_start_agent` action and normalizes `stage_type` (`work` for steps that route

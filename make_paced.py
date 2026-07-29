@@ -13,7 +13,7 @@ the database directly. Per step it:
 - strips every `auto_start_agent` action from the step's events, so a finished
   turn parks the task WAITING_FOR_INPUT instead of self-starting past the gate;
 - normalizes `stage_type`: 'work' for steps that route away on turn completion
-  (the same routing-derived rule pacer.py classifies by), 'review'/'approval'
+  (the same routing-derived rule kandev_pacer/workflow.py classifies by), 'review'/'approval'
   for parked steps named in --review/--approval (default: any step named
   "Review" is 'review'). A parked step that already carries a valid tag
   ('review', 'approval', 'custom') keeps it; only a missing tag or a wrong
@@ -36,11 +36,12 @@ import sqlite3
 import sys
 from pathlib import Path
 
-from pacer import is_work_step, lint_workflow
+sys.path.insert(0, str(Path(__file__).parent / "src"))  # this runs as a standalone script
+from kandev_pacer.workflow import is_work_step, lint_workflow  # noqa: E402
 
 DEFAULT_DB = Path.home() / ".kandev" / "data" / "kandev.db"
 
-# --- pure planning (unit-tested in test_make_paced.py) ---
+# --- pure planning (unit-tested in tests/test_make_paced.py) ---
 
 def strip_auto_start(events):
     """Drop every auto_start_agent action from an events dict.

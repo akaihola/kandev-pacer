@@ -156,11 +156,11 @@ Independent of the pacer, Kandev's own queue chip offers **Send now** whenever t
 session is `WAITING_FOR_INPUT`/`IDLE`, so a parked prompt can always be released by
 hand. Manual gating, not pacing, but it means nothing is ever stuck.
 
-Verified by `test_pace.py` (selection and eligibility, pure) and `test_drain_io.py`
-(the WebSocket layer and `tick()`'s drain branch against a fake Kandev on loopback:
-drain at Review, drain outranking launch, launch unchanged when the queue is empty,
-`drained: false` spending no turn, `CREATED` never drained, and the concurrency cap
-short-circuiting before any queue read).
+Verified by `tests/test_workflow.py` (selection and eligibility, pure),
+`tests/test_client.py` (the WebSocket layer) and `tests/test_runtime.py` (`tick()`'s
+drain branch against a fake Kandev on loopback: drain at Review, drain outranking
+launch, launch unchanged when the queue is empty, `drained: false` spending no turn,
+`CREATED` never drained, and the concurrency cap short-circuiting before any queue read).
 
 ### Live round trip (2026-07-26, real Kandev, task parked at Done)
 
