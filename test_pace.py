@@ -581,6 +581,15 @@ def test_prune_booked_created_admission():
     running = {"t": [_sess("s", "RUNNING")]}
     assert prune_booked({("t", "bk", "s"): 900.0}, at_bk, running, now, ttl) == {}
 
+def test_prune_booked_uncertain_waiting_launch_expires():
+    tasks = [{"id": "t", "workflow_step_id": "ip"}]
+    waiting = {"t": [_sess("s", "WAITING_FOR_INPUT")]}
+    booking = {"at": 900.0, "uncertain": True}
+    assert prune_booked({("t", "ip", "s"): booking},
+                        tasks, waiting, 1000.0, 300.0) == {("t", "ip", "s"): booking}
+    assert prune_booked({("t", "ip", "s"): booking},
+                        tasks, waiting, 1300.0, 300.0) == {}
+
 # --- rejected launches: backoff and moving on ---
 
 def _fail(at, attempts=1, flagged=False):

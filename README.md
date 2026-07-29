@@ -75,6 +75,11 @@ launched and the only symptom was a repeating `tick error` line on stderr. Inste
 - **A refusal spends no quota, so the tick isn't over.** The pacer records the failure, moves
   on to the next candidate, and keeps the gate open — up to three candidates per tick, so a
   board full of broken cards can't turn one tick into a long walk.
+- **A timeout is not a refusal.** Once a launch request has been sent, a missing response is
+  ambiguous: kandev may already be starting the turn. The pacer applies one absolute request
+  deadline even while unrelated WebSocket events keep arriving, then reserves that slot and
+  re-checks the board on later ticks. Pending bookings count toward `PACER_CONCURRENCY`, so a
+  lost response cannot cause the pacer to oversubscribe.
 - **Failures are tracked apart from bookings.** A booking means "a turn was spent here, don't
   spend another"; a failure means "this didn't work, back off". One map meaning both would make
   every "did we already launch?" question ambiguous. The backoff starts at `PACER_FAIL_BACKOFF`
@@ -343,7 +348,8 @@ warnings the pacer would.
 Config via env: `KANDEV_URL`, `KANDEV_WS_URL` (default derives `ws://host/ws`),
 `PACED_WORKFLOW_ID` (comma-separated ids or names; unset = every enrolled workflow),
 `PACER_PROVIDER` (default `anthropic`), `PACER_CONCURRENCY`, `PACER_ALPHA`,
-`PACER_RESUME_MARGIN`, `PACER_BACKSTOP`, `PACER_INTERVAL`, `PACER_LOG`, `PACER_ORDER`
+`PACER_RESUME_MARGIN`, `PACER_BACKSTOP`, `PACER_INTERVAL`, `PACER_WS_TIMEOUT` (absolute
+WebSocket request deadline in seconds, default 30), `PACER_LOG`, `PACER_ORDER`
 (`auto` | `custom` | `board`, default `auto`), `PACER_FAIL_BACKOFF` (seconds before a refused
 launch is retried, default 3 ticks, doubling per failure), `PACER_BLOCK_AFTER` (consecutive
 failures before the card is flagged `BLOCKED`, default 2; `0` = never write to the board), and
@@ -382,6 +388,8 @@ Five record kinds, append-only, ~300 KB/day at the default 120s tick:
 - `failure` — a launch or drain kandev refused, with the reason and the consecutive-failure
   count. Its own kind rather than a tick outcome, for the same reason `_FAILED` is not
   `_BOOKED`: a refused launch spends no quota, and the tick goes on to the next candidate.
+- `uncertain` — a sent launch or drain got no response before its absolute deadline. Its slot
+  remains booked while the pacer waits for task/session state to reveal the outcome.
 - `start` / `error` — run configuration (so analysis can segment by `cap`, `alpha`, `order`, …)
   and loop failures.
 

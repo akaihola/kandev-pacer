@@ -38,6 +38,10 @@ ALPHA = float(os.environ.get("PACER_ALPHA", "1.0"))          # reserve slope; <1
 RESUME_MARGIN = float(os.environ.get("PACER_RESUME_MARGIN", "0.0"))  # hysteresis reopen threshold
 BACKSTOP = float(os.environ.get("PACER_BACKSTOP", "0.97"))   # absolute cutoff; >=1.0 disables
 INTERVAL = int(os.environ.get("PACER_INTERVAL", "120"))      # seconds between ticks
+# Absolute deadline for one WebSocket request after it has been sent. The socket's own
+# timeout is not enough: every unrelated pushed event makes recv() return and starts another
+# socket timeout, so a busy event stream can otherwise keep one request alive forever.
+WS_REQUEST_TIMEOUT = float(os.environ.get("PACER_WS_TIMEOUT", "30"))
 # Which order pending tasks are launched in. "auto" layers the sidebar TASKS list drag order
 # over the board's kanban-pull order once the user keeps a view on the custom sort; "custom"
 # always layers it; "board" is pull order alone (most downstream column first, then
@@ -738,17 +742,27 @@ def prune_booked(booked, tasks, task_sessions, now, ttl):
       API yet (Kandev launches in a detached goroutine) -- in both cases the task reads
       exactly as it did before the launch and would look launchable again. The TTL is what
       lets a launch that silently failed retry instead of wedging the task forever.
+
+    Most values are plain timestamps. A request whose response was lost is stored as
+    {"at": timestamp, "uncertain": True}; unlike a confirmed launch from WAITING, that guard
+    also expires after `ttl`, because the server may never have acted on the request.
     """
     keep = {}
     for key, st in live_keys(tasks, task_sessions).items():
         if key not in booked:
             continue
-        if key[2] is None or st == CREATED_STATE:
-            if now - booked[key] < ttl:
-                keep[key] = booked[key]
+        booking = booked[key]
+        booked_at = booking["at"] if isinstance(booking, dict) else booking
+        uncertain = isinstance(booking, dict) and booking.get("uncertain")
+        if key[2] is None or st == CREATED_STATE or uncertain:
+            if (st in IDLE_STATES or st is None) and now - booked_at < ttl:
+                keep[key] = booking
         elif st == READY_STATE:
-            keep[key] = booked[key]
+            keep[key] = booking
     return keep
+
+class RequestOutcomeUnknown(RuntimeError):
+    """A sent WebSocket request got no matching response before disconnect/deadline."""
 
 # --- kandev glue (IO) ---
 
@@ -800,11 +814,35 @@ def _ws_connect():
     # /ws enforces an Origin check, so present the server's own URL as the origin.
     return websocket.create_connection(WS_URL, timeout=30, origin=URL)
 
-def _ws_call(conn, action, payload, req_id):
-    """One request/response round trip on an open connection, matched on `id`."""
-    conn.send(json.dumps({"id": req_id, "type": "request", "action": action, "payload": payload}))
+def _ws_call(conn, action, payload, req_id, timeout=None):
+    """One request/response round trip, matched on `id`, with an absolute deadline.
+
+    Once send() is attempted, a transport error is ambiguous: kandev may have accepted the
+    operation and only its response was lost. Callers distinguish that from an explicit
+    type:error response so they do not spend the same concurrency slot twice.
+    """
+    timeout = WS_REQUEST_TIMEOUT if timeout is None else timeout
+    deadline = time.monotonic() + timeout
+    try:
+        conn.settimeout(max(deadline - time.monotonic(), 0))
+        conn.send(json.dumps(
+            {"id": req_id, "type": "request", "action": action, "payload": payload}))
+    except Exception as e:
+        raise RequestOutcomeUnknown(
+            f"{action} outcome unknown: connection failed while sending") from e
     while True:
-        raw = conn.recv()
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise RequestOutcomeUnknown(
+                f"{action} outcome unknown: no response within {timeout:g}s")
+        try:
+            # Recompute on every loop. Unrelated pushed events must consume the same request
+            # budget rather than refreshing a per-recv socket timeout.
+            conn.settimeout(remaining)
+            raw = conn.recv()
+        except Exception as e:
+            raise RequestOutcomeUnknown(
+                f"{action} outcome unknown: no response within {timeout:g}s") from e
         if not raw:
             continue
         m = json.loads(raw)
@@ -878,7 +916,7 @@ def queued_counts(task_sessions):
 
 # --- pacing loop ---
 
-_BOOKED = {}             # (task_id, step_id, session_id) -> booked_at (turn actually spent)
+_BOOKED = {}             # key -> booked_at, or uncertain booking metadata (slot reserved)
 _FAILED = {}             # (task_id, step_id, session_id) -> {at, attempts, reason, flagged}
 _SCOPE = []              # workflow ids being paced
 _WORK_STEPS = set()      # pace-eligible step ids, unioned across the scope
@@ -914,7 +952,7 @@ def flag_blocked(task, reason):
           file=sys.stderr, flush=True)
     return True
 
-def note_failure(key, task, reason, now):
+def note_failure(key, task, reason):
     """Record a rejected launch/drain, back the task off, and flag it once it looks permanent.
 
     Deliberately not a booking. A booking says a turn was spent and the quota went with it; a
@@ -923,15 +961,28 @@ def note_failure(key, task, reason, now):
     """
     prev = _FAILED.get(key) or {}
     attempts = prev.get("attempts", 0) + 1
-    _FAILED[key] = {"at": now, "attempts": attempts, "flagged": prev.get("flagged", False)}
+    observed_at = time.time()
+    _FAILED[key] = {
+        "at": observed_at, "attempts": attempts, "flagged": prev.get("flagged", False)}
     print(f"kandev refused to start {label(task)!r} ({reason}) -- failure {attempts}, "
           f"holding it for {fail_backoff(attempts)}s", file=sys.stderr, flush=True)
-    log_event({"t": round(now, 3), "kind": "failure", "task": task["id"],
+    log_event({"t": round(observed_at, 3), "kind": "failure", "task": task["id"],
                "reason": reason, "attempts": attempts})
     if BLOCK_AFTER and attempts >= BLOCK_AFTER and not _FAILED[key]["flagged"]:
         _FAILED[key]["flagged"] = flag_blocked(task, reason)
 
-def attempt(kind, task, key, wh, running, now, emit):
+def note_uncertain(key, task, reason):
+    """Reserve one slot when kandev may have acted but its response did not arrive."""
+    observed_at = time.time()
+    _BOOKED[key] = {"at": observed_at, "uncertain": True}
+    _clear_failures(task["id"])
+    print(f"kandev did not confirm start of {label(task)!r} ({reason}) -- "
+          f"reserving its slot for {BOOKING_TTL}s pending board re-check",
+          file=sys.stderr, flush=True)
+    log_event({"t": round(observed_at, 3), "kind": "uncertain", "task": task["id"],
+               "reason": reason})
+
+def attempt(kind, task, key, wh, occupied, emit):
     """Carry out one selected action. True when the tick is finished, False to try the next task.
 
     False means only one thing: this candidate was rejected, no quota was spent, and the tick
@@ -970,8 +1021,13 @@ def attempt(kind, task, key, wh, running, now, emit):
         # like a failed launch.
         try:
             drained = bool((ws_drain(newest["id"]) or {}).get("drained"))
+        except RequestOutcomeUnknown as e:
+            note_uncertain((task["id"], step, newest["id"]), fresh, f"drain: {e}")
+            emit("open", "uncertain",
+                 {"task": task["id"], "session": newest["id"], "step": step})
+            return True
         except Exception as e:
-            note_failure(key, fresh, f"drain rejected: {e}", now)
+            note_failure(key, fresh, f"drain rejected: {e}")
             return False
         if not drained:
             # Queue emptied between the count and the take (the UI's "Send now", or another
@@ -980,10 +1036,10 @@ def attempt(kind, task, key, wh, running, now, emit):
                   f"-> no turn spent", flush=True)
             emit("open", "empty")
             return True
-        _BOOKED[(task["id"], step, newest["id"])] = now
+        _BOOKED[(task["id"], step, newest["id"])] = time.time()
         _clear_failures(task["id"])
         print(f"headroom={wh:+.3f} open -> drained queued prompt for {label(fresh)!r} "
-              f"at {named(step, _STEP_NAMES)!r} ({running + 1}/{CONCURRENCY})", flush=True)
+              f"at {named(step, _STEP_NAMES)!r} ({occupied + 1}/{CONCURRENCY})", flush=True)
         emit("open", "drained", {"task": task["id"], "session": newest["id"], "step": step})
         return True
 
@@ -994,23 +1050,28 @@ def attempt(kind, task, key, wh, running, now, emit):
     target = launch_target(fresh, _WORK_STEPS, _ADMISSION)
     if target is None:
         note_failure(key, fresh, "no admission target in workflow "
-                     f"{named(fresh.get('workflow_id'), _WF_NAMES)!r}", now)
+                     f"{named(fresh.get('workflow_id'), _WF_NAMES)!r}")
         return False
     intent, sid = pick_intent(sessions)
     try:
         ws_launch(task["id"], intent, sid, target)
+    except RequestOutcomeUnknown as e:
+        note_uncertain((task["id"], step, sid), fresh, str(e))
+        emit("open", "uncertain",
+             {"task": task["id"], "intent": intent, "session": sid, "target": target})
+        return True
     except Exception as e:
         # The case this exists for: kandev refusing the launch outright (a CREATED session with
         # no executor record answers "session is not resumable"). Before, that exception reached
         # main(), closed the gate, and left the same task at the head of the queue next tick --
         # one bad card and the whole board stopped.
-        note_failure(key, fresh, str(e), now)
+        note_failure(key, fresh, str(e))
         return False
-    _BOOKED[(task["id"], step, sid)] = now
+    _BOOKED[(task["id"], step, sid)] = time.time()
     _clear_failures(task["id"])
     print(f"headroom={wh:+.3f} open -> launched {label(fresh)!r} "
           f"intent={intent} workflow={named(fresh.get('workflow_id'), _WF_NAMES)!r} "
-          f"target={named(target, _STEP_NAMES)!r} ({running + 1}/{CONCURRENCY})", flush=True)
+          f"target={named(target, _STEP_NAMES)!r} ({occupied + 1}/{CONCURRENCY})", flush=True)
     emit("open", "launched",
          {"task": task["id"], "intent": intent, "session": sid, "target": target})
     return True
@@ -1047,6 +1108,7 @@ def tick(was_open):
     _BOOKED = prune_booked(_BOOKED, tasks, task_sessions, now, BOOKING_TTL)
     _FAILED = prune_failures(_FAILED, tasks, task_sessions)
     running = sum(1 for t in tasks for s in task_sessions[t["id"]] if s.get("state") in RUNNING_STATES)
+    occupied = running + len(_BOOKED)
     # Launch candidates only. Counting drains too would need queued_counts(), a WebSocket
     # round trip, on every tick -- including the paused ones this block exists to record.
     launchable = sum(1 for t in tasks
@@ -1074,8 +1136,10 @@ def tick(was_open):
         emit("paused", "withheld")
         return is_open
 
-    if running >= CONCURRENCY:
-        print(f"headroom={wh:+.3f} open, full ({running}/{CONCURRENCY})", flush=True)
+    if occupied >= CONCURRENCY:
+        pending = f", {len(_BOOKED)} pending" if _BOOKED else ""
+        print(f"headroom={wh:+.3f} open, full ({occupied}/{CONCURRENCY}; "
+              f"{running} running{pending})", flush=True)
         emit("open", "full")
         return is_open
 
@@ -1094,7 +1158,7 @@ def tick(was_open):
             emit("open", "nothing")
             return is_open
         if attempt(kind, task, action_key(task, task_sessions.get(task["id"], [])),
-                   wh, running, now, emit):
+                   wh, occupied, emit):
             return is_open
     print(f"headroom={wh:+.3f} open, {MAX_ATTEMPTS} candidates rejected this tick "
           f"-> waiting for the next one", file=sys.stderr, flush=True)

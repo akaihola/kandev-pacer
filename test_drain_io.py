@@ -99,6 +99,18 @@ async def _ws_handler(conn):
             await conn.send(json.dumps({"id": rid, "type": "error", "action": action,
                                         "payload": {"message": "no"}}))
             continue
+        elif action == "session.launch" and str(p.get("task_id", "")).startswith("lost"):
+            # The request was accepted but its response disappears in a stream of unrelated
+            # pushes. A per-recv timeout never fires in this situation; only an absolute
+            # request deadline can return control to the pacing loop.
+            for _ in range(20):
+                await asyncio.sleep(.02)
+                try:
+                    await conn.send(json.dumps(
+                        {"id": "push-again", "type": "event", "action": "session.updated"}))
+                except websockets.ConnectionClosed:
+                    return
+            continue
         elif action == "session.launch" and str(p.get("task_id", "")).startswith("boom"):
             # What kandev answers for a CREATED session with no executors_running row: the
             # launch is refused outright, and no retry of the same call will ever work.
@@ -205,6 +217,22 @@ def test_ws_errors_surface_with_kandev_reason():
     else:
         raise AssertionError("a type:'error' frame must raise")
 
+def test_ws_request_deadline_is_absolute_across_push_events():
+    old_timeout = pacer.WS_REQUEST_TIMEOUT
+    pacer.WS_REQUEST_TIMEOUT = .08
+    started = time.monotonic()
+    try:
+        try:
+            pacer.ws_launch("lost-direct", "start", None, "ip")
+        except pacer.RequestOutcomeUnknown as e:
+            assert "outcome unknown" in str(e), e
+        else:
+            raise AssertionError("a missing response must reach the absolute request deadline")
+        assert time.monotonic() - started < .5, \
+            "unrelated pushes must not refresh the deadline"
+    finally:
+        pacer.WS_REQUEST_TIMEOUT = old_timeout
+
 
 def test_unreadable_queue_degrades_to_empty():
     """A failing queue read must not kill the tick -- it falls back to launch-only pacing."""
@@ -277,6 +305,35 @@ def test_a_refused_launch_does_not_wedge_the_board():
     assert ("t9", "ip", "sb") in pacer._BOOKED
     assert not any(k[0] == "boom1" for k in pacer._BOOKED), "a refused launch spends no turn"
     assert pacer._FAILED[("boom1", "ip", "sa")]["attempts"] == 1
+
+def test_a_timed_out_launch_reserves_capacity_instead_of_oversubscribing():
+    """No response does not mean no launch: the server may have accepted it.
+
+    The tick must stop, reserve the slot, and leave the next candidate alone. The next tick
+    must count that pending booking against concurrency until board state catches up.
+    """
+    old_timeout = pacer.WS_REQUEST_TIMEOUT
+    pacer.WS_REQUEST_TIMEOUT = .08
+    try:
+        _load([_task("lost1", "ip", "Unknown", created="1"),
+               _task("t9", "ip", "Fine", created="2")],
+              {"lost1": _sess("sa", "CREATED"),
+               "t9": _sess("sb", "WAITING_FOR_INPUT")}, {})
+        pacer._BOOKED, pacer._FAILED = {}, {}
+        WS_LOG.clear()
+        assert pacer.tick(was_open=True) is True
+        launches = [p["task_id"] for a, p, _ in WS_LOG if a == "session.launch"]
+        assert launches == ["lost1"], launches
+        booking = pacer._BOOKED[("lost1", "ip", "sa")]
+        assert booking["uncertain"] is True
+        assert pacer._FAILED == {}, "an ambiguous timeout is not an explicit refusal"
+
+        WS_LOG.clear()
+        assert pacer.tick(was_open=True) is True
+        assert not any(a == "session.launch" for a, _, _ in WS_LOG), \
+            "the pending launch occupies the only slot"
+    finally:
+        pacer.WS_REQUEST_TIMEOUT = old_timeout
 
 
 def test_a_refused_launch_is_left_alone_next_tick():
