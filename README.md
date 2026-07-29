@@ -365,7 +365,7 @@ every such question is either a time derivative (does headroom trend up while wo
 how long after a launch does `utilization_pct` move?) or a per-window breakdown, and neither
 survives in a formatted line with no timestamp.
 
-Five record kinds, append-only, ~300 KB/day at the default 120s tick:
+Six record categories, append-only, ~300 KB/day at the default 120s tick:
 
 - `tick` — one per tick, **in every branch**. Carries `gate` (the quota verdict:
   `open`/`paused`/`ceiling`/`blind`) and `action` (what was done: `launched`/`drained`/`full`/

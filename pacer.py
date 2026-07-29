@@ -814,15 +814,14 @@ def _ws_connect():
     # /ws enforces an Origin check, so present the server's own URL as the origin.
     return websocket.create_connection(WS_URL, timeout=30, origin=URL)
 
-def _ws_call(conn, action, payload, req_id, timeout=None):
+def _ws_call(conn, action, payload, req_id):
     """One request/response round trip, matched on `id`, with an absolute deadline.
 
     Once send() is attempted, a transport error is ambiguous: kandev may have accepted the
     operation and only its response was lost. Callers distinguish that from an explicit
     type:error response so they do not spend the same concurrency slot twice.
     """
-    timeout = WS_REQUEST_TIMEOUT if timeout is None else timeout
-    deadline = time.monotonic() + timeout
+    deadline = time.monotonic() + WS_REQUEST_TIMEOUT
     try:
         conn.settimeout(max(deadline - time.monotonic(), 0))
         conn.send(json.dumps(
@@ -834,7 +833,7 @@ def _ws_call(conn, action, payload, req_id, timeout=None):
         remaining = deadline - time.monotonic()
         if remaining <= 0:
             raise RequestOutcomeUnknown(
-                f"{action} outcome unknown: no response within {timeout:g}s")
+                f"{action} outcome unknown: no response within {WS_REQUEST_TIMEOUT:g}s")
         try:
             # Recompute on every loop. Unrelated pushed events must consume the same request
             # budget rather than refreshing a per-recv socket timeout.
@@ -842,7 +841,7 @@ def _ws_call(conn, action, payload, req_id, timeout=None):
             raw = conn.recv()
         except Exception as e:
             raise RequestOutcomeUnknown(
-                f"{action} outcome unknown: no response within {timeout:g}s") from e
+                f"{action} outcome unknown: no response within {WS_REQUEST_TIMEOUT:g}s") from e
         if not raw:
             continue
         m = json.loads(raw)
