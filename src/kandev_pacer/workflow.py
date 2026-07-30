@@ -180,9 +180,15 @@ def is_launchable(task, sessions, work_steps, queue_steps, skip):
     if (task["id"], step, session_id) in skip:
         return False
     state = newest["state"] if newest else None
-    if step in work_steps:
-        return state in IDLE_STATES
-    return step in queue_steps and (newest is None or state in IDLE_STATES)
+    # A sessionless task counts on a work step too, not only in the queue. Kandev moves a task
+    # to the requested step *before* it validates that the launch can happen (startTask: state
+    # -> SCHEDULING, moveTaskToWorkflowStep, then the agent-profile check), so an admission it
+    # rejects strands the card on the work step with no session. Requiring an idle session made
+    # that state permanently unlaunchable -- nothing creates the session afterwards, so the card
+    # was skipped on every later tick while the log said "nothing to launch".
+    if step in work_steps or step in queue_steps:
+        return newest is None or state in IDLE_STATES
+    return False
 
 
 def is_drainable(task, sessions, queued, skip):
@@ -215,6 +221,28 @@ def launch_target(task, work_steps, admission):
 def pick_intent(sessions):
     newest = newest_session(sessions)
     return ("start", None) if newest is None else ("workflow_step", newest["id"])
+
+
+def task_agent_profile(task):
+    """The task's own agent profile from its launch metadata, or None.
+
+    The pacer has no opinion about which agent runs a task -- it passes this back verbatim so
+    kandev's intent:start path can find it. That path needs the help: it resolves the *executor*
+    from task metadata but not the agent profile, and no profile means the launch is refused
+    outright ("task has no agent_profile_id configured"). The prepare path does resolve it, so
+    the same task can be prepared and yet not started.
+
+    That refusal is expensive, not merely noisy: kandev sets the task SCHEDULING and moves it to
+    the target step *before* the check, so a refused admission strands the card on a work step
+    with no session. Four subtasks of the Heartbeat task sat like that for ~7.75h.
+
+    Kanban tasks carry the value already -- the UI sets it on create, and create_task_kandev
+    requires one (resolveMCPLaunchMetadata) -- so reading it here is enough, and it costs no
+    extra request: it rides along in the task list every tick already fetches.
+    """
+    metadata = task.get("metadata") or {}
+    profile = metadata.get("agent_profile_id")
+    return profile if isinstance(profile, str) and profile else None
 
 
 def effective_sidebar_view(settings):

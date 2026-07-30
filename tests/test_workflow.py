@@ -15,7 +15,8 @@ from kandev_pacer.workflow import (  # noqa: E402  -- must follow the path setup
     has_custom_sort_view, is_drainable, is_launchable, is_paced_step, is_work_step,
     launch_target, lint_workflow, named, newest_session, ordered_tasks, paced_step_ids,
     pick_intent, priority_rank, prune_booked, prune_failures, queue_step_id, resolve_scope,
-    select_action, step_names, step_ranks, task_order_key, visible_task_order,
+    select_action, step_names, step_ranks, task_agent_profile, task_order_key,
+    visible_task_order,
 )
 
 # --- workflow step fixtures ---
@@ -217,7 +218,21 @@ def test_is_launchable_work_step():
     at_ip = {"id": "t", "workflow_step_id": "ip"}
     assert is_launchable(at_ip, [_sess("s", "WAITING_FOR_INPUT")], WORK, QUEUE,booked)
     assert not is_launchable(at_ip, [_sess("s", "RUNNING")], WORK, QUEUE,booked)   # in flight
-    assert not is_launchable(at_ip, [], WORK, QUEUE,booked)                        # no session
+
+def test_is_launchable_work_step_without_session():
+    """A stranded task -- on a work step, no session -- must stay a candidate.
+
+    Kandev moves the task to the admission step *before* it checks whether the launch can
+    happen (startTask: state -> SCHEDULING, moveTaskToWorkflowStep, *then* the agent-profile
+    check), so a rejected admission strands the card on the work step with no session. While
+    this returned False, that state was unrecoverable: nothing creates the session later, so
+    the pacer skipped the card on every tick and logged "nothing to launch". Four subtasks of
+    the Heartbeat task sat like that for ~7.75h with the gate open and no turns running.
+    """
+    at_ip = {"id": "t", "workflow_step_id": "ip"}
+    assert is_launchable(at_ip, [], WORK, QUEUE, set())
+    # The dup-guard still covers it -- the booking for a never-run launch is keyed on None.
+    assert not is_launchable(at_ip, [], WORK, QUEUE, {("t", "ip", None)})
 
 def test_is_launchable_queue_admission():
     booked = set()
@@ -344,6 +359,22 @@ def test_pick_intent():
     assert pick_intent([]) == ("start", None)
     assert pick_intent([_sess("a", "WAITING_FOR_INPUT", "1"),
                         _sess("b", "WAITING_FOR_INPUT", "2")]) == ("workflow_step", "b")
+
+def test_task_agent_profile():
+    """Read the task's own agent profile out of the launch metadata the task list already carries.
+
+    kandev's intent:start path resolves the executor from task metadata but not the agent
+    profile, and refuses the launch without one ("task has no agent_profile_id configured").
+    Passing it back is what makes a never-run task startable at all.
+    """
+    assert task_agent_profile({"metadata": {"agent_profile_id": "prof-1"}}) == "prof-1"
+    # Nothing to pass: the payload key is then omitted rather than sent empty.
+    assert task_agent_profile({}) is None
+    assert task_agent_profile({"metadata": None}) is None
+    assert task_agent_profile({"metadata": {}}) is None
+    assert task_agent_profile({"metadata": {"agent_profile_id": ""}}) is None
+    # The field is free-form JSON, so a non-string must not reach the payload as one.
+    assert task_agent_profile({"metadata": {"agent_profile_id": 7}}) is None
 
 def test_newest_session():
     assert newest_session([]) is None

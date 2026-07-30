@@ -83,6 +83,7 @@ from .workflow import (
     select_action,
     step_names,
     step_ranks,
+    task_agent_profile,
     task_order_key,
     visible_task_order,
 )
@@ -275,8 +276,14 @@ def attempt(kind, task, key, wh, occupied, emit):
         )
         return False
     intent, session_id = pick_intent(sessions)
+    # Only intent:start, never intent:workflow_step. That path ignores the field today, but it
+    # is also the path a profile-switch step uses to spawn its own session -- so if it ever did
+    # honour a caller profile, sending one on every turn would pin the task to whichever profile
+    # it started with and quietly defeat the switch. Sending it only where it is needed keeps
+    # "kandev owns routing" true no matter what that path does later.
+    profile = task_agent_profile(fresh) if intent == "start" else None
     try:
-        ws_launch(task["id"], intent, session_id, target)
+        ws_launch(task["id"], intent, session_id, target, agent_profile_id=profile)
     except RequestOutcomeUnknown as error:
         note_uncertain((task["id"], step, session_id), fresh, str(error))
         emit(
