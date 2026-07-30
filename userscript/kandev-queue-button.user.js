@@ -13,11 +13,15 @@
 //
 // Limitations, all deliberate to keep it small: plain text only (attachments,
 // @-mentions and slash commands are not carried over — innerText gives their
-// visible label, not their structured form); it always targets the newest
-// session, so with the sessions dropdown switched to an older one the prompt is
-// queued somewhere other than where you are looking; and queueing while a turn
-// is running is pointless — Kandev's own submit button already queues then, and
-// the entry gets drained at turn end either way.
+// visible label, not their structured form); targets the task's primary session,
+// so it queues to the wrong session if you have switched the sessions dropdown;
+// and queueing while a turn is running is pointless — Kandev's own submit button
+// already queues then, and the entry gets drained at turn end either way.
+//
+// Queueing to the primary session is safe even though the pacer resumes the newest:
+// the pacer reads message.queue.get for *every* idle session and drains whichever
+// one came back non-empty. See "The queue is not necessarily on the newest session"
+// in the README.
 "use strict";
 
 // The queue lives behind the WebSocket API only (no /api/v1 route). One
@@ -45,15 +49,12 @@ function queueMessage(sessionId, taskId, content) {
   });
 }
 
-// The selected session is not in the URL, so pick the newest one — the same
-// choice the pacer's newest_session() makes. Not task.primary_session_id: that
-// flag means *first* session, permanently, so on a task with two sessions the
-// pacer would drain a queue this script never writes to, and the prompt would
-// sit there forever with no error.
-async function newestSessionId(taskId) {
-  const res = await fetch(`/api/v1/tasks/${taskId}/sessions`);
-  const sessions = (await res.json()).sessions ?? [];
-  return sessions.reduce((a, b) => ((a?.started_at ?? "") > (b.started_at ?? "") ? a : b), null)?.id;
+// The selected session is not in the URL; the task payload names it. This is the
+// same default the page itself hydrates with (task.primary_session_id).
+async function primarySessionId(taskId) {
+  const res = await fetch(`/api/v1/tasks/${taskId}`);
+  const body = await res.json();
+  return (body.task ?? body).primary_session_id;
 }
 
 function taskIdFromUrl() {
@@ -68,7 +69,7 @@ async function onQueue(button) {
 
   button.disabled = true;
   try {
-    await queueMessage(await newestSessionId(taskId), taskId, content);
+    await queueMessage(await primarySessionId(taskId), taskId, content);
     editor.focus();
     document.execCommand("selectAll");
     document.execCommand("delete");
