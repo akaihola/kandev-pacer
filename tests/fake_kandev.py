@@ -110,6 +110,16 @@ async def _ws_handler(conn):
                                         "payload": {"message": "session is not resumable: "
                                                                "no executor record"}}))
             continue
+        elif (action == "session.launch" and p.get("intent") == "start"
+              and not p.get("agent_profile_id")):
+            # kandev's start path resolves the *executor* from task metadata but not the agent
+            # profile, so a start carrying neither is refused outright -- and only after the task
+            # has already been set SCHEDULING and moved to the target step, which is what strands
+            # the card on a work step with no session.
+            await conn.send(json.dumps({"id": rid, "type": "error", "action": action,
+                                        "payload": {"message": "task has no "
+                                                               "agent_profile_id configured"}}))
+            continue
         else:
             body = {"success": True, "state": "STARTING"}
         await conn.send(json.dumps({"id": rid, "type": "response", "action": action, "payload": body}))
@@ -149,9 +159,13 @@ def one_session(sid, state):
     return [{"id": sid, "state": state, "started_at": "1"}]
 
 
-def board_task(tid, step, title="T", created="1"):
-    return {"id": tid, "title": title, "workflow_step_id": step, "created_at": created,
+def board_task(tid, step, title="T", created="1", profile=None):
+    task = {"id": tid, "title": title, "workflow_step_id": step, "created_at": created,
             "workflow_id": "wf"}
+    if profile:
+        # Where kandev keeps a task's launch profiles. Real kanban tasks always carry one.
+        task["metadata"] = {"agent_profile_id": profile}
+    return task
 
 
 def load(tasks, sessions, queues):
@@ -161,3 +175,6 @@ def load(tasks, sessions, queues):
     SESSIONS.update(sessions)
     QUEUES.clear()
     QUEUES.update(queues)
+    # The WS log is per-scenario too. Leaving it would make every "did this tick send X?"
+    # assertion depend on which test ran before it, and pass or fail on test order alone.
+    WS_LOG.clear()

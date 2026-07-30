@@ -115,6 +115,21 @@ def test_never_run_task_is_launched_not_drained():
         "a CREATED session should not even be asked about"
 
 
+def test_an_in_place_turn_does_not_carry_an_agent_profile():
+    """Only intent:start gets the profile. intent:workflow_step must stay profile-free.
+
+    That is the path a profile-switch step uses to spawn its own session. kandev ignores the
+    field there today, but sending one on every turn would pin the task to whichever profile it
+    started with the moment that changed -- kandev owns routing, the pacer owns timing.
+    """
+    acts = _tick([_task("inplace", "ip", "Running on", profile="prof-1")],
+                 {"inplace": _sess("s-ip", "WAITING_FOR_INPUT")}, {})
+    assert acts == ["session.launch"], acts
+    launch = next(p for a, p, _ in WS_LOG if a == "session.launch")
+    assert launch["intent"] == "workflow_step", launch
+    assert "agent_profile_id" not in launch, launch
+
+
 def test_concurrency_cap_short_circuits_before_any_queue_read():
     acts = _tick([_task("t4", "ip", "Busy")], {"t4": _sess("s4", "RUNNING")}, {"s4": 1})
     assert acts == [] and WS_LOG == [], WS_LOG
@@ -181,6 +196,87 @@ def test_a_refused_launch_is_left_alone_next_tick():
     WS_LOG.clear()
     runtime.tick(was_open=True)
     assert [a for a, _, _ in WS_LOG if a == "session.launch"] == [], WS_LOG
+
+
+def test_a_task_stranded_on_a_work_step_is_still_launched():
+    """A work-step task with *no* session must be launched, not skipped forever.
+
+    Kandev moves a task to the requested step before it validates the launch (startTask: state
+    -> SCHEDULING, moveTaskToWorkflowStep, then the agent-profile check), so an admission it
+    rejects leaves the card on the work step with no session ever created. Nothing creates one
+    afterwards, so skipping this state is permanent: the pacer reported "nothing to launch"
+    while four Heartbeat subtasks sat on the board for ~7.75h with the gate open and no turns
+    running.
+    """
+    acts = _tick([_task("stranded", "ip", "Stranded", profile="prof-s")], {}, {})
+    assert acts.count("session.launch") == 1, acts
+    launch = next(p for a, p, _ in WS_LOG if a == "session.launch")
+    # No session to reuse, so a fresh one is created -- in place, on the step it is already on.
+    assert launch["intent"] == "start", launch
+    assert "session_id" not in launch, launch
+    assert launch["workflow_step_id"] == "ip", launch
+    # And it is a real recovery, not just an attempt: the card runs again from where it stuck.
+    assert runtime._FAILED == {}, runtime._FAILED
+
+
+def test_a_never_run_task_is_started_with_its_own_agent_profile():
+    """The Heartbeat-subtask case end to end: no session, so intent:start, which needs a profile.
+
+    kandev's start path won't resolve the agent profile from task metadata itself and refuses the
+    launch without one — so the pacer passes the task's own back. The fake refuses a profile-less
+    start exactly as kandev does, which is what makes this a test of the fix and not just of the
+    payload shape.
+    """
+    acts = _tick([_task("newtask", "bk", "Fresh", profile="prof-1")], {}, {})
+    assert acts.count("session.launch") == 1, acts
+    launch = next(p for a, p, _ in WS_LOG if a == "session.launch")
+    assert launch["intent"] == "start", launch
+    assert launch["agent_profile_id"] == "prof-1", launch
+    # Admitted from the parked queue to the work step in the same call.
+    assert launch["workflow_step_id"] == "ip", launch
+    # Accepted, so it books rather than recording a failure.
+    assert runtime._FAILED == {}, runtime._FAILED
+    assert LAST["open"] is True
+
+
+def test_a_task_with_no_profile_anywhere_is_flagged_not_retried_silently():
+    """Without a profile to pass, the launch still fails — but visibly, not silently.
+
+    The pacer does not invent a profile; that is kandev's business. What it must not do is let
+    the refusal disappear, which is what happened when a task in this state wasn't a candidate
+    at all: nothing retried it and nothing flagged it.
+    """
+    load([_task("noprof", "bk", "No profile")], {}, {})
+    runtime._BOOKED, runtime._FAILED = {}, {}
+    runtime.tick(was_open=True)
+    assert runtime._FAILED[("noprof", "bk", None)]["attempts"] == 1, runtime._FAILED
+    for f in runtime._FAILED.values():
+        f["at"] -= FAIL_BACKOFF + 1
+    WS_LOG.clear()
+    assert runtime.tick(was_open=True) is True
+    assert [p for a, p, _ in WS_LOG if a == "task.state"] == \
+        [{"id": "noprof", "state": "BLOCKED"}], WS_LOG
+
+
+def test_a_stranded_task_kandev_keeps_refusing_gets_flagged():
+    """The stranded card must end up visible, not silently retried forever.
+
+    This is the other half of the hours-long stall: while the pacer never even attempted the
+    launch, the failure count never climbed, so BLOCK_AFTER never fired and nothing on the
+    board said anything was wrong. Retrying is what makes the refusal reportable.
+    """
+    load([_task("boomStranded", "ip", "Broken")], {}, {})
+    runtime._BOOKED, runtime._FAILED = {}, {}
+    runtime.tick(was_open=True)
+    assert runtime._FAILED[("boomStranded", "ip", None)]["attempts"] == 1, runtime._FAILED
+    assert not any(a == "task.state" for a, _, _ in WS_LOG), "one hiccup must not flag a card"
+    # Jump to the far side of the backoff instead of waiting it out.
+    for f in runtime._FAILED.values():
+        f["at"] -= FAIL_BACKOFF + 1
+    WS_LOG.clear()
+    assert runtime.tick(was_open=True) is True
+    assert [p for a, p, _ in WS_LOG if a == "task.state"] == \
+        [{"id": "boomStranded", "state": "BLOCKED"}], WS_LOG
 
 
 def test_repeated_refusals_flag_the_task_blocked_on_the_board():

@@ -138,7 +138,8 @@ def ws_request(action, payload, request_id="pace-1"):
 
 
 def ws_launch(
-    task_id, intent, session_id, workflow_step_id, request_id="pace-1"
+    task_id, intent, session_id, workflow_step_id, request_id="pace-1",
+    agent_profile_id=None,
 ):
     payload = {
         "task_id": task_id,
@@ -147,6 +148,10 @@ def ws_launch(
     }
     if session_id:
         payload["session_id"] = session_id
+    # Only intent:start needs this, and only because kandev's start path won't look it up
+    # itself -- see task_agent_profile(). The caller decides when to pass one.
+    if agent_profile_id:
+        payload["agent_profile_id"] = agent_profile_id
     return ws_request("session.launch", payload, request_id)
 
 

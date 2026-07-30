@@ -46,8 +46,10 @@ While under the steady-burn curve, the pacer starts the next turn via the WebSoc
   task to the first work step *and* starts it — `intent: workflow_step` with the task's newest
   session, whether it was never run or re-queued. A supplied `workflow_step_id` moves the task
   (`moveTaskToWorkflowStep` / `advanceTaskWorkflowStep`), so no separate move API is needed.
-  `intent: start` is reserved for a task with *no* session at all, which in practice doesn't
-  happen — kandev prepares a session when the task is created (see below).
+  `intent: start` is reserved for a task with *no* session at all, which is rare — kandev
+  prepares a session when the task is created (see below) — but does happen, and has to be
+  handled: a launch kandev refuses part-way leaves the task sessionless on a work step. That
+  intent also has to carry the task's agent profile (see below).
 
 **Queued user prompts are released the same way.** A follow-up typed into Kandev's composer
 normally fires a turn on the spot. Parked on the session's message queue instead
@@ -63,6 +65,29 @@ and branch immediately and parks the session in `CREATED` — prepared, agent ne
 "never run" does **not** mean "no session", and the pacer treats `CREATED` as launchable
 alongside `WAITING_FOR_INPUT`. Getting this wrong is silent and total: tasks sit in the queue
 forever while the pacer cheerfully logs `nothing to launch` every tick.
+
+**`intent: start` must carry the task's own agent profile.** Kandev's start path resolves the
+*executor* from task metadata but **not** the agent profile, and refuses a launch that has
+neither: `task has no agent_profile_id configured`. Its *prepare* path does resolve it (metadata
+→ parent session → workspace default), so the same task can be prepared and yet not started. The
+pacer therefore reads `metadata.agent_profile_id` off the task and passes it back — free, since
+it rides along in the task list every tick already fetches. Two limits keep this from becoming a
+routing decision, which is kandev's business and not the pacer's: it is sent on **`intent: start`
+only** (`intent: workflow_step` is the path a profile-switch step uses to spawn its own session,
+so it stays profile-free), and even there a step-level profile still overrides it on kandev's
+side. The pacer also never invents a profile for a task that has none.
+
+**A task with no session at all is launchable too — including on a work step.** This is the
+recovery half of the same story. Kandev moves a task to the requested step and sets it
+`SCHEDULING` *before* it validates that the launch can happen, so any admission it rejects
+leaves the card sitting on the work step with no session ever created. Requiring an idle session
+there made that state permanently unlaunchable — nothing creates the session afterwards, so the
+card is skipped on every subsequent tick. That is the same silent-and-total failure as the
+`CREATED` case above, and it is how four subtasks of a `Heartbeat` task sat on the board for
+~7.75h with the gate open, no turns running, and `launchable=0` logged the whole time. Treating
+it as launchable means such a card is retried and picks up where it stuck; if the launch keeps
+being refused, the failure count climbs until `PACER_BLOCK_AFTER` flags it `BLOCKED` — visible,
+instead of silently stuck.
 
 **A launch kandev refuses is one task's problem, not the board's.** Some tasks can't be
 launched at all — a `CREATED` session whose `executors_running` row is missing (prepared
