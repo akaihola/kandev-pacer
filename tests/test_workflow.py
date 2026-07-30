@@ -13,9 +13,9 @@ from kandev_pacer.config import (  # noqa: E402
     BOOKING_TTL, LAUNCH_LATENCY, REFUSAL_WINDOW,
 )
 from kandev_pacer.workflow import (  # noqa: E402  -- must follow the path setup above
-    action_key, admission_target, backed_off, effective_sidebar_view, fail_backoff,
-    has_custom_sort_view, is_drainable, is_launchable, is_paced_step, is_work_step,
-    launch_target, lint_workflow, named, newest_session, ordered_tasks, paced_step_ids,
+    action_key, admission_target, backed_off, drain_session, effective_sidebar_view,
+    fail_backoff, has_custom_sort_view, is_drainable, is_launchable, is_paced_step, is_work_step,
+    launch_target, lint_workflow, live_keys, named, newest_session, ordered_tasks, paced_step_ids,
     pick_intent, priority_rank, prune_booked, prune_failures, queue_step_id, resolve_scope,
     select_action, step_names, step_ranks, task_agent_profile, task_order_key,
     visible_task_order,
@@ -305,11 +305,23 @@ def test_is_drainable_requires_queue_and_idle_session():
     # CREATED is prepared-but-never-run: launchable, but NOT promptable -- kandev answers
     # session_not_promptable, so its queued prompt must wait for the admission turn.
     assert not is_drainable(at_rv, [_sess("s", "CREATED")], {"s": 1}, set())
-    # Counts are keyed by session, so a queue on an older session doesn't license a drain.
-    assert not is_drainable(at_rv, [_sess("old", "WAITING_FOR_INPUT", "1"),
-                                    _sess("new", "WAITING_FOR_INPUT", "2")], {"old": 1}, set())
-    # Dup-guard, same shape as the launch path.
+    # A queue on a *non-newest* session still licenses a drain: kandev queues the prompt on
+    # whichever session the user had open, routinely the task's primary rather than the newest.
+    # Reading only the newest reported "no queue" for a task that had one, and the card parked
+    # at Review was never released -- the pacer spent its slots further down the order instead.
+    two = [_sess("old", "WAITING_FOR_INPUT", "1"), _sess("new", "WAITING_FOR_INPUT", "2")]
+    assert is_drainable(at_rv, two, {"old": 1}, set())
+    assert drain_session(at_rv, two, {"old": 1}, set())["id"] == "old"
+    # Newest wins only among the sessions that actually have a queue.
+    assert drain_session(at_rv, two, {"old": 1, "new": 1}, set())["id"] == "new"
+    # A busy session's queue is not drainable, but an idle sibling's still is.
+    busy = [_sess("run", "RUNNING", "2"), _sess("idle", "WAITING_FOR_INPUT", "1")]
+    assert drain_session(at_rv, busy, {"run": 1}, set()) is None
+    assert drain_session(at_rv, busy, {"run": 1, "idle": 1}, set())["id"] == "idle"
+    # Dup-guard, same shape as the launch path -- and it skips only the booked session, so a
+    # sibling with its own queue is still fair game.
     assert not is_drainable(at_rv, [_sess("s", "WAITING_FOR_INPUT")], {"s": 1}, {("t", "rv", "s")})
+    assert drain_session(at_rv, two, {"old": 1, "new": 1}, {("t", "rv", "new")})["id"] == "old"
 
 def test_select_action_prefers_drain():
     """Draining first is what keeps a queued prompt to one turn.
@@ -320,14 +332,14 @@ def test_select_action_prefers_drain():
     at_ip = {"id": "t", "workflow_step_id": "ip", "created_at": "1"}
     sessions = {"t": [_sess("s", "WAITING_FOR_INPUT")]}
     # Same task is both launchable (work step, idle) and drainable (queue non-empty) -> drain.
-    kind, chosen = select_action(_ord([at_ip]), sessions, {"s": 1}, WORK, QUEUE, set())
+    kind, chosen, _ = select_action(_ord([at_ip]), sessions, {"s": 1}, WORK, QUEUE, set())
     assert (kind, chosen["id"]) == ("drain", "t")
     # Empty queue -> falls through to the launch path unchanged.
     assert select_action(_ord([at_ip]), sessions, {}, WORK, QUEUE, set())[0] == "launch"
     # Kind beats column: the drainable task sits in the LEFTMOST column, which pull ordering
     # would rank last, and it still wins over a launchable task further downstream.
     at_bk = {"id": "u", "workflow_step_id": "bk", "created_at": "9"}
-    kind, chosen = select_action(_ord([at_ip, at_bk]), {"t": [_sess("a", "WAITING_FOR_INPUT")],
+    kind, chosen, _ = select_action(_ord([at_ip, at_bk]), {"t": [_sess("a", "WAITING_FOR_INPUT")],
                                                  "u": [_sess("b", "WAITING_FOR_INPUT")]},
                                 {"b": 1}, WORK, QUEUE, set())
     assert (kind, chosen["id"]) == ("drain", "u")
@@ -352,10 +364,10 @@ def test_select_action_uses_board_pull_order():
     assert select_action(_ord([at_bk, at_rv]), both, {"x": 1, "y": 1},
                          WORK, QUEUE, set())[1]["id"] == "rv1"
     # Nothing to do at all.
-    assert select_action([], {}, {}, WORK, QUEUE, set()) == (None, None)
+    assert select_action([], {}, {}, WORK, QUEUE, set()) == (None, None, None)
     # Parked, nothing queued -> not actionable (today's behaviour, unchanged).
     assert select_action([at_rv], {"rv1": [_sess("s", "WAITING_FOR_INPUT")]},
-                         {}, WORK, QUEUE, set()) == (None, None)
+                         {}, WORK, QUEUE, set()) == (None, None, None)
 
 def test_pick_intent():
     assert pick_intent([]) == ("start", None)
@@ -394,6 +406,23 @@ def test_prune_booked():
     # turn started (RUNNING) -> booking cleared
     ts_running = {"t": [_sess("s", "RUNNING")]}
     assert prune_booked({("t", "ip", "s"): 990.0}, tasks, ts_running, now, ttl) == {}
+
+def test_prune_booked_keeps_a_drain_booked_on_a_non_newest_session():
+    """The reservation must survive on whichever session the drain actually booked.
+
+    live_keys once described only the newest session, so a drain booked on an older one matched
+    no live key and was pruned on the very next tick -- the slot came free while the drain was
+    still in flight, and the same prompt could be drained twice.
+    """
+    now, ttl = 1000.0, 360.0
+    tasks = [{"id": "t", "workflow_step_id": "rv"}]
+    sessions = {"t": [_sess("old", "WAITING_FOR_INPUT", "1"), _sess("new", "WAITING_FOR_INPUT", "2")]}
+    assert live_keys(tasks, sessions) == {("t", "rv", "old"): "WAITING_FOR_INPUT",
+                                          ("t", "rv", "new"): "WAITING_FOR_INPUT"}
+    booked = {("t", "rv", "old"): 990.0}
+    assert prune_booked(booked, tasks, sessions, now, ttl) == booked
+    # The TTL still bounds it, exactly as for a launch that spent no turn.
+    assert prune_booked(booked, tasks, sessions, now + ttl, ttl) == {}
 
 def test_prune_booked_expires_a_launch_that_spent_no_turn():
     """A launch kandev accepts but never turns into a turn must not reserve its slot forever.
@@ -603,10 +632,10 @@ def test_sidebar_order_reaches_drain_selection():
     queued = {"sa": 1, "sb": 1}                      # both have a prompt parked
     dragged = _settings(ordered=["b"])               # user put b on top
     ordered = ordered_tasks([a, b], dragged, "auto", RANKS)
-    kind, chosen = select_action(ordered, sessions, queued, WORK, QUEUE, set())
+    kind, chosen, _ = select_action(ordered, sessions, queued, WORK, QUEUE, set())
     assert (kind, chosen["id"]) == ("drain", "b")
     # Without the drag, pull order decides (equal here -> id tiebreak keeps it total).
-    kind, chosen = select_action(_ord([a, b]), sessions, queued, WORK, QUEUE, set())
+    kind, chosen, _ = select_action(_ord([a, b]), sessions, queued, WORK, QUEUE, set())
     assert (kind, chosen["id"]) == ("drain", "a")
 
 def test_ordered_tasks_layers_manual_over_board_pull_order():

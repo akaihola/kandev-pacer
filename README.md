@@ -60,6 +60,16 @@ step prompt and lets the queued entry leak out un-paced afterwards. A drainable 
 *any* step, including parked ones like Review where a launch never applies. Full derivation and
 the verified Kandev drain triggers: [`docs/queueing-user-prompts.md`](docs/queueing-user-prompts.md).
 
+**The queue is not necessarily on the newest session.** A launch resumes the newest session, but
+a drain must target the one that actually holds the queue: kandev queues a prompt on whichever
+session the user had open, which for a task with several sessions is routinely the primary one
+created with the task. So the pacer reads `message.queue.get` for *every* idle session and drains
+the newest of those that came back non-empty — and books the slot against that session id, since
+a booking naming a session the board never lists is pruned on the next tick and the same prompt
+gets drained twice. Reading only the newest reported an empty queue for a task that had a prompt
+waiting: the card stayed parked indefinitely while the pacer spent its slots further down the
+order, with nothing in the log to say a prompt was being skipped.
+
 **A never-run task already has a session.** Creating a task provisions its workspace, worktree
 and branch immediately and parks the session in `CREATED` — prepared, agent never started. So
 "never run" does **not** mean "no session", and the pacer treats `CREATED` as launchable

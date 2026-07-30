@@ -13,7 +13,6 @@ from .config import (
     WS_REQUEST_TIMEOUT,
     WS_URL,
 )
-from .workflow import newest_session
 
 
 def request(method, path, body=None):
@@ -171,11 +170,16 @@ def ws_drain(session_id, request_id="drain-1"):
 
 
 def queued_counts(task_sessions):
-    targets = []
-    for sessions in task_sessions.values():
-        newest = newest_session(sessions)
-        if newest is not None and newest.get("state") in DRAINABLE_STATES:
-            targets.append(newest["id"])
+    # Every idle session, not just the newest one: kandev queues a prompt on whichever session
+    # the user had open, which is regularly the task's primary session rather than the most
+    # recently started one. Asking only the newest reported an empty queue for a task that had a
+    # prompt waiting, so the drain never fired and the card sat parked indefinitely.
+    targets = [
+        session["id"]
+        for sessions in task_sessions.values()
+        for session in sessions
+        if session.get("state") in DRAINABLE_STATES
+    ]
     if not targets:
         return {}
     try:

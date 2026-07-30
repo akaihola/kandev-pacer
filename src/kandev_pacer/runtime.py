@@ -198,7 +198,7 @@ def note_uncertain(key, task, reason):
     )
 
 
-def attempt(kind, task, key, wh, occupied, emit):
+def attempt(kind, task, key, wh, occupied, emit, drain_session_id=None):
     """Try one action; False means rejection spent no quota, so try another task."""
     fresh = next(
         (candidate for candidate in paced_tasks() if candidate["id"] == task["id"]),
@@ -219,7 +219,11 @@ def attempt(kind, task, key, wh, occupied, emit):
     sessions = sessions_of(task["id"])
 
     if kind == "drain":
-        newest = newest_session(sessions)
+        # The session selection picked -- the one carrying the queue -- re-read from the fresh
+        # session list, since the state may have moved on since the tick chose it.
+        newest = next(
+            (s for s in sessions if s["id"] == drain_session_id), None
+        )
         if newest is None or newest.get("state") not in DRAINABLE_STATES:
             print(
                 f"headroom={wh:+.3f} open, {label(fresh)!r} no longer idle "
@@ -422,7 +426,7 @@ def tick(was_open):
     queued = queued_counts(task_sessions)
     for _ in range(MAX_ATTEMPTS):
         skip = set(_BOOKED) | backed_off(_FAILED, now)
-        kind, task = select_action(
+        kind, task, drain_session_id = select_action(
             ordered,
             task_sessions,
             queued,
@@ -444,14 +448,14 @@ def tick(was_open):
             )
             emit("open", "nothing")
             return is_open
-        if attempt(
-            kind,
-            task,
-            action_key(task, task_sessions.get(task["id"], [])),
-            worst,
-            occupied,
-            emit,
-        ):
+        # A drain is keyed on the session it will actually drain; only a launch falls back to
+        # the newest session, which is the one it would resume.
+        key = (
+            (task["id"], task.get("workflow_step_id", ""), drain_session_id)
+            if kind == "drain"
+            else action_key(task, task_sessions.get(task["id"], []))
+        )
+        if attempt(kind, task, key, worst, occupied, emit, drain_session_id):
             return is_open
     print(
         f"headroom={worst:+.3f} open, {MAX_ATTEMPTS} candidates rejected "
