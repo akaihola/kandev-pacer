@@ -9,8 +9,11 @@ Covers what the pure tests cannot: tick()'s drain and launch branches -- selecti
 itself, booking, the no-turn-spent paths, and what a launch kandev refuses does to the board.
 No real kandev, no agent turn, no quota. Run: uv run tests/test_runtime.py
 """
+import io
 import json
 import tempfile
+import time
+from contextlib import redirect_stdout
 from pathlib import Path
 
 from fake_kandev import STEPS, WS_LOG, board_task as _task, load, one_session as _sess
@@ -18,7 +21,7 @@ from support import run_tests
 
 from kandev_pacer import runtime  # noqa: E402  -- the fakes must be up before config is read
 from kandev_pacer import client
-from kandev_pacer.config import FAIL_BACKOFF, MAX_ATTEMPTS
+from kandev_pacer.config import BOOKING_TTL, FAIL_BACKOFF, MAX_ATTEMPTS
 from kandev_pacer.workflow import fail_backoff
 
 # Wire the loop's scope for the fake board the way startup does, rather than assigning the
@@ -309,6 +312,44 @@ def test_a_failed_flag_does_not_stop_pacing():
     assert runtime.tick(was_open=True) is True
     assert runtime._FAILED[("boomflag", "ip", "sf")]["flagged"] is False, \
         "a flag that didn't stick must be tried again, not remembered as done"
+
+
+def test_a_launch_that_spent_no_turn_stops_reserving_its_slot():
+    """A launch kandev accepts but never runs must not hold its slot for good.
+
+    The session stays WAITING_FOR_INPUT under the same (task, step, session) key, so the
+    booking had nothing to clear it: with the gate open and 0 running, the pacer reported
+    "nothing to launch" for hours while the reserved card was the only launchable one.
+    """
+    acts = _tick([_task("wedged", "ip", "Wedged")], {"wedged": _sess("sw", "WAITING_FOR_INPUT")}, {})
+    assert acts == ["session.launch"], acts
+    key = ("wedged", "ip", "sw")
+    assert key in runtime._BOOKED, runtime._BOOKED
+    # Still within the TTL: the reservation stands, so no second launch doubles the turn.
+    WS_LOG.clear()
+    runtime.tick(was_open=True)
+    assert [a for a, _, _ in WS_LOG if a == "session.launch"] == [], WS_LOG
+    assert key in runtime._BOOKED, "a launch may still be landing -- do not release it early"
+    # Past the TTL, with the session still parked where the launch left it: the slot comes back
+    # and the card is a candidate again instead of being skipped on every later tick.
+    runtime._BOOKED[key] = time.time() - BOOKING_TTL - 1
+    WS_LOG.clear()
+    assert runtime.tick(was_open=True) is True
+    assert [a for a, _, _ in WS_LOG if a == "session.launch"] == ["session.launch"], WS_LOG
+
+
+def test_the_nothing_to_launch_line_accounts_for_reserved_slots():
+    """`0/2 running` alone reads as an idle fleet, which is what hid the wedged booking."""
+    _tick([_task("held", "ip", "Held")], {"held": _sess("sh", "WAITING_FOR_INPUT")}, {})
+    assert ("held", "ip", "sh") in runtime._BOOKED, runtime._BOOKED
+    printed, cap = io.StringIO(), runtime.CONCURRENCY
+    try:
+        runtime.CONCURRENCY = 2      # room to spare, so the tick reaches the nothing-to-launch line
+        with redirect_stdout(printed):
+            runtime.tick(was_open=True)
+    finally:
+        runtime.CONCURRENCY = cap
+    assert "nothing to launch (0/2 running, 1 pending)" in printed.getvalue(), printed.getvalue()
 
 
 def test_a_tick_gives_up_after_max_attempts():
