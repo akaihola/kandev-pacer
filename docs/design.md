@@ -27,6 +27,25 @@ rising, so `h` climbs back to 0 on its own and the gate reopens with no external
 `e = 1 − (resets_at − now) / duration`, clamped to 0..1. Window durations are hardcoded
 (5h = 18000s, 7d = 604800s) since the payload gives `resets_at`, not duration.
 
+Because that self-healing is arithmetic, a withholding tick also says *when* it ends:
+
+```
+headroom=-0.300 PAUSED (0 running), resumes in ~1h 30m 00s (~14:05)
+headroom=-0.490 CEILING (consumed>0.97) -> withholding, resumes in ~2h 30m 00s (~15:05)
+```
+
+Invert `h = alpha·e − c ≥ 0` for the release instant: `c` is frozen while withheld, so the
+gate reopens once `e` reaches `c/alpha` — at `resets_at − duration·(1 − c/alpha)`. A window
+needing `e > 1` cannot heal before it rolls, so its answer is the roll itself, where `c`
+drops to 0. The gate waits on the **last** window to heal, so the estimate is the max over
+windows.
+
+The backstop is not on that line at all: it reads `c` directly, and `c` only falls at a
+roll. So a CEILING estimate is the later of the breaching window's reset and the burn
+line's own release — clearing the ceiling does not by itself reopen the gate.
+
+Both stay estimates: a turn still running keeps spending `c` and pushes them out.
+
 ## Enforcement: hold in place, launch on release (Design 13)
 
 Don't kill running turns — gate what's allowed to *start*. The unit is a **turn** (a prompt
