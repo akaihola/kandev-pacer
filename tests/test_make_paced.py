@@ -1,12 +1,13 @@
-#!/usr/bin/env -S uv run --script
-# /// script
-# requires-python = ">=3.11"
-# dependencies = []
-# ///
-"""Pure planning tests for make_paced.py (no database). Run: uv run tests/test_make_paced.py"""
-from support import run_tests  # noqa: F401  -- sets up sys.path
+"""Pure planning tests for make_paced.py (no database)."""
 
-from make_paced import plan_changes, planned_steps, strip_auto_start, target_stage
+from kandev_pacer.make_paced import (
+    plan_changes,
+    plan_unpace,
+    planned_steps,
+    strip_auto_start,
+    target_stage,
+)
+
 
 def _step(id, name, events=None, stage="custom"):
     return {"id": id, "name": name, "events": events or {}, "stage_type": stage,
@@ -72,5 +73,26 @@ def test_planned_steps_merge():
     assert after[0]["stage_type"] == "work" and "on_enter" not in after[0]["events"]
     assert after[1] == steps[1]
 
-if __name__ == "__main__":
-    run_tests(globals())
+
+def test_plan_unpace_clears_only_the_work_tag():
+    """Unpacing is how a board stops being paced, so it has to undo exactly enrollment."""
+    steps = [
+        _step("bk", "Backlog", stage="custom"),
+        _step(
+            "ip",
+            "In Progress",
+            {"on_turn_complete": [{"type": "move_to_step"}]},
+            stage="work",
+        ),
+        _step("rv", "Review", stage="review"),
+    ]
+    changes = plan_unpace(steps)
+    assert [(c["id"], c["stage_from"], c["stage_to"]) for c in changes] == [
+        ("ip", "work", "custom")
+    ]
+    # The events are carried through untouched: auto_start_agent stays stripped, so an
+    # unpaced board is manual, not self-starting.
+    assert changes[0]["events"] == {"on_turn_complete": [{"type": "move_to_step"}]}
+    assert changes[0]["removed"] == 0
+    # Nothing tagged work -> nothing to do, so a second --unpace is a no-op.
+    assert plan_unpace(planned_steps(steps, changes)) == []

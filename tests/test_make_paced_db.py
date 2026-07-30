@@ -1,22 +1,23 @@
-#!/usr/bin/env -S uv run --script
-# /// script
-# requires-python = ">=3.11"
-# dependencies = []
-# ///
 """SQLite round-trip tests for make_paced.py's glue (connect/resolve/load/apply).
 
 The pure planning is covered in test_make_paced.py; this exercises the parts
-that actually touch a database, on a throwaway temp file. Run:
-    uv run tests/test_make_paced_db.py
+that actually touch a database, on a throwaway temp file.
 """
 import json
 import sqlite3
+import sys
 import tempfile
+from contextlib import closing
 from pathlib import Path
 
-from support import run_tests  # noqa: F401  -- sets up sys.path
-
-from make_paced import apply_changes, connect, load_steps, plan_changes, resolve_workflow
+from kandev_pacer.make_paced import (
+    apply_changes,
+    connect,
+    load_steps,
+    main,
+    plan_changes,
+    resolve_workflow,
+)
 
 # Just the columns load_steps SELECTs and apply_changes writes -- a minimal
 # stand-in for kandev's real workflow_steps table.
@@ -108,5 +109,65 @@ def test_resolve_errors_exit():
                 pass
         con.close()
 
-if __name__ == "__main__":
-    run_tests(globals())
+
+# --- the command itself, end to end against a temp database ---
+
+def _stages(db):
+    """The stage_type each step carries right now, by name."""
+    with closing(connect(db, writable=False)) as connection:
+        return {step["name"]: step["stage_type"] for step in load_steps(connection, "w1")}
+
+
+def _steps(db):
+    with closing(connect(db, writable=False)) as connection:
+        return load_steps(connection, "w1")
+
+
+def _run(db, *args):
+    """Run make-paced's main() as the command line would, returning its stdout."""
+    sys.argv = ["make-paced", "--db", str(db), *args]
+    main()
+
+
+def test_cli_lists_workflows_when_given_no_name(tmp_path, capsys):
+    db = tmp_path / "kandev.db"
+    _make_db(db)
+    _run(db)
+    assert capsys.readouterr().out.splitlines() == ["w1  Paced Kanban"]
+
+
+def test_cli_enrols_unpaces_and_is_idempotent_both_ways(tmp_path, capsys):
+    """The whole lifecycle a user drives, against a real database file."""
+    db = tmp_path / "kandev.db"
+    _make_db(db)
+
+    _run(db, "Paced Kanban")
+    assert "dry run; pass --apply to write" in capsys.readouterr().out
+    assert _steps(db)[1]["stage_type"] == "custom", "a dry run must not write"
+
+    # Two rows change: In Progress becomes work, and the step named Review is tagged
+    # review by default.
+    _run(db, "Paced Kanban", "--apply")
+    assert "applied 2 step update(s)" in capsys.readouterr().out
+    steps = _steps(db)
+    assert steps[1]["stage_type"] == "work"
+    assert steps[1]["events"] == {"on_turn_complete": WORK_EVENTS["on_turn_complete"]}, \
+        "auto_start_agent is stripped, the routing that makes it paceable is kept"
+
+    _run(db, "Paced Kanban", "--apply")
+    assert "already paced; nothing to do" in capsys.readouterr().out
+
+    _run(db, "Paced Kanban", "--unpace", "--apply")
+    out = capsys.readouterr().out
+    assert "stage_type work -> custom" in out and "no longer paced" in out
+    assert _steps(db)[1]["stage_type"] == "custom"
+
+    _run(db, "Paced Kanban", "--unpace", "--apply")
+    assert "not paced; nothing to do" in capsys.readouterr().out
+
+
+def test_cli_tags_a_named_step_for_review(tmp_path, capsys):
+    db = tmp_path / "kandev.db"
+    _make_db(db)
+    _run(db, "Paced Kanban", "--review", "Backlog", "--apply")
+    assert _stages(db) == {"Backlog": "review", "In Progress": "work", "Review": "review"}

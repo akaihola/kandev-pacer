@@ -6,6 +6,7 @@
 // @version      1.0
 // @match        *://*:38429/*
 // @grant        none
+// @run-at       document-idle
 // ==/UserScript==
 //
 // Why this exists, and what drains the queue, is in docs/queueing-user-prompts.md.
@@ -16,6 +17,11 @@
 // so it queues to the wrong session if you have switched the sessions dropdown;
 // and queueing while a turn is running is pointless — Kandev's own submit button
 // already queues then, and the entry gets drained at turn end either way.
+//
+// Queueing to the primary session is safe even though the pacer resumes the newest:
+// the pacer reads message.queue.get for *every* idle session and drains whichever
+// one came back non-empty. See "The queue is not necessarily on the newest session"
+// in the README.
 "use strict";
 
 // The queue lives behind the WebSocket API only (no /api/v1 route). One

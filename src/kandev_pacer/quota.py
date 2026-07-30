@@ -1,8 +1,9 @@
 """Quota math, usage parsing, and structured observation records."""
 
+from dataclasses import dataclass
 from datetime import datetime
 
-from .config import PROVIDER, WINDOW_DURATIONS
+from .config import WINDOW_DURATIONS, settings
 
 
 def clamp01(x):
@@ -38,6 +39,43 @@ def ceiling_breached(windows, backstop):
     return backstop < 1.0 and any(
         window["consumed_frac"] > backstop for window in windows
     )
+
+
+@dataclass(frozen=True)
+class Verdict:
+    """What the quota says about launching right now.
+
+    `gate` is the reason, not just a yes/no, because the log and the operator both
+    need to tell "we are ahead of the curve" apart from "we cannot see the quota at
+    all" -- the second is a misconfiguration that looks identical if you only record
+    that nothing launched.
+    """
+
+    gate: str        # open | paused | ceiling | blind
+    headroom: float
+    message: str     # the line to print; empty when the gate is open
+
+    @property
+    def is_open(self):
+        return self.gate == "open"
+
+
+def quota_verdict(usage, windows, now, was_open, config):
+    """Read the usage payload against the burn line. Pure: no I/O, no state."""
+    if not windows and provider_missing(usage, config.provider):
+        return Verdict("blind", 1.0, (
+            f"provider {config.provider!r} not in usage "
+            f"{sorted(usage_providers(usage))} -> WITHHOLDING (check PACER_PROVIDER)"
+        ))
+    worst = worst_headroom(windows, now, config.alpha)
+    if ceiling_breached(windows, config.backstop):
+        return Verdict("ceiling", worst, (
+            f"headroom={worst:+.3f} CEILING (consumed>{config.backstop:.2f}) "
+            "-> withholding"
+        ))
+    if not gate_open(worst, was_open, config.resume_margin):
+        return Verdict("paused", worst, f"headroom={worst:+.3f} PAUSED")
+    return Verdict("open", worst, "")
 
 
 def window_records(windows, now, alpha=1.0):
@@ -80,58 +118,13 @@ def tick_record(
     }
 
 
-def sessions_snapshot(task_sessions):
-    return {
-        task_id: {session["id"]: session.get("state") for session in sessions}
-        for task_id, sessions in task_sessions.items()
-    }
-
-
-def diff_sessions(prev, cur, now):
-    if prev is None:
-        return []
-    events = []
-    for task_id, sessions in sorted(cur.items()):
-        old = prev.get(task_id, {})
-        for session_id, state in sorted(sessions.items()):
-            if old.get(session_id) != state:
-                events.append(
-                    {
-                        "t": round(now, 3),
-                        "kind": "session",
-                        "task": task_id,
-                        "session": session_id,
-                        "from": old.get(session_id),
-                        "to": state,
-                    }
-                )
-    return events
-
-
-def detect_resets(prev_windows, cur_windows, now):
-    previous = {window.get("label"): window for window in prev_windows}
-    events = []
-    for window in cur_windows:
-        old = previous.get(window.get("label"))
-        if old and window["resets_at"] > old["resets_at"]:
-            events.append(
-                {
-                    "t": round(now, 3),
-                    "kind": "window_reset",
-                    "label": window.get("label"),
-                    "final_c": round(old["consumed_frac"], 4),
-                    "d": window["duration_s"],
-                }
-            )
-    return events
-
-
 def _epoch(timestamp):
     return datetime.fromisoformat(timestamp.replace("Z", "+00:00")).timestamp()
 
 
-def parse_windows(usage, provider=None):
-    provider = PROVIDER if provider is None else provider
+def parse_windows(usage):
+    """The quota windows for the configured provider, as fractions and epoch seconds."""
+    provider = settings.provider
     windows = []
     for agent in usage.get("agents", []):
         agent_usage = agent.get("usage") or {}

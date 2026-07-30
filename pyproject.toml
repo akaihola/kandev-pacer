@@ -4,11 +4,73 @@ build-backend = "uv_build"
 
 [project]
 name = "kandev-pacer"
-version = "0.1.0"
+version = "0.2.0"
 description = "Pace Kandev task execution against subscription quota windows"
 readme = "README.md"
 requires-python = ">=3.11"
-dependencies = ["websocket-client"]
+dependencies = [
+    "pydantic-settings>=2.14.2",
+    "websocket-client",
+]
 
 [project.scripts]
 kandev-pacer = "kandev_pacer.runtime:main"
+make-paced = "kandev_pacer.make_paced:main"
+
+[dependency-groups]
+dev = [
+    "darker[ruff]>=3.0.0",
+    "graylint",
+    "pytest>=9.1.1",
+    "pytest-cov>=7.1.0",
+    "ty>=0.0.64",
+]
+
+[tool.ruff]
+# What the formatter aims for. darker reformats only the lines a commit touches,
+# so the codebase converges on this instead of being rewritten in one go.
+line-length = 88
+
+[tool.ruff.lint]
+select = ["E", "W", "F", "I", "UP", "B", "C4", "SIM"]
+
+[tool.ruff.lint.pycodestyle]
+# The hard error, deliberately looser than the formatter's target: a line the
+# formatter leaves at 92 is fine, one at 120 is a real readability problem.
+max-line-length = 100
+
+[tool.darker]
+# Reformats only the lines a change touches, so the codebase converges on the
+# style above as it is edited instead of in one unreviewable sweep.
+#   uv run darker            # format what this branch changed
+#   uv run darker --check    # what CI would complain about
+src = ["src", "tests"]
+formatter = "ruff"
+revision = "main..."
+
+[tool.graylint]
+# The same idea for the linter: run ruff over the old and new versions and show
+# only messages this branch introduced, so a legacy warning in a file you touched
+# does not become your problem.
+#   uv run graylint
+# ruff needs `--output-format concise` to emit the path:line:col: message shape
+# graylint parses.
+src = ["src", "tests"]
+revision = "main..."
+# Both need `concise` to emit the path:line:col: message shape graylint parses.
+lint = [
+    "ruff check --output-format concise",
+    "ty check --output-format concise",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+# Coverage is how the untested HTTP layer and the untested gate-closed branch were
+# found; keep it one flag away.
+#   uv run pytest --cov=kandev_pacer --cov-report=term-missing
+# make_paced.py sits at the repo root and the helpers sit in tests/, so both join
+# the installed package on the import path.
+pythonpath = ["tests"]
+
+[tool.uv.sources]
+graylint = { git = "https://github.com/akaihola/graylint", rev = "main" }

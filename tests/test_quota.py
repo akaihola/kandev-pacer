@@ -1,21 +1,26 @@
-#!/usr/bin/env -S uv run --script
-# /// script
-# requires-python = ">=3.11"
-# dependencies = []
-# ///
-"""Tests for kandev_pacer/quota.py: pacing math, usage parsing, tick/session records.
+"""Tests for kandev_pacer/quota.py: pacing math, usage parsing, and tick records.
 
-No network. Run: uv run tests/test_quota.py
+No network.
 """
-from support import run_tests, sess as _sess  # noqa: F401  -- sets up sys.path
 
-from kandev_pacer.quota import (  # noqa: E402  -- must follow the path setup above
-    binding_label, ceiling_breached, clamp01, detect_resets, diff_sessions, elapsed_frac,
-    gate_open, headroom, parse_windows, provider_missing, sessions_snapshot, tick_record,
-    usage_providers, window_records, worst_headroom,
+from kandev_pacer.config import Settings, settings
+from kandev_pacer.quota import (
+    binding_label,
+    ceiling_breached,
+    clamp01,
+    elapsed_frac,
+    gate_open,
+    headroom,
+    parse_windows,
+    provider_missing,
+    quota_verdict,
+    tick_record,
+    usage_providers,
+    window_records,
+    worst_headroom,
 )
 
-# --- pacing math (unchanged) ---
+# --- pacing math ---
 
 def test_elapsed():
     now = 1000.0
@@ -75,33 +80,38 @@ USAGE = {"agents": [
         {"label": "7-day", "utilization_pct": 10, "reset_at": "2026-07-29T18:51:33+03:00"}]}}]}
 
 def test_parse_windows_real_shape():
-    ws = parse_windows(USAGE, provider="anthropic")
+    ws = parse_windows(USAGE)
     assert len(ws) == 3                                   # all 3 anthropic windows, codex dropped
     assert [round(w["consumed_frac"], 2) for w in ws] == [0.09, 0.21, 0.09]
     assert [w["duration_s"] for w in ws] == [18000, 604800, 604800]
 
-def test_parse_windows_provider_filter():
-    assert len(parse_windows(USAGE, provider="openai")) == 1   # only codex survives
-    assert parse_windows(USAGE, provider="nobody") == []
+def test_parse_windows_provider_filter(monkeypatch):
+    """One payload carries every agent's usage, so the provider filter is what picks ours."""
+    monkeypatch.setattr(settings, "provider", "openai")
+    assert len(parse_windows(USAGE)) == 1                 # only codex survives
+    monkeypatch.setattr(settings, "provider", "nobody")
+    assert parse_windows(USAGE) == []
 
 def test_parse_windows_skips_unknown_label():
     u = {"agents": [{"usage": {"provider": "anthropic", "windows": [
         {"label": "1-minute", "utilization_pct": 5, "reset_at": "2026-07-23T19:39:59Z"}]}}]}
-    assert parse_windows(u, provider="anthropic") == []
+    assert parse_windows(u) == []
 
 def test_provider_guard():
     """A PACER_PROVIDER that matches nothing must be caught, not silently fail open."""
     assert usage_providers(USAGE) == {"anthropic", "openai"}
     assert usage_providers({"agents": []}) == set()
-    assert provider_missing(USAGE, "claude")            # typo -> present providers, ours absent -> guard fires
+    # typo -> present providers, ours absent -> guard fires
+    assert provider_missing(USAGE, "claude")
     assert not provider_missing(USAGE, "anthropic")     # ours is present -> fine
-    assert not provider_missing({"agents": []}, "anthropic")  # empty payload -> can't tell -> don't withhold
+    # empty payload -> can't tell -> don't withhold
+    assert not provider_missing({"agents": []}, "anthropic")
 
 # --- structured log records ---
 
 def test_parse_windows_carries_label():
     """The log names the binding window and matches windows across ticks -- both need the label."""
-    assert [w["label"] for w in parse_windows(USAGE, provider="anthropic")] == [
+    assert [w["label"] for w in parse_windows(USAGE)] == [
         "5-hour", "7-day", "7-day (Fable)"]
 
 def test_window_records_keep_duration():
@@ -129,30 +139,48 @@ def test_tick_record_separates_gate_from_action():
     # No windows at all (blind tick): still a valid record, no crash on min() of empty.
     assert tick_record(1.0, "blind", "withheld", [], 0, 0, 1, 0)["wh"] == 1.0
 
-def test_diff_sessions():
-    prev = {"t1": {"s1": "RUNNING"}}
-    cur = {"t1": {"s1": "WAITING_FOR_INPUT"}, "t2": {"s9": "CREATED"}}
-    evs = diff_sessions(prev, cur, now=5.0)
-    assert [(e["task"], e["from"], e["to"]) for e in evs] == [
-        ("t1", "RUNNING", "WAITING_FOR_INPUT"),   # turn ended
-        ("t2", None, "CREATED"),                  # session surfaced
-    ]
-    assert diff_sessions(cur, cur, now=5.0) == []     # steady state is silent
-    assert diff_sessions(None, cur, now=5.0) == []    # first tick has no baseline to diff
 
-def test_sessions_snapshot():
-    assert sessions_snapshot({"t": [_sess("a", "RUNNING"), _sess("b", "CREATED")]}) == {
-        "t": {"a": "RUNNING", "b": "CREATED"}}
+# --- the whole quota decision, as one pure call ---
 
-def test_detect_resets():
-    """final_c is only observable at the roll -- after it, the old number is gone for good."""
-    prev = [{"label": "5-hour", "consumed_frac": 0.83, "resets_at": 1000, "duration_s": 18000}]
-    cur = [{"label": "5-hour", "consumed_frac": 0.02, "resets_at": 19000, "duration_s": 18000}]
-    evs = detect_resets(prev, cur, now=1001.0)
-    assert len(evs) == 1
-    assert evs[0]["label"] == "5-hour" and evs[0]["final_c"] == 0.83   # ended with 17% unspent
-    assert detect_resets(prev, prev, now=1.0) == []    # same reset time -> no rollover
-    assert detect_resets([], cur, now=1.0) == []       # no baseline -> nothing to close
+def _windows(consumed, resets_in=9000, label="5-hour"):
+    return [{"label": label, "consumed_frac": consumed,
+             "resets_at": 1000.0 + resets_in, "duration_s": 18000}]
 
-if __name__ == "__main__":
-    run_tests(globals())
+
+def _usage(provider="anthropic"):
+    return {"agents": [{"usage": {"provider": provider, "windows": []}}]}
+
+
+def test_quota_verdict_open_when_under_the_burn_line():
+    # Half elapsed, 10% consumed -> well ahead of steady.
+    verdict = quota_verdict(_usage(), _windows(0.10), 1000.0, True, Settings())
+    assert verdict.is_open and verdict.gate == "open"
+    assert round(verdict.headroom, 3) == 0.4
+    assert verdict.message == ""
+
+
+def test_quota_verdict_pauses_when_over_it():
+    verdict = quota_verdict(_usage(), _windows(0.80), 1000.0, True, Settings())
+    assert not verdict.is_open and verdict.gate == "paused"
+    assert "PAUSED" in verdict.message
+
+
+def test_quota_verdict_ceiling_outranks_a_healthy_burn_line():
+    """Consumption past the backstop withholds even when headroom is positive."""
+    verdict = quota_verdict(_usage(), _windows(0.99, resets_in=1), 1000.0, True, Settings())
+    assert verdict.gate == "ceiling" and not verdict.is_open
+
+
+def test_quota_verdict_is_blind_when_the_provider_is_missing():
+    """A PACER_PROVIDER typo must read as 'cannot see quota', not as 'plenty of room'."""
+    verdict = quota_verdict(_usage("openai"), [], 1000.0, True, Settings())
+    assert verdict.gate == "blind" and not verdict.is_open
+    assert "PACER_PROVIDER" in verdict.message
+
+
+def test_quota_verdict_honours_the_resume_margin():
+    """Reopening needs more than bare zero, or the gate flaps around h == 0."""
+    config = Settings(PACER_RESUME_MARGIN=0.05)
+    barely = _windows(0.4999)                       # h ~ +0.0001, above 0 but under margin
+    assert quota_verdict(_usage(), barely, 1000.0, True, config).is_open    # already open
+    assert not quota_verdict(_usage(), barely, 1000.0, False, config).is_open  # was paused
