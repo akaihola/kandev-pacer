@@ -180,10 +180,12 @@ def note_uncertain(key, task, reason):
     observed_at = time.time()
     _BOOKED[key] = {"at": observed_at, "uncertain": True}
     _clear_failures(task["id"])
+    # Routine, not alarming: kandev answers an accepted launch long after the pacer stops
+    # listening, so this is what a normal launch looks like from here. Only the board can say
+    # whether it took, which is exactly what the reservation waits for.
     print(
-        f"kandev did not confirm start of {label(task)!r} ({reason}) -- "
-        f"reserving its slot for {BOOKING_TTL:g}s pending board re-check",
-        file=sys.stderr,
+        f"{label(task)!r} is in kandev's hands, unconfirmed ({reason}) -- "
+        f"holding its slot for {BOOKING_TTL:g}s until the board shows it",
         flush=True,
     )
     log_event(
@@ -282,6 +284,16 @@ def attempt(kind, task, key, wh, occupied, emit):
     # it started with and quietly defeat the switch. Sending it only where it is needed keeps
     # "kandev owns routing" true no matter what that path does later.
     profile = task_agent_profile(fresh) if intent == "start" else None
+    # Announced before the call, not after it. kandev answers a launch only once the session it
+    # starts is done needing it -- minutes, in this log -- so a tick that printed its decision
+    # afterwards printed nothing at all meanwhile, and a freshly started pacer read as hung.
+    print(
+        f"headroom={wh:+.3f} open -> launching {label(fresh)!r} intent={intent} "
+        f"workflow={named(fresh.get('workflow_id'), _WF_NAMES)!r} "
+        f"target={named(target, _STEP_NAMES)!r} "
+        f"({occupied + 1}/{CONCURRENCY})",
+        flush=True,
+    )
     try:
         ws_launch(task["id"], intent, session_id, target, agent_profile_id=profile)
     except RequestOutcomeUnknown as error:
@@ -302,13 +314,7 @@ def attempt(kind, task, key, wh, occupied, emit):
         return False
     _BOOKED[(task["id"], step, session_id)] = time.time()
     _clear_failures(task["id"])
-    print(
-        f"headroom={wh:+.3f} open -> launched {label(fresh)!r} intent={intent} "
-        f"workflow={named(fresh.get('workflow_id'), _WF_NAMES)!r} "
-        f"target={named(target, _STEP_NAMES)!r} "
-        f"({occupied + 1}/{CONCURRENCY})",
-        flush=True,
-    )
+    print(f"kandev confirmed the launch of {label(fresh)!r}", flush=True)
     emit(
         "open",
         "launched",

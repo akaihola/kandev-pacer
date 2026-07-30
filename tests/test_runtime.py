@@ -158,8 +158,8 @@ def test_a_refused_launch_does_not_wedge_the_board():
 
 
 def test_a_timed_out_launch_reserves_capacity_instead_of_oversubscribing():
-    old_timeout = client.WS_REQUEST_TIMEOUT
-    client.WS_REQUEST_TIMEOUT = .08
+    old_window = client.REFUSAL_WINDOW
+    client.REFUSAL_WINDOW = .08
     try:
         load(
             [
@@ -189,7 +189,31 @@ def test_a_timed_out_launch_reserves_capacity_instead_of_oversubscribing():
         assert runtime.tick(was_open=True) is True
         assert not any(action == "session.launch" for action, _, _ in WS_LOG)
     finally:
-        client.WS_REQUEST_TIMEOUT = old_timeout
+        client.REFUSAL_WINDOW = old_window
+
+
+def test_a_tick_names_the_launch_before_it_waits_for_kandev():
+    """The silence bug: the launch line was printed only once kandev answered.
+
+    kandev answers a launch long after it accepts one, so a pacer that had just been restarted
+    into a free slot printed nothing at all -- no headroom, no status -- and read as hung. The
+    decision has to reach the terminal before the wait, whatever the wait turns into.
+    """
+    old_window = client.REFUSAL_WINDOW
+    client.REFUSAL_WINDOW, printed = .08, io.StringIO()
+    try:
+        load([_task("lost-line", "ip", "Unconfirmed")],
+             {"lost-line": _sess("sl", "WAITING_FOR_INPUT")}, {})
+        runtime._BOOKED, runtime._FAILED = {}, {}
+        runtime._PREV_SESSIONS, runtime._PREV_WINDOWS = None, []
+        with redirect_stdout(printed):
+            runtime.tick(was_open=True)
+    finally:
+        client.REFUSAL_WINDOW = old_window
+    out = printed.getvalue()
+    announced = out.find("open -> launching 'Unconfirmed' intent=workflow_step")
+    assert announced >= 0, out
+    assert announced < out.find("is in kandev's hands, unconfirmed"), out
 
 
 def test_a_refused_launch_is_left_alone_next_tick():

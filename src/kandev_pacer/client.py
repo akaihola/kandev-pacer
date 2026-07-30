@@ -8,6 +8,7 @@ import urllib.request
 from .config import (
     DRAINABLE_STATES,
     ORDER,
+    REFUSAL_WINDOW,
     URL,
     WS_REQUEST_TIMEOUT,
     WS_URL,
@@ -81,8 +82,9 @@ class RequestOutcomeUnknown(RuntimeError):
     """A sent WebSocket request got no matching response before disconnect/deadline."""
 
 
-def _ws_call(connection, action, payload, request_id):
-    deadline = time.monotonic() + WS_REQUEST_TIMEOUT
+def _ws_call(connection, action, payload, request_id, timeout=None):
+    timeout = WS_REQUEST_TIMEOUT if timeout is None else timeout
+    deadline = time.monotonic() + timeout
     try:
         connection.settimeout(max(deadline - time.monotonic(), 0))
         connection.send(
@@ -103,8 +105,7 @@ def _ws_call(connection, action, payload, request_id):
         remaining = deadline - time.monotonic()
         if remaining <= 0:
             raise RequestOutcomeUnknown(
-                f"{action} outcome unknown: no response within "
-                f"{WS_REQUEST_TIMEOUT:g}s"
+                f"{action} outcome unknown: no response within {timeout:g}s"
             )
         try:
             # Unrelated pushes consume the same request budget instead of
@@ -113,8 +114,7 @@ def _ws_call(connection, action, payload, request_id):
             raw = connection.recv()
         except Exception as error:
             raise RequestOutcomeUnknown(
-                f"{action} outcome unknown: no response within "
-                f"{WS_REQUEST_TIMEOUT:g}s"
+                f"{action} outcome unknown: no response within {timeout:g}s"
             ) from error
         if not raw:
             continue
@@ -129,10 +129,10 @@ def _ws_call(connection, action, payload, request_id):
         return response
 
 
-def ws_request(action, payload, request_id="pace-1"):
+def ws_request(action, payload, request_id="pace-1", timeout=None):
     connection = _ws_connect()
     try:
-        return _ws_call(connection, action, payload, request_id)
+        return _ws_call(connection, action, payload, request_id, timeout)
     finally:
         connection.close()
 
@@ -152,7 +152,10 @@ def ws_launch(
     # itself -- see task_agent_profile(). The caller decides when to pass one.
     if agent_profile_id:
         payload["agent_profile_id"] = agent_profile_id
-    return ws_request("session.launch", payload, request_id)
+    # Only as long as a refusal takes. kandev answers an accepted launch minutes later -- it
+    # waits for the session -- and waiting for that answer freezes the pacing loop. What comes
+    # back after the window is not news the pacer needs: the board shows the session.
+    return ws_request("session.launch", payload, request_id, REFUSAL_WINDOW)
 
 
 def ws_set_state(task_id, state, request_id="state-1"):
