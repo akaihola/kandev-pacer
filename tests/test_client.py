@@ -51,9 +51,32 @@ def test_ws_errors_surface_with_kandev_reason():
         raise AssertionError("a type:'error' frame must raise")
 
 
+def test_a_launch_waits_only_for_a_refusal():
+    """kandev answers an accepted launch minutes later; the pacer must not wait for that.
+
+    The plain request deadline is what a launch used to run on, and it froze the loop --
+    no headroom line, no status, nothing -- for as long as kandev took to answer.
+    """
+    old_window, old_timeout = client.REFUSAL_WINDOW, client.WS_REQUEST_TIMEOUT
+    client.REFUSAL_WINDOW, client.WS_REQUEST_TIMEOUT = .08, 30.0
+    started = time.monotonic()
+    try:
+        try:
+            client.ws_launch("lost-window", "start", None, "ip")
+        except client.RequestOutcomeUnknown:
+            pass
+        else:
+            raise AssertionError("an unanswered launch must give up, not block")
+        assert time.monotonic() - started < .5, (
+            "a launch must run on the refusal window, not the request deadline"
+        )
+    finally:
+        client.REFUSAL_WINDOW, client.WS_REQUEST_TIMEOUT = old_window, old_timeout
+
+
 def test_ws_request_deadline_is_absolute_across_push_events():
-    old_timeout = client.WS_REQUEST_TIMEOUT
-    client.WS_REQUEST_TIMEOUT = .08
+    old_timeout = client.REFUSAL_WINDOW
+    client.REFUSAL_WINDOW = .08
     started = time.monotonic()
     try:
         try:
@@ -68,7 +91,7 @@ def test_ws_request_deadline_is_absolute_across_push_events():
             "unrelated pushes must not refresh the deadline"
         )
     finally:
-        client.WS_REQUEST_TIMEOUT = old_timeout
+        client.REFUSAL_WINDOW = old_timeout
 
 
 def test_unreadable_queue_degrades_to_empty():

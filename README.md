@@ -104,9 +104,18 @@ launched and the only symptom was a repeating `tick error` line on stderr. Inste
   ambiguous: kandev may already be starting the turn. The pacer applies one absolute request
   deadline even while unrelated WebSocket events keep arriving, then reserves that slot and
   re-checks the board on later ticks. Pending bookings count toward `PACER_CONCURRENCY`, so a
-  lost response cannot cause the pacer to oversubscribe. The reservation is made *after* the
-  deadline has already elapsed, so it has to outlive it: bookings expire after three ticks
-  plus one request deadline, not three ticks alone.
+  lost response cannot cause the pacer to oversubscribe. The reservation has to outlive the
+  wait it guards: bookings expire after three ticks plus `PACER_LAUNCH_LATENCY`, not three
+  ticks alone.
+- **A launch waits only for a refusal, never for confirmation.** kandev answers
+  `session.launch` only once the session it started is done needing it — the pacer's own log has
+  answers arriving 17s to 15 minutes after the send, while a refusal comes back in milliseconds.
+  So the launch call runs on `PACER_REFUSAL_WINDOW`, not on the request deadline, and anything
+  slower is treated as in flight. Confirmation was never the useful signal anyway: the board
+  shows the session. Waiting for it froze the loop for as long as kandev took, printing
+  nothing — a pacer restarted straight into a free slot looked hung, and got killed as one.
+  For the same reason the tick names the launch it is about to attempt *before* the call, and
+  prints what came back afterwards.
 - **Failures are tracked apart from bookings.** A booking means "a turn was spent here, don't
   spend another"; a failure means "this didn't work, back off". One map meaning both would make
   every "did we already launch?" question ambiguous. The backoff starts at `PACER_FAIL_BACKOFF`
@@ -387,7 +396,10 @@ Config via env: `KANDEV_URL`, `KANDEV_WS_URL` (default derives `ws://host/ws`),
 `PACED_WORKFLOW_ID` (comma-separated ids or names; unset = every enrolled workflow),
 `PACER_PROVIDER` (default `anthropic`), `PACER_CONCURRENCY`, `PACER_ALPHA`,
 `PACER_RESUME_MARGIN`, `PACER_BACKSTOP`, `PACER_INTERVAL`, `PACER_WS_TIMEOUT` (absolute
-WebSocket request deadline in seconds, default 30), `PACER_LOG`, `PACER_ORDER`
+WebSocket request deadline in seconds, default 30), `PACER_REFUSAL_WINDOW` (how long a launch
+waits for kandev to refuse it before it counts as in flight, default 10),
+`PACER_LAUNCH_LATENCY` (how long kandev may take to make an accepted launch visible on the
+board, default 90 — a reservation lasts three ticks past it), `PACER_LOG`, `PACER_ORDER`
 (`auto` | `custom` | `board`, default `auto`), `PACER_FAIL_BACKOFF` (seconds before a refused
 launch is retried, default 3 ticks, doubling per failure), `PACER_BLOCK_AFTER` (consecutive
 failures before the card is flagged `BLOCKED`, default 2; `0` = never write to the board), and
@@ -426,7 +438,8 @@ Six record categories, append-only, ~300 KB/day at the default 120s tick:
 - `failure` — a launch or drain kandev refused, with the reason and the consecutive-failure
   count. Its own kind rather than a tick outcome, for the same reason `_FAILED` is not
   `_BOOKED`: a refused launch spends no quota, and the tick goes on to the next candidate.
-- `uncertain` — a sent launch or drain got no response before its absolute deadline. Its slot
+- `uncertain` — a sent launch or drain got no response before its deadline: the normal outcome
+  of a launch, which kandev answers far later than the refusal window it is given. Its slot
   remains booked while the pacer waits for task/session state to reveal the outcome.
 - `start` / `error` — run configuration (so analysis can segment by `cap`, `alpha`, `order`, …)
   and loop failures.
