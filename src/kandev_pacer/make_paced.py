@@ -2,7 +2,7 @@
 
 Kandev has no supported surface for one of the two edits pacing needs
 (`stage_type` is display-only in the UI, absent from the step APIs and the
-import format -- see docs/pacing-designs.md, Design 13), so this script edits
+import format -- see docs/history/pacing-designs.md, Design 13), so this script edits
 the database directly. Per step it:
 
 - strips every `auto_start_agent` action from the step's events, so a finished

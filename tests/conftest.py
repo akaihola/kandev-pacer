@@ -162,6 +162,11 @@ class FakeBoard:
             return {"settings": self.sidebar}
         if "/sessions" in path:
             return {"sessions": self.sessions.get(path.split("/")[-2], [])}
+        if path.startswith("/api/v1/tasks/"):
+            # One task by id, in the envelope kandev answers with. Unknown ids answer
+            # `{}`, which the client reads as "gone" -- the moved-since-selection path.
+            task_id = path.rsplit("/", 1)[-1]
+            return {"task": next((t for t in self.tasks if t["id"] == task_id), None)}
         return {}
 
     # --- WebSocket ---

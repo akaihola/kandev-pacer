@@ -28,6 +28,7 @@ from .config import (
 from .quota import parse_windows, quota_verdict, tick_record, window_records
 from .selection import (
     ActionKey,
+    Booking,
     action_key,
     backed_off,
     fail_backoff,
@@ -61,6 +62,30 @@ class Snapshot:
 
 def label(task):
     return task.get("title") or task["id"]
+
+
+def queued_counts(task_sessions):
+    """Pending prompt counts, for every idle session that could hold one.
+
+    Every idle session, not just each task's newest: kandev queues a prompt on whichever
+    session the user had open, which is regularly the primary one created with the task.
+    Asking only the newest reported an empty queue for a task that had a prompt waiting,
+    so the drain never fired and the card sat parked indefinitely.
+
+    A session we cannot ask about is left out, which reads downstream as "empty" -- a
+    queue-status hiccup must degrade to launch-only pacing, never stop the tick.
+    """
+    counts = {}
+    for sessions in task_sessions.values():
+        for session in sessions:
+            if session.get("state") not in DRAINABLE_STATES:
+                continue
+            try:
+                counts[session["id"]] = client.ws_queue_count(session["id"])
+            except Exception as error:
+                log.warning(f"queue status failed for session {session['id']} ({error}) "
+                            "-> treating as empty")
+    return counts
 
 
 @dataclass(frozen=True)
@@ -129,8 +154,7 @@ class Pacer:
         )
         # Read once per tick, not once per attempt: the drag order cannot change
         # mid-tick, and MAX_ATTEMPTS candidates would otherwise mean three fetches.
-        # `board` mode ignores the sidebar entirely, so it does not even ask.
-        sidebar = None if self.config.order == "board" else client.user_settings()
+        sidebar = client.user_settings()
         return Snapshot(now, usage, parse_windows(usage), tasks, sessions, running, sidebar)
 
     # --- 2. decide (the pure parts live in quota.py and workflow.py) ---
@@ -140,18 +164,16 @@ class Pacer:
         return set(self.booked) | backed_off(self.failed, now)
 
     def next_action(self, snapshot, queued):
-        """The (kind, task, session) to spend this turn on, or (None, None, None)."""
-        ordered = ordered_tasks(
-            snapshot.tasks, snapshot.sidebar, self.config.order, self.board.step_ranks
-        )
+        """The one Candidate to spend this turn on, or None."""
+        ordered = ordered_tasks(snapshot.tasks, snapshot.sidebar, self.board.step_ranks)
         return select_action(
             ordered, snapshot.sessions, queued, self.board, self.skip_keys(snapshot.now)
         )
 
     # --- 3. act ---
 
-    def tick(self, was_open):
-        """Run one tick. Returns whether the gate is open, which the next tick needs."""
+    def tick(self):
+        """Run one tick. Returns whether the gate was open, for the caller to report."""
         snapshot = self.read()
         self.booked = prune_booked(
             self.booked, snapshot.tasks, snapshot.sessions,
@@ -168,7 +190,7 @@ class Pacer:
         )
 
         verdict = quota_verdict(
-            snapshot.usage, snapshot.windows, snapshot.now, was_open, self.config
+            snapshot.usage, snapshot.windows, snapshot.now, self.config
         )
 
         def report(gate, outcome, extra="", warn=False):
@@ -195,22 +217,22 @@ class Pacer:
         if snapshot.running >= cap:
             return report("open", Outcome("full", f"full ({snapshot.running}/{cap})"))
 
-        queued = client.queued_counts(snapshot.sessions)
+        queued = queued_counts(snapshot.sessions)
         for _ in range(MAX_ATTEMPTS):
-            kind, task, drain_id = self.next_action(snapshot, queued)
-            if kind is None:
+            candidate = self.next_action(snapshot, queued)
+            if candidate is None:
                 held = f", {len(self.failed)} held after a failed launch" if self.failed else ""
                 return report("open", Outcome("nothing", "nothing to launch"),
                               f" ({snapshot.running}/{cap} running{held})")
             # A drain books against the session that holds the queue, not the task's
             # newest -- a booking naming a session the board never lists is pruned next
             # tick, and the same prompt gets drained twice.
-            key = (
-                ActionKey(task["id"], task.get("workflow_step_id", ""), drain_id)
-                if kind == "drain"
-                else action_key(task, snapshot.sessions.get(task["id"], []))
+            key = action_key(
+                candidate.task,
+                snapshot.sessions.get(candidate.task["id"], []),
+                candidate.session,
             )
-            outcome = self.attempt(kind, task, key, snapshot, drain_id)
+            outcome = self.attempt(candidate, key, snapshot)
             if outcome is None:      # refused, no quota spent -- try the next candidate
                 continue
             # The occupancy count only means anything when a turn was actually spent.
@@ -223,7 +245,7 @@ class Pacer:
             warn=True,
         )
 
-    def attempt(self, kind, task, key, snapshot, drain_id=None):
+    def attempt(self, candidate, key, snapshot):
         """Try one action. Returns the Outcome for the caller to report, or None.
 
         None means kandev refused: the refusal spent no quota, so the tick still owes
@@ -231,16 +253,13 @@ class Pacer:
         """
         # Re-read: selection ran against a snapshot, and a turn is expensive enough to
         # be worth confirming the task is still where we think it is.
-        fresh = next(
-            (candidate for candidate in client.paced_tasks(self.board.scope)
-             if candidate["id"] == task["id"]),
-            None,
-        )
+        task = candidate.task
+        fresh = client.task_of(task["id"])
         if fresh is None or fresh.get("workflow_step_id", "") != task.get("workflow_step_id", ""):
             return Outcome("skipped", f"{label(task)!r} moved since selection -> skip")
         sessions = client.sessions_of(task["id"])
-        if kind == "drain":
-            return self.drain(fresh, key, sessions, snapshot, drain_id)
+        if candidate.kind == "drain":
+            return self.drain(fresh, key, sessions, snapshot, candidate.session)
         return self.launch(fresh, key, sessions, snapshot)
 
     def drain(self, task, key, sessions, snapshot, drain_id):
@@ -252,9 +271,8 @@ class Pacer:
         holder = next((s for s in sessions if s["id"] == drain_id), None)
         if holder is None or holder.get("state") not in DRAINABLE_STATES:
             return Outcome("skipped", f"{label(task)!r} no longer idle -> skip drain")
-        newest = holder
         try:
-            drained = bool((client.ws_drain(newest["id"]) or {}).get("drained"))
+            drained = bool((client.ws_drain(holder["id"]) or {}).get("drained"))
         except client.RequestOutcomeUnknown as error:
             self.note_uncertain(key, task, f"drain: {error}")
             return Outcome("uncertain", f"{label(task)!r} drain unconfirmed", launched={})
@@ -266,11 +284,11 @@ class Pacer:
             return Outcome("empty", f"queue for {label(task)!r} already empty -> no turn spent")
 
         step = task.get("workflow_step_id", "")
-        self.book(task["id"], step, newest["id"], snapshot.now)
+        self.book(task["id"], step, holder["id"], snapshot.now)
         return Outcome(
             "drained",
             f"drained queued prompt for {label(task)!r} at {self.board.name_of(step)!r}",
-            {"task": task["id"], "session": newest["id"], "step": step},
+            {"task": task["id"], "session": holder["id"], "step": step},
         )
 
     def launch(self, task, key, sessions, snapshot):
@@ -319,7 +337,7 @@ class Pacer:
         that is how the same turn gets started twice.
         """
         now = time.time()
-        self.booked[key] = {"at": now, "uncertain": True}
+        self.booked[key] = Booking(now, uncertain=True)
         for stale in [k for k in self.failed if k.task == key.task]:
             del self.failed[stale]
         log.info(f"{label(task)!r} is in kandev's hands, unconfirmed ({reason}) -- holding "
@@ -330,7 +348,7 @@ class Pacer:
 
     def book(self, task_id, step, session_id, now):
         """Record a spent turn, and forget this task's failures -- something worked."""
-        self.booked[ActionKey(task_id, step, session_id)] = now
+        self.booked[ActionKey(task_id, step, session_id)] = Booking(now)
         for key in [key for key in self.failed if key.task == task_id]:
             del self.failed[key]
 
@@ -363,18 +381,16 @@ class Pacer:
         return True
 
     def run(self):
-        """Tick forever. A tick that raises pauses the gate rather than ending the run."""
-        was_open = True
+        """Tick forever. A tick that raises skips its turn rather than ending the run."""
         while True:
             try:
-                was_open = self.tick(was_open)
+                self.tick()
             except Exception as error:
                 log.warning(f"tick error: {error} -> pausing this tick")
                 self.log_event({
                     "t": round(time.time(), 3), "kind": "error",
                     "where": "tick", "msg": str(error),
                 })
-                was_open = False
             time.sleep(self.config.interval)
 
 
@@ -384,20 +400,20 @@ class Pacer:
 def dump_order(pacer):
     """Print the queue launches will work down, without spending a turn to find out."""
     board = pacer.board
-    sidebar = None if settings.order == "board" else client.user_settings()
+    sidebar = client.user_settings()
     placed = ((sidebar or {}).get("sidebar_task_prefs") or {}).get("ordered_task_ids") or []
-    if uses_manual_order(sidebar, settings.order):
+    if uses_manual_order(sidebar):
         description = (
             f"manual sidebar order over board pull order "
             f"({len(placed)} task(s) placed by hand)"
         )
     else:
-        description = "board pull order (sidebar order not consulted)"
-    print(f"order={settings.order} -> {description}")
+        description = "board pull order (no sidebar view sorts by hand)"
+    print(f"order: {description}")
     print(f"scope: {[board.name_of(workflow) for workflow in board.scope]}")
 
     tasks = client.paced_tasks(board.scope)
-    ordered = ordered_tasks(tasks, sidebar, settings.order, board.step_ranks)
+    ordered = ordered_tasks(tasks, sidebar, board.step_ranks)
     for index, task in enumerate(ordered, start=1):
         print(f"{index:3}. {label(task)}")
     if board.skipped:
@@ -435,8 +451,8 @@ def report_startup(board):
         for warning in lint_workflow(steps):
             log.warning(f"lint: [{board.name_of(workflow_id)}] {warning}")
     log.info(f"pacing {settings.url} every {settings.interval}s (alpha={settings.alpha}, "
-             f"concurrency={settings.concurrency}, provider={settings.provider}, "
-             f"order={settings.order})\n  log={settings.log_path or '(disabled)'}")
+             f"concurrency={settings.concurrency}, provider={settings.provider})"
+             f"\n  log={settings.log_path or '(disabled)'}")
     for workflow_id in board.scope:
         steps = board.steps[workflow_id]
         works = sorted(board.name_of(step["id"]) for step in steps
@@ -484,8 +500,7 @@ def main():
     pacer.log_event({
         "t": round(time.time(), 3), "kind": "start", "url": settings.url,
         "scope": list(board.scope), "interval": settings.interval,
-        "alpha": settings.alpha, "cap": settings.concurrency, "order": settings.order,
-        "backstop": settings.backstop, "resume_margin": settings.resume_margin,
-        "provider": settings.provider,
+        "alpha": settings.alpha, "cap": settings.concurrency,
+        "backstop": settings.backstop, "provider": settings.provider,
     })
     pacer.run()

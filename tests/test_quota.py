@@ -6,10 +6,7 @@ No network.
 from kandev_pacer.config import Settings, settings
 from kandev_pacer.quota import (
     binding_label,
-    ceiling_breached,
-    clamp01,
     elapsed_frac,
-    gate_open,
     headroom,
     parse_windows,
     provider_missing,
@@ -27,25 +24,15 @@ def test_elapsed():
     assert elapsed_frac(now, resets_at=now + 3600, duration_s=3600) == 0.0   # just reset
     assert elapsed_frac(now, resets_at=now + 1800, duration_s=3600) == 0.5   # halfway
     assert elapsed_frac(now, resets_at=now, duration_s=3600) == 1.0          # at reset
-    assert clamp01(elapsed_frac(now, resets_at=now - 100, duration_s=3600)) == 1.0
+    assert elapsed_frac(now, resets_at=now - 100, duration_s=3600) == 1.0    # past it, clamped
 
-def test_steady_burn_never_pauses():
+def test_steady_burn_sits_exactly_on_the_line():
     for e in (0.1, 0.5, 0.9):
         assert headroom(consumed_frac=e, elapsed_frac_=e) == 0.0
-        assert gate_open(headroom(e, e), was_open=True)
 
-def test_overspend_pauses():
-    assert headroom(0.8, 0.25) < 0
-    assert not gate_open(headroom(0.8, 0.25), was_open=True)
-
-def test_underspend_open():
-    assert headroom(0.1, 0.5) > 0
-    assert gate_open(headroom(0.1, 0.5), was_open=False)
-
-def test_self_heal():
-    frozen = 0.8
-    assert not gate_open(headroom(frozen, 0.5), was_open=False)   # still behind
-    assert gate_open(headroom(frozen, 0.85), was_open=False)      # time caught up -> open
+def test_overspend_and_underspend():
+    assert headroom(0.8, 0.25) < 0      # 80% spent a quarter of the way in
+    assert headroom(0.1, 0.5) > 0       # 10% spent halfway
 
 def test_worst_window_wins():
     now = 0.0
@@ -54,7 +41,6 @@ def test_worst_window_wins():
         {"consumed_frac": 0.9, "resets_at": 1800, "duration_s": 3600},  # e=0.5, h=-0.4  <- worst
     ]
     assert worst_headroom(windows, now) == -0.4
-    assert not gate_open(worst_headroom(windows, now), was_open=True)
 
 def test_no_windows_open():
     assert worst_headroom([], now=0.0) == 1.0
@@ -62,12 +48,6 @@ def test_no_windows_open():
 def test_alpha_reserve():
     assert headroom(0.48, 0.5, alpha=0.9) < 0
     assert headroom(0.48, 0.5, alpha=1.0) > 0
-
-def test_ceiling_breached():
-    assert ceiling_breached([{"consumed_frac": 0.98}], 0.97)        # over cutoff
-    assert not ceiling_breached([{"consumed_frac": 0.5}], 0.97)     # under
-    assert not ceiling_breached([{"consumed_frac": 0.99}], 1.0)     # >=1.0 disables
-    assert not ceiling_breached([], 0.97)
 
 # --- usage parsing (real payload shape) ---
 
@@ -153,34 +133,33 @@ def _usage(provider="anthropic"):
 
 def test_quota_verdict_open_when_under_the_burn_line():
     # Half elapsed, 10% consumed -> well ahead of steady.
-    verdict = quota_verdict(_usage(), _windows(0.10), 1000.0, True, Settings())
+    verdict = quota_verdict(_usage(), _windows(0.10), 1000.0, Settings())
     assert verdict.is_open and verdict.gate == "open"
     assert round(verdict.headroom, 3) == 0.4
     assert verdict.message == ""
 
 
 def test_quota_verdict_pauses_when_over_it():
-    verdict = quota_verdict(_usage(), _windows(0.80), 1000.0, True, Settings())
+    verdict = quota_verdict(_usage(), _windows(0.80), 1000.0, Settings())
     assert not verdict.is_open and verdict.gate == "paused"
     assert "PAUSED" in verdict.message
 
 
 def test_quota_verdict_ceiling_outranks_a_healthy_burn_line():
     """Consumption past the backstop withholds even when headroom is positive."""
-    verdict = quota_verdict(_usage(), _windows(0.99, resets_in=1), 1000.0, True, Settings())
+    verdict = quota_verdict(_usage(), _windows(0.99, resets_in=1), 1000.0, Settings())
     assert verdict.gate == "ceiling" and not verdict.is_open
 
 
 def test_quota_verdict_is_blind_when_the_provider_is_missing():
     """A PACER_PROVIDER typo must read as 'cannot see quota', not as 'plenty of room'."""
-    verdict = quota_verdict(_usage("openai"), [], 1000.0, True, Settings())
+    verdict = quota_verdict(_usage("openai"), [], 1000.0, Settings())
     assert verdict.gate == "blind" and not verdict.is_open
     assert "PACER_PROVIDER" in verdict.message
 
 
-def test_quota_verdict_honours_the_resume_margin():
-    """Reopening needs more than bare zero, or the gate flaps around h == 0."""
-    config = Settings(PACER_RESUME_MARGIN=0.05)
-    barely = _windows(0.4999)                       # h ~ +0.0001, above 0 but under margin
-    assert quota_verdict(_usage(), barely, 1000.0, True, config).is_open    # already open
-    assert not quota_verdict(_usage(), barely, 1000.0, False, config).is_open  # was paused
+def test_quota_verdict_reads_only_the_numbers_it_is_given():
+    """The gate has no memory: the same windows give the same verdict every tick."""
+    barely = _windows(0.4999)                       # h ~ +0.0001, just above the line
+    assert quota_verdict(_usage(), barely, 1000.0, Settings()).is_open
+    assert quota_verdict(_usage(), barely, 1000.0, Settings()).is_open

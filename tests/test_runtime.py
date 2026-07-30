@@ -14,8 +14,8 @@ from conftest import one_session as _sess
 
 from kandev_pacer import client
 from kandev_pacer.config import MAX_ATTEMPTS, settings
-from kandev_pacer.runtime import Pacer, dump_order
-from kandev_pacer.selection import fail_backoff
+from kandev_pacer.runtime import Pacer, dump_order, queued_counts
+from kandev_pacer.selection import Booking, fail_backoff
 from kandev_pacer.workflow import Board
 
 
@@ -40,10 +40,30 @@ def actions(board):
     return [action for action, _ in board.ws_log if action != "message.queue.get"]
 
 
+# --- which sessions a tick asks about before it decides ---
+
+def test_queued_counts_only_asks_about_drainable_sessions(board):
+    board.load([], {}, {"sReview": 2, "sIdle": 0})
+    counts = queued_counts({
+        "a": _sess("sReview", "WAITING_FOR_INPUT"),
+        "b": _sess("sIdle", "WAITING_FOR_INPUT"),
+        "c": _sess("sRun", "RUNNING"),      # turn in flight
+        "d": _sess("sNew", "CREATED"),      # prepared but not promptable
+    })
+    assert counts == {"sReview": 2, "sIdle": 0}
+    asked = sorted(p["session_id"] for a, p in board.ws_log if a == "message.queue.get")
+    assert asked == ["sIdle", "sReview"]
+
+
+def test_unreadable_queue_degrades_to_empty(board):
+    """A failing queue read must not kill the tick -- it falls back to launch-only pacing."""
+    assert queued_counts({"t": _sess("sBoom", "WAITING_FOR_INPUT")}) == {}
+
+
 def tick(pacer, board, tasks, sessions, queues):
     board.load(tasks, sessions, queues)
     board.ws_log.clear()
-    return pacer.tick(was_open=True)
+    return pacer.tick()
 
 
 # --- the event log ---
@@ -168,7 +188,7 @@ def test_a_refused_launch_does_not_wedge_the_board(pacer, board):
 def test_a_refused_launch_is_left_alone_next_tick(pacer, board):
     tick(pacer, board, [_task("boom2", "ip", "Broken")], {"boom2": _sess("sb2", "CREATED")}, {})
     board.ws_log.clear()
-    pacer.tick(was_open=True)
+    pacer.tick()
     assert actions(board) == []
 
 
@@ -179,13 +199,13 @@ def test_repeated_refusals_flag_the_task_blocked_on_the_board(pacer, board):
 
     _expire_backoff(pacer)
     board.ws_log.clear()
-    assert pacer.tick(was_open=True) is True
+    assert pacer.tick() is True
     assert [p for a, p in board.ws_log if a == "task.state"] == \
         [{"id": "boom3", "state": "BLOCKED"}]
 
     _expire_backoff(pacer)                       # flagged once, not once per retry
     board.ws_log.clear()
-    pacer.tick(was_open=True)
+    pacer.tick()
     assert "task.state" not in actions(board)
 
 
@@ -199,7 +219,7 @@ def test_a_failed_flag_does_not_stop_pacing(pacer, board):
         {},
     )
     _expire_backoff(pacer)
-    assert pacer.tick(was_open=True) is True
+    assert pacer.tick() is True
     assert pacer.failed[("boomflag", "ip", "sf")]["flagged"] is False, \
         "a flag that didn't stick must be tried again, not remembered as done"
 
@@ -226,7 +246,7 @@ def test_dump_order_lists_the_queue_in_launch_order(pacer, board, capsys):
                 _task("a", "ip", "First", created="1")], {}, {})
     dump_order(pacer)
     lines = capsys.readouterr().out.splitlines()
-    assert lines[0].startswith("order=auto ->")
+    assert lines[0].startswith("order: ")
     assert [line.split(". ", 1)[1] for line in lines if ". " in line] == ["First", "Second"]
 
 
@@ -337,17 +357,15 @@ def test_a_task_that_moved_since_selection_is_skipped_not_launched(pacer, board,
     the launch is skipped rather than started at a step it has already left.
     """
     board.load([_task("t", "ip", "Ready")], {"t": _sess("s", "WAITING_FOR_INPUT")}, {})
-    reads = []
 
     def moving(path):
-        if path.endswith("/tasks"):
-            reads.append(path)
-            if len(reads) > 1:        # the re-read inside attempt(): it moved to Review
-                return {"tasks": [_task("t", "rv", "Ready")]}
+        # The single-task re-read inside attempt() sees that it moved to Review.
+        if path == "/api/v1/tasks/t":
+            return {"task": _task("t", "rv", "Ready")}
         return board.get(path)
 
     monkeypatch.setattr(client, "get", moving)
-    assert pacer.tick(was_open=True) is True
+    assert pacer.tick() is True
     assert actions(board) == [], "a task that moved spends nothing"
     assert pacer.booked == {}
 
@@ -414,7 +432,7 @@ def test_an_unconfirmed_launch_reserves_the_slot_instead_of_freeing_it(pacer, bo
 
     assert was_open is True
     booking = pacer.booked[("silent1", "ip", "s1")]
-    assert booking["uncertain"] is True, "the slot must stay reserved, not be freed"
+    assert booking.uncertain is True, "the slot must stay reserved, not be freed"
     assert pacer.failed == {}, "an unknown outcome is not a refusal"
 
 
@@ -423,9 +441,9 @@ def test_a_reservation_expires_so_a_lost_launch_is_retried(pacer, board):
     tasks = [_task("t", "ip", "Ready")]
     sessions = {"t": _sess("s", "WAITING_FOR_INPUT")}
     board.load(tasks, sessions, {})
-    pacer.booked[("t", "ip", "s")] = {"at": 0.0, "uncertain": True}   # long expired
+    pacer.booked[("t", "ip", "s")] = Booking(0.0, uncertain=True)     # long expired
 
-    pacer.tick(was_open=True)
+    pacer.tick()
     assert actions(board) == ["session.launch"], "an expired reservation must not wedge it"
 
 
@@ -436,6 +454,6 @@ def test_a_launch_that_never_became_a_turn_stops_reserving_forever(pacer, board)
     other respect -- was skipped on every later tick.
     """
     board.load([_task("t", "ip", "Ready")], {"t": _sess("s", "WAITING_FOR_INPUT")}, {})
-    pacer.booked[("t", "ip", "s")] = 0.0                              # plain, long expired
-    pacer.tick(was_open=True)
+    pacer.booked[("t", "ip", "s")] = Booking(0.0)                     # plain, long expired
+    pacer.tick()
     assert actions(board) == ["session.launch"]

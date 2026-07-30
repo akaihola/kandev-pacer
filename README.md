@@ -50,13 +50,10 @@ pacer with the variable's name in the message rather than failing hours later.
 | `PACER_PROVIDER` | `anthropic` | which usage agent to gate on. A name matching nothing **fails closed** rather than pacing blind |
 | `PACER_CONCURRENCY` | `1` | how many paced turns may run at once |
 | `PACER_ALPHA` | `1.0` | target burn line. Below 1 aims under steady, finishing each window with quota spare |
-| `PACER_RESUME_MARGIN` | `0.0` | headroom the gate must regain before reopening, to stop it flapping at zero |
 | `PACER_BACKSTOP` | `0.97` | consumed fraction at which everything is withheld regardless. `1.0` disables |
 | `PACER_INTERVAL` | `120` | seconds between ticks |
-| `PACER_WS_TIMEOUT` | `30` | absolute deadline for one WebSocket request, so a busy event stream cannot keep one alive forever |
 | `PACER_REFUSAL_WINDOW` | `10` | how long a launch waits. Only long enough to catch a refusal — an accepted launch is answered minutes later, and waiting froze the loop |
 | `PACER_LAUNCH_LATENCY` | `90` | how long kandev may take to make an accepted launch visible. Bookings last three ticks plus this |
-| `PACER_ORDER` | `auto` | `auto` \| `custom` \| `board` — see below |
 | `PACER_FAIL_BACKOFF` | 3 ticks | seconds before a refused launch is retried; doubles per consecutive failure, up to 8× |
 | `PACER_BLOCK_AFTER` | `2` | consecutive failures before the card is flagged `BLOCKED`. `0` keeps the pacer read-only |
 | `PACER_LOG` | `~/.local/state/kandev-pacer/pacer.jsonl` | JSONL event log. Empty disables it |
@@ -73,11 +70,8 @@ pacer re-reads that order every tick, so re-prioritizing needs no restart. Pinne
 float to the top; subtasks follow their parent; anything you never dragged keeps pull order
 behind the placed ones.
 
-| `PACER_ORDER` | behaviour |
-| --- | --- |
-| `auto` (default) | Layer your drag order on top as soon as **any** saved sidebar view sorts `custom`; pull order alone otherwise |
-| `custom` | Always layer the drag order, whatever the sidebar's current sort |
-| `board` | Pull order alone — ignores the sidebar and skips the settings fetch |
+The drag order is layered on as soon as **any** saved sidebar view sorts `custom`; with no
+such view, pull order decides alone.
 
 Everything degrades to pull order rather than to something arbitrary: unreadable settings,
 nothing dragged yet, or a task whose parent chain loops.
@@ -142,7 +136,8 @@ src/kandev_pacer/
   runtime.py    the Pacer object, the loop, the CLI
   make_paced.py the enrollment tool (`make-paced`)
 tests/          one file per module, over conftest.py's fake kandev and builders
-docs/           design rationale and the investigations behind it
+docs/           how the system works today, and the investigations behind it
+  history/      designs that were considered and rejected — background, not current
 ```
 
 The three pure modules import nothing but `config`, so everything worth arguing about can

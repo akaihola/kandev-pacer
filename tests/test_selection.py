@@ -8,6 +8,7 @@ from conftest import sess as _sess
 from conftest import task as _task
 
 from kandev_pacer.selection import (
+    Booking,
     action_key,
     backed_off,
     drain_session,
@@ -40,7 +41,7 @@ def _ord(tasks):
     Routed through the real ordering pipeline rather than hand-sorted, so a test
     cannot accidentally assert against an order the pacer would never produce.
     """
-    return ordered_tasks(tasks, None, "board", RANKS)
+    return ordered_tasks(tasks, None, RANKS)
 
 def _order(tasks, ranks=RANKS):
     return [t["id"] for t in sorted(tasks, key=lambda t: task_order_key(t, ranks))]
@@ -248,16 +249,15 @@ def test_select_action_prefers_drain():
     at_ip = {"id": "t", "workflow_step_id": "ip", "created_at": "1"}
     sessions = {"t": [_sess("s", "WAITING_FOR_INPUT")]}
     # Same task is both launchable (work step, idle) and drainable (queue non-empty) -> drain.
-    kind, chosen, _ = select_action(_ord([at_ip]), sessions, {"s": 1}, BOARD, set())
+    kind, chosen, _session = select_action(_ord([at_ip]), sessions, {"s": 1}, BOARD, set())
     assert (kind, chosen["id"]) == ("drain", "t")
     # Empty queue -> falls through to the launch path unchanged.
     assert select_action(_ord([at_ip]), sessions, {}, BOARD,  set())[0] == "launch"
     # Kind beats column: the drainable task sits in the LEFTMOST column, which pull ordering
     # would rank last, and it still wins over a launchable task further downstream.
     at_bk = {"id": "u", "workflow_step_id": "bk", "created_at": "9"}
-    kind, chosen, _ = select_action(_ord([at_ip, at_bk]), {"t": [_sess("a", "WAITING_FOR_INPUT")],
-                                                 "u": [_sess("b", "WAITING_FOR_INPUT")]},
-                                {"b": 1}, BOARD,  set())
+    both = {"t": [_sess("a", "WAITING_FOR_INPUT")], "u": [_sess("b", "WAITING_FOR_INPUT")]}
+    kind, chosen, _session = select_action(_ord([at_ip, at_bk]), both, {"b": 1}, BOARD, set())
     assert (kind, chosen["id"]) == ("drain", "u")
 
 def test_select_action_uses_board_pull_order():
@@ -281,10 +281,10 @@ def test_select_action_uses_board_pull_order():
     assert select_action(_ord([at_bk, at_rv]), both, {"x": 1, "y": 1},
                          BOARD, set())[1]["id"] == "rv1"
     # Nothing to do at all.
-    assert select_action([], {}, {}, BOARD, set()) == (None, None, None)
+    assert select_action([], {}, {}, BOARD, set()) is None
     # Parked, nothing queued -> not actionable (today's behaviour, unchanged).
     assert select_action([at_rv], {"rv1": [_sess("s", "WAITING_FOR_INPUT")]},
-                         {}, BOARD, set()) == (None, None, None)
+                         {}, BOARD, set()) is None
 
 def test_pick_intent():
     assert pick_intent([]) == ("start", None)
@@ -304,11 +304,11 @@ def test_prune_booked():
     tasks = [{"id": "t", "workflow_step_id": "ip"}]
     # still WAITING at same (step, session) -> booking retained (launch not yet taken effect)
     ts_waiting = {"t": [_sess("s", "WAITING_FOR_INPUT")]}
-    booked = {("t", "ip", "s"): 990.0}
+    booked = {("t", "ip", "s"): Booking(990.0)}
     assert prune_booked(booked, tasks, ts_waiting, now, ttl) == booked
     # turn started (RUNNING) -> booking cleared
     ts_running = {"t": [_sess("s", "RUNNING")]}
-    assert prune_booked({("t", "ip", "s"): 990.0}, tasks, ts_running, now, ttl) == {}
+    assert prune_booked({("t", "ip", "s"): Booking(990.0)}, tasks, ts_running, now, ttl) == {}
 
 def test_prune_booked_never_run_admission():
     """W1: a never-run admission booking (sid None) must survive while its session is invisible."""
@@ -317,13 +317,13 @@ def test_prune_booked_never_run_admission():
     # session not yet surfaced (detached goroutine)
     no_sess = {"t": []}
     # within TTL -> retained, so is_launchable stays guarded and no second intent:start fires
-    fresh = {("t", "bk", None): 900.0}
+    fresh = {("t", "bk", None): Booking(900.0)}
     assert prune_booked(fresh, at_bk, no_sess, now, ttl) == fresh
     # older than TTL -> expired, so a silently-failed launch can retry instead of wedging
-    assert prune_booked({("t", "bk", None): 500.0}, at_bk, no_sess, now, ttl) == {}
+    assert prune_booked({("t", "bk", None): Booking(500.0)}, at_bk, no_sess, now, ttl) == {}
     # session surfaced -> the None key no longer matches the task's key -> dropped naturally
     surfaced = {"t": [_sess("s2", "RUNNING")]}
-    assert prune_booked({("t", "bk", None): 900.0}, at_bk, surfaced, now, ttl) == {}
+    assert prune_booked({("t", "bk", None): Booking(900.0)}, at_bk, surfaced, now, ttl) == {}
 
 def test_prune_booked_created_admission():
     """A CREATED booking must survive under TTL, or accepting CREATED double-launches.
@@ -336,12 +336,12 @@ def test_prune_booked_created_admission():
     now, ttl = 1000.0, 360.0
     at_bk = [{"id": "t", "workflow_step_id": "bk"}]
     created = {"t": [_sess("s", "CREATED")]}
-    fresh = {("t", "bk", "s"): 900.0}
+    fresh = {("t", "bk", "s"): Booking(900.0)}
     assert prune_booked(fresh, at_bk, created, now, ttl) == fresh
-    assert prune_booked({("t", "bk", "s"): 500.0}, at_bk, created, now, ttl) == {}
+    assert prune_booked({("t", "bk", "s"): Booking(500.0)}, at_bk, created, now, ttl) == {}
     # Turn actually started -> state leaves CREATED -> guard no longer needed.
     running = {"t": [_sess("s", "RUNNING")]}
-    assert prune_booked({("t", "bk", "s"): 900.0}, at_bk, running, now, ttl) == {}
+    assert prune_booked({("t", "bk", "s"): Booking(900.0)}, at_bk, running, now, ttl) == {}
 
 # --- rejected launches: backoff and moving on ---
 
@@ -492,11 +492,11 @@ def test_sidebar_order_reaches_drain_selection():
     sessions = {"a": [_sess("sa", "WAITING_FOR_INPUT")], "b": [_sess("sb", "WAITING_FOR_INPUT")]}
     queued = {"sa": 1, "sb": 1}                      # both have a prompt parked
     dragged = _settings(ordered=["b"])               # user put b on top
-    ordered = ordered_tasks([a, b], dragged, "auto", RANKS)
-    kind, chosen, _ = select_action(ordered, sessions, queued, BOARD, set())
+    ordered = ordered_tasks([a, b], dragged, RANKS)
+    kind, chosen, _session = select_action(ordered, sessions, queued, BOARD, set())
     assert (kind, chosen["id"]) == ("drain", "b")
     # Without the drag, pull order decides (equal here -> id tiebreak keeps it total).
-    kind, chosen, _ = select_action(_ord([a, b]), sessions, queued, BOARD, set())
+    kind, chosen, _session = select_action(_ord([a, b]), sessions, queued, BOARD, set())
     assert (kind, chosen["id"]) == ("drain", "a")
 
 def test_ordered_tasks_layers_manual_over_board_pull_order():
@@ -513,35 +513,29 @@ def test_ordered_tasks_layers_manual_over_board_pull_order():
     in_flight = _task("wip", step="ip", pos=0)
     tasks = [queued_a, queued_b, in_flight]
     # Nothing placed by hand -> pure pull order: the in-flight column drains first.
-    ordered = ordered_tasks(tasks, _settings(), "auto", ranks)
+    ordered = ordered_tasks(tasks, _settings(), ranks)
     assert [t["id"] for t in ordered] == ["wip", "qa", "qb"]
     # Dragging a queued task to the top outranks the pull preference -- an explicit
     # instruction beats a heuristic, and the unplaced rest keeps pull order behind it.
     dragged = _settings(ordered=["qb"])
-    assert [t["id"] for t in ordered_tasks(tasks, dragged, "auto", ranks)] == ["qb", "wip", "qa"]
-    # PACER_ORDER=board ignores the drag entirely and restores strict pull order.
-    assert [t["id"] for t in ordered_tasks(tasks, dragged, "board", ranks)] == ["wip", "qa", "qb"]
+    assert [t["id"] for t in ordered_tasks(tasks, dragged, ranks)] == ["qb", "wip", "qa"]
 
-def test_ordered_tasks_modes():
-    # Passed in newest-first to prove the mode, not the input order, decides the result.
+def test_ordered_tasks_follows_the_drag_only_when_a_view_sorts_by_hand():
+    # Passed in newest-first to prove the sidebar, not the input order, decides the result.
     tasks = [
         _task("new", created="2026-02-01T00:00:00Z"),
         _task("old", created="2026-01-01T00:00:00Z"),
     ]
     fifo = ["old", "new"]  # equal step/position/priority -> created_at decides
     manual = _settings(ordered=["new", "old"])
-    assert [t["id"] for t in ordered_tasks(tasks, manual, "auto")] == ["new", "old"]
-    assert [t["id"] for t in ordered_tasks(tasks, manual, "custom")] == ["new", "old"]
-    assert [t["id"] for t in ordered_tasks(tasks, manual, "board")] == fifo
-    # auto follows the list only once a custom-sorted view exists...
+    assert [t["id"] for t in ordered_tasks(tasks, manual)] == ["new", "old"]
+    # A view sorted by something else is not a drag order, so the board decides.
     other = _settings(sort_key="updatedAt", ordered=["new", "old"])
-    assert [t["id"] for t in ordered_tasks(tasks, other, "auto")] == fifo
-    # ...whereas 'custom' is the explicit opt-in and ignores the sidebar's sort entirely.
-    assert [t["id"] for t in ordered_tasks(tasks, other, "custom")] == ["new", "old"]
+    assert [t["id"] for t in ordered_tasks(tasks, other)] == fifo
     # Settings unreadable, or nothing dragged yet -> FIFO, never an arbitrary order.
-    assert [t["id"] for t in ordered_tasks(tasks, None, "auto")] == fifo
-    assert [t["id"] for t in ordered_tasks(tasks, {}, "custom")] == fifo
-    assert [t["id"] for t in ordered_tasks(tasks, _settings(), "auto")] == fifo
+    assert [t["id"] for t in ordered_tasks(tasks, None)] == fifo
+    assert [t["id"] for t in ordered_tasks(tasks, {})] == fifo
+    assert [t["id"] for t in ordered_tasks(tasks, _settings())] == fifo
 
 
 def test_task_agent_profile_reads_launch_metadata():

@@ -97,11 +97,18 @@ def is_drainable(task, sessions, queued, skip):
     return drain_session(task, sessions, queued, skip) is not None
 
 
-def select_action(ordered, task_sessions, queued, board, skip):
-    """The one turn to spend now as (kind, task, session), or (None, None, None).
+class Candidate(NamedTuple):
+    """The one action a tick will spend its turn on."""
 
-    The session is the one holding the queue, for a drain -- which is not always the
-    task's newest -- and None for a launch, which resumes the newest.
+    kind: str            # "drain" or "launch"
+    task: dict
+    # For a drain, the session holding the queue -- which is not always the task's
+    # newest. None for a launch, which resumes the newest.
+    session: str | None = None
+
+
+def select_action(ordered, task_sessions, queued, board, skip):
+    """The one turn to spend now, or None.
 
     Drains come first, in full: launching a task that has a prompt queued spends the
     turn on the step prompt and lets the queued entry leak out un-paced afterwards.
@@ -109,11 +116,11 @@ def select_action(ordered, task_sessions, queued, board, skip):
     for task in ordered:
         session = drain_session(task, task_sessions.get(task["id"], []), queued, skip)
         if session is not None:
-            return "drain", task, session["id"]
+            return Candidate("drain", task, session["id"])
     for task in ordered:
         if is_launchable(task, task_sessions.get(task["id"], []), board, skip):
-            return "launch", task, None
-    return None, None, None
+            return Candidate("launch", task)
+    return None
 
 
 def launch_target(task, board):
@@ -168,15 +175,14 @@ def has_custom_sort_view(sidebar):
     return any(((view or {}).get("sort") or {}).get("key") == "custom" for view in views)
 
 
-def uses_manual_order(sidebar, mode):
+def uses_manual_order(sidebar):
     """Whether the sidebar drag order overrides the board's pull order this run.
 
-    Shared by the pacer and by --dump-order, so the report cannot claim one thing
-    while the loop does another.
+    It does exactly when some sidebar view sorts by hand -- that is what asking for a
+    drag order looks like. Shared by the pacer and by --dump-order, so the report cannot
+    claim one thing while the loop does another.
     """
-    if mode == "board" or not sidebar:
-        return False
-    return mode == "custom" or has_custom_sort_view(sidebar)
+    return bool(sidebar) and has_custom_sort_view(sidebar)
 
 
 def _rank(tasks, ordered_ids):
@@ -233,10 +239,10 @@ def visible_task_order(tasks, pinned_ids, ordered_ids, subtask_order=None):
     return ordered
 
 
-def ordered_tasks(tasks, sidebar, mode, ranks=None):
+def ordered_tasks(tasks, sidebar, ranks=None):
     """The queue launches work down: the board's pull order, with your drag order on top."""
     base = sorted(tasks, key=lambda task: task_order_key(task, ranks or {}))
-    if not uses_manual_order(sidebar, mode):
+    if not uses_manual_order(sidebar):
         return base
     prefs = sidebar.get("sidebar_task_prefs") or {}
     return visible_task_order(
@@ -261,13 +267,17 @@ class ActionKey(NamedTuple):
     session: str | None
 
 
-def action_key(task, sessions):
-    newest = newest_session(sessions)
-    return ActionKey(
-        task["id"],
-        task.get("workflow_step_id", ""),
-        newest["id"] if newest else None,
-    )
+def action_key(task, sessions, session_id=None):
+    """The key a booking or failure about this task is filed under.
+
+    `session_id` names the session explicitly: a drain books against the session that
+    holds the queue, which is not always the newest. Without it, the newest is used --
+    that is the session a launch resumes.
+    """
+    if session_id is None:
+        newest = newest_session(sessions)
+        session_id = newest["id"] if newest else None
+    return ActionKey(task["id"], task.get("workflow_step_id", ""), session_id)
 
 
 def live_keys(tasks, task_sessions):
@@ -299,6 +309,17 @@ def prune_failures(failures, tasks, task_sessions):
     return {key: value for key, value in failures.items() if key in live}
 
 
+class Booking(NamedTuple):
+    """A turn the pacer has spent, holding that task's slot until the board catches up.
+
+    One shape for both kinds: a confirmed launch or drain, and a request kandev may have
+    acted on whose answer never arrived (`uncertain`).
+    """
+
+    at: float            # when the turn was spent
+    uncertain: bool = False
+
+
 def booking_still_applies(state, age, ttl, uncertain=False):
     """Whether a booking is still doing its job, given the session's state now.
 
@@ -324,19 +345,16 @@ def booking_still_applies(state, age, ttl, uncertain=False):
     return state == READY_STATE
 
 
-def booking_age(booking, now):
-    """Seconds since a booking was made. Plain timestamp, or an unconfirmed record."""
-    return now - (booking["at"] if isinstance(booking, dict) else booking)
-
-
 def prune_booked(booked, tasks, task_sessions, now, ttl):
-    """Drop the bookings that have stopped meaning anything."""
-    kept = {}
-    for key, state in live_keys(tasks, task_sessions).items():
-        if key not in booked:
-            continue
-        booking = booked[key]
-        uncertain = isinstance(booking, dict) and bool(booking.get("uncertain"))
-        if booking_still_applies(state, booking_age(booking, now), ttl, uncertain):
-            kept[key] = booking
-    return kept
+    """Drop the bookings that have stopped meaning anything.
+
+    A booking whose key is not on the board any more is gone by that alone: the task moved,
+    or the session it named is not the one the task shows now.
+    """
+    live = live_keys(tasks, task_sessions)
+    return {
+        key: booking
+        for key, booking in booked.items()
+        if key in live
+        and booking_still_applies(live[key], now - booking.at, ttl, booking.uncertain)
+    }

@@ -121,11 +121,10 @@ queued prompt was either never delivered or delivered un-paced:
 
 What the pacer does now, per tick:
 
-1. `queued_counts()` asks `message.queue.get` for every task whose newest session
-   is in `DRAINABLE_STATES` — one WebSocket connection for the whole tick, and
-   running or never-run tasks are not asked about at all.
-2. `select_action()` returns `('drain', task)` or `('launch', task)`, oldest task
-   first within each kind, **drain outranking launch**. A drainable task is
+1. `queued_counts()` (in `runtime.py`) asks `message.queue.get` about every session
+   in `DRAINABLE_STATES` — running or never-run sessions are not asked about at all.
+2. `select_action()` returns a `Candidate('drain', task, session)` or
+   `Candidate('launch', task)`, oldest task first within each kind, **drain outranking launch**. A drainable task is
    eligible at *any* step, which is what makes a prompt parked at Review
    releasable.
 3. A drain re-checks that the session is still the counted one and still idle,

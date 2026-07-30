@@ -7,7 +7,7 @@ import urllib.request
 
 import websocket
 
-from .config import DRAINABLE_STATES, settings
+from .config import WS_TIMEOUT, settings
 
 log = logging.getLogger("kandev-pacer")
 
@@ -63,9 +63,21 @@ def sessions_of(task_id):
     return response.get("sessions", [])
 
 
+def task_of(task_id):
+    """One task by id, or None if kandev no longer has it.
+
+    The endpoint answers either the task itself or a `{"task": …}` envelope, depending
+    on the kandev build, so both are accepted.
+    """
+    response = get(f"/api/v1/tasks/{task_id}") or {}
+    return response.get("task") or (response if response.get("id") else None)
+
+
 def _ws_connect():
     # /ws rejects a foreign Origin, so present the server's own URL.
-    return websocket.create_connection(settings.ws_url, timeout=30, origin=settings.url)
+    return websocket.create_connection(
+        settings.ws_url, timeout=WS_TIMEOUT, origin=settings.url
+    )
 
 
 class RequestOutcomeUnknown(RuntimeError):
@@ -79,7 +91,7 @@ class RequestOutcomeUnknown(RuntimeError):
 
 def _ws_call(connection, action, payload, request_id, timeout=None):
     """One request and its answer, matched on `id`, under an absolute deadline."""
-    timeout = settings.ws_timeout if timeout is None else timeout
+    timeout = WS_TIMEOUT if timeout is None else timeout
     deadline = time.monotonic() + timeout
     try:
         connection.settimeout(max(deadline - time.monotonic(), 0))
@@ -171,25 +183,3 @@ def ws_queue_count(session_id):
                 or {}).get("count") or 0)
 
 
-def queued_counts(task_sessions):
-    """Pending prompt counts, for every idle session that could hold one.
-
-    Every idle session, not just each task's newest: kandev queues a prompt on whichever
-    session the user had open, which is regularly the primary one created with the task.
-    Asking only the newest reported an empty queue for a task that had a prompt waiting,
-    so the drain never fired and the card sat parked indefinitely.
-
-    A session we cannot ask about is left out, which reads downstream as "empty" -- a
-    queue-status hiccup must degrade to launch-only pacing, never stop the tick.
-    """
-    counts = {}
-    for sessions in task_sessions.values():
-        for session in sessions:
-            if session.get("state") not in DRAINABLE_STATES:
-                continue
-            try:
-                counts[session["id"]] = ws_queue_count(session["id"])
-            except Exception as error:
-                log.warning(f"queue status failed for session {session['id']} ({error}) "
-                            "-> treating as empty")
-    return counts

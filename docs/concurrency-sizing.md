@@ -115,7 +115,8 @@ This is an argument for `N ≥ 2` that is independent of quota entirely.
 
 ## Simulated
 
-The simulator ran the real gate (`worst_headroom`, `gate_open`, `ceiling_breached`)
+The simulator ran the real gate (`worst_headroom` and the burn-line rule now inlined
+into `quota_verdict`)
 over a 5-hour window, resampling durations from the 349 real turns, with a deep backlog. Read
 it as *what a higher cap is worth when there is work to give it* — the section above is exactly
 the argument that this precondition is not established here. Turns completed / final consumption, `dead_time=300 s`:
@@ -143,7 +144,7 @@ window at `WINDOW/INTERVAL` = 150 turns, which makes tick rate a competing lever
 
 For *throughput alone*, `N=1` at a 15-second tick matches `N=2` at 120 s while staying serial —
 which does not multiply dead-time overshoot (`N × burn × dead_time`) and keeps scheduling
-depth-first, which `docs/pacing-designs.md` wants on prompt-cache grounds, since round-robining
+depth-first, which `docs/history/pacing-designs.md` wants on prompt-cache grounds, since round-robining
 pushes every task's between-turn gap past the cache TTL. That document already named the fix:
 *"react to turn-completed events instead of a slow polling tick."* But the tick lever does
 nothing for the occupied-slot problem above, so the two are complements, not alternatives.

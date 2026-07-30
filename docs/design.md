@@ -24,7 +24,7 @@ true and never releases. `c > e` self-heals: while paused, `c` is frozen and `e`
 rising, so `h` climbs back to 0 on its own and the gate reopens with no external release.
 
 `e` is derived from the reset time, not a start time:
-`e = clamp01(1 − (resets_at − now) / duration)`. Window durations are hardcoded
+`e = 1 − (resets_at − now) / duration`, clamped to 0..1. Window durations are hardcoded
 (5h = 18000s, 7d = 604800s) since the payload gives `resets_at`, not duration.
 
 ## Enforcement: hold in place, launch on release (Design 13)
@@ -199,13 +199,9 @@ and the pacer works down that order — no pacer-side priority field to maintain
   can sit high in your manual order and still be out of scope. `--dump-order` names those
   explicitly (`placed by hand but not paced`) rather than leaving them to look lost.
 
-`PACER_ORDER` picks the policy:
-
-| value | behavior |
-| --- | --- |
-| `auto` (default) | Layer the manual order over pull order once **any** saved sidebar view uses sort `custom`; pull order alone otherwise. |
-| `custom` | Always layer the manual order, whatever the sidebar's current sort. |
-| `board` | Pull order alone — ignores the sidebar and skips the settings fetch entirely. |
+The manual order is layered over pull order once **any** saved sidebar view uses sort
+`custom`; with no such view, pull order decides alone. There is no knob — asking for a drag
+order *is* the opt-in, so a second switch could only ever contradict what the sidebar says.
 
 **Why "any saved view" and not the active one?** The manual order (`ordered_task_ids`) is
 stored **once per user, not per view**. So a saved "Prioritize" view still expresses your
@@ -222,7 +218,7 @@ parent chain is cyclic all fall back to the board order rather than to an arbitr
 **The trade-off this layering makes.** Pull order deliberately prefers finishing in-flight work
 over admitting new work; dragging a queued task to the top overrides that and admits it first.
 That is the point — an explicit instruction beats a heuristic — but if you would rather the WIP
-preference always win, use `PACER_ORDER=board`.
+preference always win, take the sidebar view off sort `custom`.
 
 `uv run kandev-pacer --dump-order` prints the queue the pacer would work down, so a drag is checkable
 without waiting a tick — or spending quota — to see which task it picks.
@@ -411,8 +407,8 @@ Distilled from the kandev integration investigation in the vault:
 under "the quota endpoint you need for the pacer" and "the cron pacer has two viable shapes").
 
 [README.md]: ../README.md
-[pacing-designs.md]: pacing-designs.md
+[pacing-designs.md]: history/pacing-designs.md
 [userscript/kandev-queue-button.user.js]: ../userscript/kandev-queue-button.user.js
 [queueing-user-prompts.md]: queueing-user-prompts.md
 [concurrency-sizing.md]: concurrency-sizing.md
-[kandev-plugin-feasibility.md]: kandev-plugin-feasibility.md
+[kandev-plugin-feasibility.md]: history/kandev-plugin-feasibility.md

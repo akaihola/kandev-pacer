@@ -6,38 +6,29 @@ from datetime import datetime
 from .config import WINDOW_DURATIONS, settings
 
 
-def clamp01(x):
-    return 0.0 if x < 0 else 1.0 if x > 1 else x
-
-
 def elapsed_frac(now, resets_at, duration_s):
-    return clamp01(1 - (resets_at - now) / duration_s)
+    """How far through its window we are, 0..1."""
+    fraction = 1 - (resets_at - now) / duration_s
+    return min(max(fraction, 0.0), 1.0)
 
 
 def headroom(consumed_frac, elapsed_frac_, alpha=1.0):
+    """How far ahead of the burn line this window is. Negative means overspending."""
     return alpha * elapsed_frac_ - consumed_frac
 
 
 def worst_headroom(windows, now, alpha=1.0):
-    if not windows:
-        return 1.0
+    """The tightest window's headroom -- the one that decides the gate."""
     return min(
-        headroom(
-            window["consumed_frac"],
-            elapsed_frac(now, window["resets_at"], window["duration_s"]),
-            alpha,
-        )
-        for window in windows
-    )
-
-
-def gate_open(worst_h, was_open, resume_margin=0.0):
-    return worst_h >= 0 if was_open else worst_h >= resume_margin
-
-
-def ceiling_breached(windows, backstop):
-    return backstop < 1.0 and any(
-        window["consumed_frac"] > backstop for window in windows
+        (
+            headroom(
+                window["consumed_frac"],
+                elapsed_frac(now, window["resets_at"], window["duration_s"]),
+                alpha,
+            )
+            for window in windows
+        ),
+        default=1.0,
     )
 
 
@@ -60,7 +51,7 @@ class Verdict:
         return self.gate == "open"
 
 
-def quota_verdict(usage, windows, now, was_open, config):
+def quota_verdict(usage, windows, now, config):
     """Read the usage payload against the burn line. Pure: no I/O, no state."""
     if not windows and provider_missing(usage, config.provider):
         return Verdict("blind", 1.0, (
@@ -68,12 +59,13 @@ def quota_verdict(usage, windows, now, was_open, config):
             f"{sorted(usage_providers(usage))} -> WITHHOLDING (check PACER_PROVIDER)"
         ))
     worst = worst_headroom(windows, now, config.alpha)
-    if ceiling_breached(windows, config.backstop):
+    # The hard ceiling first: it overrides the burn line, however much headroom says.
+    if config.backstop < 1.0 and any(w["consumed_frac"] > config.backstop for w in windows):
         return Verdict("ceiling", worst, (
             f"headroom={worst:+.3f} CEILING (consumed>{config.backstop:.2f}) "
             "-> withholding"
         ))
-    if not gate_open(worst, was_open, config.resume_margin):
+    if worst < 0:
         return Verdict("paused", worst, f"headroom={worst:+.3f} PAUSED")
     return Verdict("open", worst, "")
 

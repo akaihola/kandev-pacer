@@ -6,7 +6,6 @@ changing one is a code change, not a configuration change.
 """
 
 from pathlib import Path
-from typing import Literal
 
 from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings
@@ -29,16 +28,10 @@ class Settings(BaseSettings):
     concurrency: int = Field(1, alias="PACER_CONCURRENCY", ge=1)
     # Target burn line: alpha < 1 aims below steady, finishing each window with quota spare.
     alpha: float = Field(1.0, alias="PACER_ALPHA", gt=0)
-    # Headroom the gate must regain before it reopens, to stop it flapping at h == 0.
-    resume_margin: float = Field(0.0, alias="PACER_RESUME_MARGIN", ge=0)
     # Hard ceiling on consumed fraction, whatever the burn line says. 1.0 disables it.
     backstop: float = Field(0.97, alias="PACER_BACKSTOP", gt=0, le=1.0)
     interval: int = Field(120, alias="PACER_INTERVAL", gt=0)
 
-    # Absolute deadline for one WebSocket request once it has been sent. The socket's own
-    # timeout is not enough: every unrelated pushed event makes recv() return and starts a
-    # fresh socket timeout, so a busy event stream could keep one request alive forever.
-    ws_timeout: float = Field(30.0, alias="PACER_WS_TIMEOUT", gt=0)
     # kandev answers session.launch only once the session it started is done needing it --
     # observed 17s to 15 minutes after the send. A *refusal* comes back in milliseconds. So a
     # launch waits only long enough to catch a refusal, then treats the request as in flight
@@ -48,7 +41,6 @@ class Settings(BaseSettings):
     # How long kandev may take to make an accepted launch visible on the board. A reservation
     # has to outlive that or the pacer launches the same task twice.
     launch_latency: float = Field(90.0, alias="PACER_LAUNCH_LATENCY", ge=0)
-    order: Literal["auto", "custom", "board"] = Field("auto", alias="PACER_ORDER")
 
     # Unset means "three ticks"; see the fail_backoff property. 0 is a real value --
     # retry with no backoff at all.
@@ -98,11 +90,6 @@ class Settings(BaseSettings):
         """
         return 3 * self.interval + self.launch_latency
 
-    @field_validator("order", mode="before")
-    @classmethod
-    def _lowercase(cls, value):
-        return value.lower() if isinstance(value, str) else value
-
     @field_validator("url", mode="after")
     @classmethod
     def _no_trailing_slash(cls, value):
@@ -141,6 +128,10 @@ BLOCKED_STATE = "BLOCKED"
 # Candidates one tick will try before giving up, so a board of broken cards can't turn
 # one tick into a walk of the whole backlog.
 MAX_ATTEMPTS = 3
+# Deadline for one WebSocket request, connect included. The socket's own timeout is not
+# enough on its own: every unrelated pushed event makes recv() return and starts a fresh
+# socket timeout, so a busy event stream could keep one request alive forever.
+WS_TIMEOUT = 30.0
 # Ceiling on the failure-backoff doubling: a hopeless task still gets an occasional
 # "has the user fixed it yet?" retry.
 FAIL_BACKOFF_MAX_MULT = 8
