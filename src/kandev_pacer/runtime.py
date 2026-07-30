@@ -211,7 +211,8 @@ class Pacer:
 
         if not verdict.is_open:
             running = f" ({snapshot.running} running)" if verdict.gate == "paused" else ""
-            return report(verdict.gate, Outcome("withheld", verdict.message), running)
+            return report(verdict.gate, Outcome("withheld", verdict.message),
+                          f"{running}{verdict.resume}")
 
         cap = self.config.concurrency
         if snapshot.running >= cap:

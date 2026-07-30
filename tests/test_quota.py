@@ -3,14 +3,18 @@
 No network.
 """
 
+from datetime import datetime
+
 from kandev_pacer.config import Settings, settings
 from kandev_pacer.quota import (
     binding_label,
     elapsed_frac,
+    format_wait,
     headroom,
     parse_windows,
     provider_missing,
     quota_verdict,
+    resume_at,
     tick_record,
     usage_providers,
     window_records,
@@ -156,6 +160,51 @@ def test_quota_verdict_is_blind_when_the_provider_is_missing():
     verdict = quota_verdict(_usage("openai"), [], 1000.0, Settings())
     assert verdict.gate == "blind" and not verdict.is_open
     assert "PACER_PROVIDER" in verdict.message
+
+
+def test_quota_verdict_says_when_a_paused_gate_reopens():
+    """PAUSED with no end in sight reads as an outage; the wait and the clock time say it is not."""
+    # 80% consumed at e=0.5 -> h=-0.30, healing when e reaches 0.80: 3600s before the
+    # reset, which is 9000s out, so 5400s from now.
+    verdict = quota_verdict(_usage(), _windows(0.80), 1000.0, Settings())
+    assert verdict.resume == (
+        f", resumes in ~1h 30m 00s (~{datetime.fromtimestamp(6400.0):%H:%M})"
+    )
+    assert quota_verdict(_usage(), _windows(0.10), 1000.0, Settings()).resume == ""
+
+
+def test_quota_verdict_says_when_a_ceiling_lifts():
+    """A ceiling waits for the roll, not for `e`: `c` stays put until the window resets."""
+    # 99% consumed with the reset 1800s out. The burn line alone would clear 180s earlier,
+    # when e reaches 0.99 -- but the backstop reads `c`, which only falls at the roll.
+    verdict = quota_verdict(_usage(), _windows(0.99, resets_in=1800), 1000.0, Settings())
+    assert verdict.gate == "ceiling"
+    assert verdict.resume == f", resumes in ~30m 00s (~{datetime.fromtimestamp(2800.0):%H:%M})"
+
+
+def test_resume_at_is_when_e_catches_up_with_c():
+    now = 0.0
+    w = {"consumed_frac": 0.8, "resets_at": 1800, "duration_s": 3600}  # e=0.5, needs e=0.8
+    assert resume_at([w], now) == 1080.0                    # 1800 - 3600*0.2
+    assert headroom(0.8, elapsed_frac(1080.0, 1800, 3600)) == 0.0   # h is exactly 0 there
+    assert abs(resume_at([w], now, alpha=0.9) - 1400.0) < 1e-6      # needs e=0.8/0.9
+    # A window too far behind to heal before it rolls resumes at the roll, not never.
+    assert resume_at([{"consumed_frac": 1.0, "resets_at": 1800, "duration_s": 3600}], now) == 1800.0
+
+
+def test_resume_at_takes_the_slowest_window_and_never_looks_backwards():
+    now = 0.0
+    fast = {"consumed_frac": 0.8, "resets_at": 1800, "duration_s": 3600}       # 1080s out
+    slow = {"consumed_frac": 0.9, "resets_at": 302400, "duration_s": 604800}   # 241920s out
+    assert resume_at([fast, slow], now) == 241920.0   # the 7-day is what holds the gate shut
+    assert resume_at([{**fast, "consumed_frac": 0.1}], now) == now  # already open -> no wait
+    assert resume_at([], now) is None                              # nothing to wait for
+
+
+def test_format_wait():
+    assert format_wait(4 * 3600 + 7 * 60 + 12) == "4h 07m 12s"
+    assert format_wait(72) == "1m 12s"
+    assert format_wait(-5) == "0m 00s"
 
 
 def test_quota_verdict_reads_only_the_numbers_it_is_given():

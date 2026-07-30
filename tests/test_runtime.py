@@ -5,6 +5,8 @@ itself, booking, the no-turn-spent paths, and what a launch kandev refuses does 
 No real kandev, no agent turn, no quota.
 """
 import json
+import logging
+import re
 from dataclasses import replace
 
 import pytest
@@ -290,15 +292,43 @@ def test_a_window_burning_too_fast_pauses_the_gate(pacer, board, monkeypatch):
     assert (written[0]["gate"], written[0]["action"]) == ("paused", "withheld")
 
 
+def _withholding_line(caplog, word):
+    return next(r.message for r in caplog.records if word in r.message)
+
+
+def test_a_paused_tick_says_how_long_it_is_paused_for(pacer, board, caplog):
+    """The estimate belongs after the running count, on the one line the operator reads."""
+    board.usage_pct = 80          # h=-0.30 against the fake's half-elapsed 5-hour window
+    with caplog.at_level(logging.INFO, logger="kandev-pacer"):
+        tick(pacer, board, [_task("t", "ip", "Ready")],
+             {"t": _sess("s", "WAITING_FOR_INPUT")}, {})
+    # e reaches 0.80 an hour before the reset the fake puts 9000s out -- 5400s from now,
+    # give or take the second the fake truncates off its reset stamp.
+    line = _withholding_line(caplog, "PAUSED")
+    assert re.fullmatch(
+        r"headroom=-0\.300 PAUSED \(0 running\), resumes in ~1h (29|30)m \d\ds \(~\d\d:\d\d\)",
+        line,
+    ), line
+
+
 def test_consumption_past_the_backstop_withholds_whatever_the_burn_line_says(
-    pacer, board, monkeypatch
+    pacer, board, monkeypatch, caplog
 ):
     written = records_of(pacer, monkeypatch)
     board.usage_pct = 99                      # past PACER_BACKSTOP, and past elapsed
-    assert tick(pacer, board, [_task("t", "ip", "Ready")],
-                {"t": _sess("s", "WAITING_FOR_INPUT")}, {}) is False
+    with caplog.at_level(logging.INFO, logger="kandev-pacer"):
+        assert tick(pacer, board, [_task("t", "ip", "Ready")],
+                    {"t": _sess("s", "WAITING_FOR_INPUT")}, {}) is False
     assert actions(board) == []
     assert (written[0]["gate"], written[0]["action"]) == ("ceiling", "withheld")
+    # The ceiling waits for the roll the fake puts 9000s out, not for the burn line, which
+    # would clear 180s earlier.
+    line = _withholding_line(caplog, "CEILING")
+    assert re.fullmatch(
+        r"headroom=-0\.490 CEILING \(consumed>0\.97\) -> withholding, "
+        r"resumes in ~2h (29|30)m \d\ds \(~\d\d:\d\d\)",
+        line,
+    ), line
 
 
 def test_an_unknown_provider_withholds_rather_than_pacing_blind(pacer, board, monkeypatch):

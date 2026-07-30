@@ -32,6 +32,44 @@ def worst_headroom(windows, now, alpha=1.0):
     )
 
 
+def window_resume_at(window, now, alpha=1.0):
+    """When this window's headroom reaches 0, assuming nothing more is consumed.
+
+    While withheld, `c` is frozen and `e` keeps rising, so the release is the moment
+    `alpha*e == c` -- i.e. `e == c/alpha`, which inverts to a wall-clock instant through
+    `e = 1 - (resets_at - t)/d`. A window needing `e > 1` cannot heal before it rolls, so
+    its answer is the roll itself, where `c` drops to 0 and `h` with it.
+    """
+    needed_e = window["consumed_frac"] / alpha
+    duration, resets_at = window["duration_s"], window["resets_at"]
+    if needed_e > 1:
+        return resets_at
+    return max(now, resets_at - duration * (1 - needed_e))
+
+
+def resume_at(windows, now, alpha=1.0):
+    """When the *gate* reopens: the last window to heal is the one holding it shut."""
+    return max((window_resume_at(w, now, alpha) for w in windows), default=None)
+
+
+def format_wait(seconds):
+    """`4h 07m 12s` -- hours dropped when zero, so short waits stay readable."""
+    seconds = max(0, int(seconds))
+    hours, seconds = divmod(seconds, 3600)
+    minutes, seconds = divmod(seconds, 60)
+    return f"{hours}h {minutes:02d}m {seconds:02d}s" if hours else f"{minutes}m {seconds:02d}s"
+
+
+def _resume_note(eta, now):
+    """The clause a withholding tick ends on, or nothing when there is no estimate."""
+    if eta is None:
+        return ""
+    return (
+        f", resumes in ~{format_wait(eta - now)} "
+        f"(~{datetime.fromtimestamp(eta):%H:%M})"
+    )
+
+
 @dataclass(frozen=True)
 class Verdict:
     """What the quota says about launching right now.
@@ -45,6 +83,10 @@ class Verdict:
     gate: str        # open | paused | ceiling | blind
     headroom: float
     message: str     # the line to print; empty when the gate is open
+    # ", resumes in ~1h 30m 00s (~14:05)" while withholding. Formatted here because the
+    # arithmetic is the burn line's, but left for the caller to tack on, since only the
+    # caller knows what else belongs on the line first.
+    resume: str = ""
 
     @property
     def is_open(self):
@@ -59,14 +101,24 @@ def quota_verdict(usage, windows, now, config):
             f"{sorted(usage_providers(usage))} -> WITHHOLDING (check PACER_PROVIDER)"
         ))
     worst = worst_headroom(windows, now, config.alpha)
+    # Withholding with no end in sight reads as an outage. It is not one: the release is
+    # arithmetic. An estimate all the same -- a turn still running keeps spending `c`.
+    healed = resume_at(windows, now, config.alpha)
     # The hard ceiling first: it overrides the burn line, however much headroom says.
-    if config.backstop < 1.0 and any(w["consumed_frac"] > config.backstop for w in windows):
+    over = [w for w in windows if w["consumed_frac"] > config.backstop] \
+        if config.backstop < 1.0 else []
+    if over:
+        # A ceiling lifts only when the breaching window rolls -- it reads `c`, which does
+        # not fall before then, whatever `e` does. The burn line still has to clear
+        # afterwards, so the release is the later of the two.
+        rolls = max(w["resets_at"] for w in over)
         return Verdict("ceiling", worst, (
             f"headroom={worst:+.3f} CEILING (consumed>{config.backstop:.2f}) "
             "-> withholding"
-        ))
+        ), _resume_note(max(rolls, healed), now))
     if worst < 0:
-        return Verdict("paused", worst, f"headroom={worst:+.3f} PAUSED")
+        return Verdict("paused", worst, f"headroom={worst:+.3f} PAUSED",
+                       _resume_note(healed, now))
     return Verdict("open", worst, "")
 
 
