@@ -9,6 +9,7 @@ No network. Run: uv run tests/test_workflow.py
 """
 from support import run_tests, sess as _sess, step as _step, task as _task
 
+from kandev_pacer.config import BOOKING_TTL, WS_REQUEST_TIMEOUT  # noqa: E402
 from kandev_pacer.workflow import (  # noqa: E402  -- must follow the path setup above
     action_key, admission_target, backed_off, effective_sidebar_view, fail_backoff,
     has_custom_sort_view, is_drainable, is_launchable, is_paced_step, is_work_step,
@@ -399,6 +400,12 @@ def test_prune_booked_uncertain_waiting_launch_expires():
                         tasks, waiting, 1000.0, 300.0) == {("t", "ip", "s"): booking}
     assert prune_booked({("t", "ip", "s"): booking},
                         tasks, waiting, 1300.0, 300.0) == {}
+
+def test_booking_ttl_outlives_the_request_that_books_the_slot():
+    """An uncertain booking is made *after* the deadline, so a TTL shorter than the
+    deadline expires it before the board could ever confirm the launch -- at
+    PACER_INTERVAL=5 the plain 3*INTERVAL rule gave 15s against a 30s deadline."""
+    assert BOOKING_TTL > WS_REQUEST_TIMEOUT
 
 # --- rejected launches: backoff and moving on ---
 

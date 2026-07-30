@@ -79,7 +79,9 @@ launched and the only symptom was a repeating `tick error` line on stderr. Inste
   ambiguous: kandev may already be starting the turn. The pacer applies one absolute request
   deadline even while unrelated WebSocket events keep arriving, then reserves that slot and
   re-checks the board on later ticks. Pending bookings count toward `PACER_CONCURRENCY`, so a
-  lost response cannot cause the pacer to oversubscribe.
+  lost response cannot cause the pacer to oversubscribe. The reservation is made *after* the
+  deadline has already elapsed, so it has to outlive it: bookings expire after three ticks
+  plus one request deadline, not three ticks alone.
 - **Failures are tracked apart from bookings.** A booking means "a turn was spent here, don't
   spend another"; a failure means "this didn't work, back off". One map meaning both would make
   every "did we already launch?" question ambiguous. The backoff starts at `PACER_FAIL_BACKOFF`
