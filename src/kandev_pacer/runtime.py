@@ -22,10 +22,19 @@ from .config import (
     BLOCKED_STATE,
     DRAINABLE_STATES,
     MAX_ATTEMPTS,
+    MAX_INTERVAL,
+    MIN_INTERVAL,
     RUNNING_STATES,
     settings,
 )
-from .quota import parse_windows, quota_verdict, tick_record, window_records
+from .quota import (
+    parse_windows,
+    poll_interval,
+    quota_verdict,
+    resume_note,
+    tick_record,
+    window_records,
+)
 from .selection import (
     ActionKey,
     Booking,
@@ -115,6 +124,9 @@ class Pacer:
         self.config = config
         self.booked = {}     # key -> when the turn was spent
         self.failed = {}     # key -> {at, attempts, flagged}
+        # Seconds run() waits after the current tick. Each tick sets it from what the
+        # quota says is coming, so a long pause is not polled at a short gate's rate.
+        self.interval = config.interval
         self._log_failed = False
 
     # --- the event log ---
@@ -192,6 +204,7 @@ class Pacer:
         verdict = quota_verdict(
             snapshot.usage, snapshot.windows, snapshot.now, self.config
         )
+        self.interval = poll_interval(verdict, snapshot.now, self.config)
 
         def report(gate, outcome, extra="", warn=False):
             """The one way a tick ends: say what happened, record it, hand back the gate.
@@ -206,13 +219,19 @@ class Pacer:
             self.log_event(tick_record(
                 snapshot.now, gate, outcome.action, records, snapshot.running, launchable,
                 self.config.concurrency, len(self.booked), outcome.launched,
+                round(self.interval, 1),
             ))
             return gate == "open"
 
         if not verdict.is_open:
             running = f" ({snapshot.running} running)" if verdict.gate == "paused" else ""
+            eta = resume_note(verdict.resumes_at, snapshot.now)
+            # Said alongside the estimate, never on its own: the number only means
+            # anything next to the wait it was derived from, and a tick with no estimate
+            # is one whose interval never moved.
+            soon = f", next tick in {self.interval:.0f}s" if eta else ""
             return report(verdict.gate, Outcome("withheld", verdict.message),
-                          f"{running}{verdict.resume}")
+                          f"{running}{eta}{soon}")
 
         cap = self.config.concurrency
         if snapshot.running >= cap:
@@ -392,7 +411,12 @@ class Pacer:
                     "t": round(time.time(), 3), "kind": "error",
                     "where": "tick", "msg": str(error),
                 })
-            time.sleep(self.config.interval)
+                # A failed tick produced no verdict, so it has no estimate to pace by --
+                # the same position as `h >= 0`, and it takes the same answer. Without
+                # this the loop would keep whatever the last good tick chose, which near
+                # a reopening is seconds and no longer means anything.
+                self.interval = self.config.interval
+            time.sleep(self.interval)
 
 
 # --- startup reporting ---
@@ -451,8 +475,10 @@ def report_startup(board):
         steps = board.steps[workflow_id]
         for warning in lint_workflow(steps):
             log.warning(f"lint: [{board.name_of(workflow_id)}] {warning}")
-    log.info(f"pacing {settings.url} every {settings.interval}s (alpha={settings.alpha}, "
-             f"concurrency={settings.concurrency}, provider={settings.provider})"
+    log.info(f"pacing {settings.url} every {settings.interval}s, "
+             f"{MIN_INTERVAL}-{MAX_INTERVAL}s while withheld "
+             f"(alpha={settings.alpha}, concurrency={settings.concurrency}, "
+             f"provider={settings.provider})"
              f"\n  log={settings.log_path or '(disabled)'}")
     for workflow_id in board.scope:
         steps = board.steps[workflow_id]

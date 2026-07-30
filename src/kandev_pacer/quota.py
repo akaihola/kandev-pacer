@@ -3,7 +3,7 @@
 from dataclasses import dataclass
 from datetime import datetime
 
-from .config import WINDOW_DURATIONS, settings
+from .config import MAX_INTERVAL, MIN_INTERVAL, WINDOW_DURATIONS, settings
 
 
 def elapsed_frac(now, resets_at, duration_s):
@@ -60,7 +60,7 @@ def format_wait(seconds):
     return f"{hours}h {minutes:02d}m {seconds:02d}s" if hours else f"{minutes}m {seconds:02d}s"
 
 
-def _resume_note(eta, now):
+def resume_note(eta, now):
     """The clause a withholding tick ends on, or nothing when there is no estimate."""
     if eta is None:
         return ""
@@ -68,6 +68,30 @@ def _resume_note(eta, now):
         f", resumes in ~{format_wait(eta - now)} "
         f"(~{datetime.fromtimestamp(eta):%H:%M})"
     )
+
+
+def poll_interval(verdict, now, config):
+    """How long to sleep before the next tick.
+
+    Negative headroom is the only thing worth converging on, and there the sleep is half
+    the estimated wait, clipped to `MIN_INTERVAL`..`MAX_INTERVAL`. Halving converges from
+    above: a two-hour wait costs the ceiling's worth of polling, every tick from there
+    halves what is left, and the gate is met at most `MIN_INTERVAL` late.
+
+    That band is fixed rather than bounded by `interval`, because the two answer different
+    questions. `interval` is how eagerly to look for work that could start *now*, and is
+    worth setting to seconds; how often to re-check a wait whose end is already computed
+    is not, and polling a two-hour pause at that rate is pure waste. So a low
+    PACER_INTERVAL buys a responsive gate without buying a busy one, and the wait paces
+    itself either way -- slower than the configured tick, or faster than it.
+
+    At `h >= 0` the configured interval always stands: nothing to climb back to, and it is
+    the pacing rate rather than a poll ceiling. That covers an open gate, a blind one, and
+    the rare ceiling that binds while `h` is already back above the line.
+    """
+    if verdict.headroom >= 0 or verdict.resumes_at is None:
+        return config.interval
+    return min(max(0.5 * (verdict.resumes_at - now), MIN_INTERVAL), MAX_INTERVAL)
 
 
 @dataclass(frozen=True)
@@ -83,10 +107,12 @@ class Verdict:
     gate: str        # open | paused | ceiling | blind
     headroom: float
     message: str     # the line to print; empty when the gate is open
-    # ", resumes in ~1h 30m 00s (~14:05)" while withholding. Formatted here because the
-    # arithmetic is the burn line's, but left for the caller to tack on, since only the
-    # caller knows what else belongs on the line first.
-    resume: str = ""
+    # When this gate is expected to reopen, or None when there is nothing to wait for:
+    # an open gate, or a blind one, whose reopening no arithmetic can predict. The
+    # instant rather than the ready-made clause, because the loop paces itself by it as
+    # well as printing it -- `resume_note` renders it, and the caller tacks that on,
+    # since only the caller knows what else belongs on the line first.
+    resumes_at: float | None = None
 
     @property
     def is_open(self):
@@ -115,10 +141,9 @@ def quota_verdict(usage, windows, now, config):
         return Verdict("ceiling", worst, (
             f"headroom={worst:+.3f} CEILING (consumed>{config.backstop:.2f}) "
             "-> withholding"
-        ), _resume_note(max(rolls, healed), now))
+        ), max(rolls, healed))
     if worst < 0:
-        return Verdict("paused", worst, f"headroom={worst:+.3f} PAUSED",
-                       _resume_note(healed, now))
+        return Verdict("paused", worst, f"headroom={worst:+.3f} PAUSED", healed)
     return Verdict("open", worst, "")
 
 
@@ -144,7 +169,8 @@ def binding_label(window_recs):
 
 
 def tick_record(
-    now, gate, action, window_recs, running, launchable, cap, booked, launched=None
+    now, gate, action, window_recs, running, launchable, cap, booked, launched=None,
+    interval=None,
 ):
     return {
         "t": round(now, 3),
@@ -159,6 +185,9 @@ def tick_record(
         "cap": cap,
         "booked": booked,
         "launched": launched,
+        # How long until the next tick. Without it the gaps between records read as
+        # stalls, now that the interval moves with the estimated wait.
+        "interval": interval,
     }
 
 

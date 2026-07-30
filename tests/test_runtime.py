@@ -8,14 +8,15 @@ import json
 import logging
 import re
 from dataclasses import replace
+from datetime import UTC, datetime
 
 import pytest
 from conftest import CLEAN
 from conftest import board_task as _task
 from conftest import one_session as _sess
 
-from kandev_pacer import client
-from kandev_pacer.config import MAX_ATTEMPTS, settings
+from kandev_pacer import client, runtime
+from kandev_pacer.config import MAX_ATTEMPTS, MAX_INTERVAL, MIN_INTERVAL, settings
 from kandev_pacer.runtime import Pacer, dump_order, queued_counts
 from kandev_pacer.selection import Booking, fail_backoff
 from kandev_pacer.workflow import Board
@@ -306,9 +307,133 @@ def test_a_paused_tick_says_how_long_it_is_paused_for(pacer, board, caplog):
     # give or take the second the fake truncates off its reset stamp.
     line = _withholding_line(caplog, "PAUSED")
     assert re.fullmatch(
-        r"headroom=-0\.300 PAUSED \(0 running\), resumes in ~1h (29|30)m \d\ds \(~\d\d:\d\d\)",
+        r"headroom=-0\.300 PAUSED \(0 running\), resumes in ~1h (29|30)m \d\ds \(~\d\d:\d\d\)"
+        r", next tick in 120s",
         line,
     ), line
+
+
+def test_a_far_off_reopening_waits_the_ceiling(pacer, board, monkeypatch):
+    """Half of 90 minutes is well past the ceiling: nothing is gained by looking sooner."""
+    written = records_of(pacer, monkeypatch)
+    board.usage_pct = 80
+    tick(pacer, board, [_task("t", "ip", "Ready")], {"t": _sess("s", "WAITING_FOR_INPUT")}, {})
+    assert pacer.interval == MAX_INTERVAL
+    assert written[0]["interval"] == MAX_INTERVAL, "the log has to explain the gaps"
+
+
+def test_an_eager_interval_still_waits_out_a_long_pause(pacer, board, monkeypatch):
+    """PACER_INTERVAL=5 buys a responsive gate; it must not buy a busy one.
+
+    The band does not move with the knob, so the wait here is paced *slower* than the
+    configured tick -- and snaps back to it the moment the gate is open again.
+    """
+    monkeypatch.setattr(settings, "interval", 5)
+    board.usage_pct = 80
+    tick(pacer, board, [_task("t", "ip", "Ready")], {"t": _sess("s", "WAITING_FOR_INPUT")}, {})
+    assert pacer.interval == MAX_INTERVAL
+
+    board.usage_pct = 10                      # back under the burn line
+    tick(pacer, board, [_task("t", "ip", "Ready")], {"t": _sess("s", "WAITING_FOR_INPUT")}, {})
+    assert pacer.interval == 5
+
+
+def test_a_pause_about_to_end_is_checked_sooner(pacer, board, caplog):
+    """The point of the estimate: meet the reopening instead of sleeping through it."""
+    board.usage_pct = 50.1        # h=-0.001 against the half-elapsed window: 18s of healing
+    with caplog.at_level(logging.INFO, logger="kandev-pacer"):
+        tick(pacer, board, [_task("t", "ip", "Ready")],
+             {"t": _sess("s", "WAITING_FOR_INPUT")}, {})
+    assert pacer.interval == pytest.approx(9, abs=1)
+    assert "next tick in 9s" in _withholding_line(caplog, "PAUSED")
+
+
+class _StopTheLoop(Exception):
+    """Breaks out of run()'s `while True` from inside sleep, which run() does not catch."""
+
+
+def _sleeps_of(pacer, monkeypatch):
+    """Run one pass of the loop, returning what it asked to sleep for."""
+    slept = []
+
+    def sleep(seconds):
+        slept.append(seconds)
+        raise _StopTheLoop
+
+    monkeypatch.setattr(runtime.time, "sleep", sleep)
+    with pytest.raises(_StopTheLoop):
+        pacer.run()
+    return slept
+
+
+def test_the_loop_waits_for_however_long_the_tick_decided(pacer, monkeypatch):
+    """The whole point: the sleep is the tick's own estimate, not the configured period."""
+    def converged():
+        pacer.interval = 17
+    monkeypatch.setattr(pacer, "tick", converged)
+    assert _sleeps_of(pacer, monkeypatch) == [17]
+
+
+def test_a_failed_tick_backs_off_to_the_full_interval(pacer, monkeypatch):
+    """A converged interval was derived from a reading this tick never got.
+
+    Keeping it would poll an unreachable kandev every few seconds for as long as it
+    stays down; the estimate is re-derived from scratch by the next tick that works.
+    """
+    def boom():
+        raise OSError("kandev is down")
+    pacer.interval = 5                       # as a tick near the reopening would leave it
+    monkeypatch.setattr(pacer, "tick", boom)
+    monkeypatch.setattr(pacer, "log_event", lambda record: None)
+    assert _sleeps_of(pacer, monkeypatch) == [settings.interval]
+
+
+def test_the_loop_meets_a_reopening_it_would_otherwise_sleep_through(pacer, board, monkeypatch):
+    """The feature, end to end: 90 minutes of pause, on a fake clock, through run().
+
+    Neither half proves this alone -- one tick's arithmetic could be right while the loop
+    still slept past the moment it computed. What matters is the whole approach: the long
+    wait costs no more polling than a fixed interval, and the gate is still met inside the
+    floor rather than up to a full interval late.
+    """
+    clock = {"t": 0.0}
+    # 80% consumed against a 5-hour window resetting at t=9000: h=-0.30 now, healed at 5400.
+    reset_at = datetime.fromtimestamp(9000.0, UTC).isoformat()
+    monkeypatch.setattr(client, "get", lambda path: {"agents": [{"usage": {
+        "provider": "anthropic",
+        "windows": [{"label": "5-hour", "utilization_pct": 80, "reset_at": reset_at}]}}]})
+    monkeypatch.setattr(runtime.time, "time", lambda: clock["t"])
+    board.load([], {}, {})
+
+    slept, opened = [], []
+
+    def sleep(seconds):
+        slept.append(seconds)
+        clock["t"] += seconds
+        if clock["t"] > 6000:                # well past the reopening
+            raise _StopTheLoop
+    monkeypatch.setattr(runtime.time, "sleep", sleep)
+    ticked = pacer.tick
+    monkeypatch.setattr(pacer, "tick", lambda: opened.append((clock["t"], ticked())))
+
+    with pytest.raises(_StopTheLoop):
+        pacer.run()
+
+    reopened_at = next(t for t, is_open in opened if is_open)
+    assert reopened_at - 5400.0 <= MIN_INTERVAL, "the reopening must be met inside the floor"
+    assert max(slept) == MAX_INTERVAL, "a distant wait must not poll faster than the ceiling"
+    assert min(slept) >= MIN_INTERVAL, "and the approach must never spin below the floor"
+    # Halving means the cost of meeting it is a handful of extra ticks, not a faster rate:
+    # a flat 120s would have spent 45 to cover the same 5400s, and slept past the end.
+    waiting = [t for t, is_open in opened if t <= reopened_at]
+    assert len(waiting) <= 5400 / MAX_INTERVAL + 8
+
+
+def test_an_open_gate_ticks_at_the_configured_interval(pacer, board):
+    """Nothing to converge on: PACER_INTERVAL is the pacing rate, not a poll ceiling."""
+    assert tick(pacer, board, [_task("t", "ip", "Ready")],
+                {"t": _sess("s", "WAITING_FOR_INPUT")}, {}) is True
+    assert pacer.interval == settings.interval
 
 
 def test_consumption_past_the_backstop_withholds_whatever_the_burn_line_says(
@@ -326,7 +451,7 @@ def test_consumption_past_the_backstop_withholds_whatever_the_burn_line_says(
     line = _withholding_line(caplog, "CEILING")
     assert re.fullmatch(
         r"headroom=-0\.490 CEILING \(consumed>0\.97\) -> withholding, "
-        r"resumes in ~2h (29|30)m \d\ds \(~\d\d:\d\d\)",
+        r"resumes in ~2h (29|30)m \d\ds \(~\d\d:\d\d\), next tick in 120s",
         line,
     ), line
 

@@ -12,6 +12,39 @@ climb back on its own, so the gate reopens without anything having to release it
 Why that rule and not another, how enforcement avoids killing live turns, and the kandev
 source behind every claim here: [`docs/design.md`].
 
+## When the gate reopens
+
+While the gate is shut nothing is spent, so `consumed` is frozen and only `elapsed` moves:
+the moment `h` climbs back to zero is arithmetic, not a guess. The paused line says it, and
+the loop paces itself by it — each tick sleeps **half the remaining wait**, clipped to
+**5–120 s**:
+
+```
+headroom=-0.300 PAUSED (0 running), resumes in ~1h 30m 00s (~14:05), next tick in 120s
+headroom=-0.004 PAUSED (0 running), resumes in ~0m 34s (~14:05), next tick in 17s
+```
+
+Halving what is left converges on the reopening from above: an hour out it costs two ticks
+an hour, and the gate is still noticed within 5 seconds of opening rather than up to two
+minutes late. It is only an estimate — a turn still running keeps spending, which pushes
+the reopening out, and the next tick simply re-estimates.
+
+The trigger is the headroom itself, not which gate is shut: **`h < 0` adapts, `h ≥ 0`
+always waits `PACER_INTERVAL`**. At or above the line there is nothing to climb back to,
+and the interval is the pacing rate rather than a poll ceiling — shortening it there would
+start turns sooner, which is a different decision from noticing something sooner. That
+covers an open gate, a blind one, and the rare `PACER_BACKSTOP` breach that binds while
+`h` is already back above the line. A breach *below* the line adapts like any other wait,
+converging on the later of the window's roll and the burn line clearing — the ceiling
+reads `consumed`, which time does not lower.
+
+The 5–120 s band is fixed, deliberately **not** bounded by `PACER_INTERVAL`, because the
+two answer different questions. `PACER_INTERVAL` is how eagerly to look for work that
+could start *now*, and is worth setting to seconds; how often to re-check a wait whose end
+is already computed is not. So `PACER_INTERVAL=5` gives a gate that reacts within seconds
+while a two-hour pause still costs one tick every two minutes — the wait paces itself
+slower than the configured tick there, and faster than it at the 120 s default.
+
 ## Quick start
 
 ```bash
@@ -51,10 +84,10 @@ pacer with the variable's name in the message rather than failing hours later.
 | `PACER_CONCURRENCY` | `1` | how many paced turns may run at once |
 | `PACER_ALPHA` | `1.0` | target burn line. Below 1 aims under steady, finishing each window with quota spare |
 | `PACER_BACKSTOP` | `0.97` | consumed fraction at which everything is withheld regardless. `1.0` disables |
-| `PACER_INTERVAL` | `120` | seconds between ticks |
+| `PACER_INTERVAL` | `120` | seconds between ticks while headroom is at or above the burn line. Below it the tick paces itself on the wait, in 5–120s — see below |
 | `PACER_REFUSAL_WINDOW` | `10` | how long a launch waits. Only long enough to catch a refusal — an accepted launch is answered minutes later, and waiting froze the loop |
-| `PACER_LAUNCH_LATENCY` | `90` | how long kandev may take to make an accepted launch visible. Bookings last three ticks plus this |
-| `PACER_FAIL_BACKOFF` | 3 ticks | seconds before a refused launch is retried; doubles per consecutive failure, up to 8× |
+| `PACER_LAUNCH_LATENCY` | `90` | how long kandev may take to make an accepted launch visible. Bookings last three ticks at `PACER_INTERVAL` plus this |
+| `PACER_FAIL_BACKOFF` | 3 × `PACER_INTERVAL` | seconds before a refused launch is retried; doubles per consecutive failure, up to 8× |
 | `PACER_BLOCK_AFTER` | `2` | consecutive failures before the card is flagged `BLOCKED`. `0` keeps the pacer read-only |
 | `PACER_LOG` | `~/.local/state/kandev-pacer/pacer.jsonl` | JSONL event log. Empty disables it |
 | `KANDEV_DB` | `~/.kandev/data/kandev.db` | the database `make-paced` edits |
@@ -97,7 +130,8 @@ to be argued from. Three record kinds, append-only, ~300 KB/day at the default t
 
 - **`tick`** — one per tick, in every branch. Carries `gate` (`open`/`paused`/`ceiling`/`blind`)
   and `action` (`launched`/`drained`/`full`/`nothing`/`skipped`/`empty`/`exhausted`/`withheld`)
-  separately, plus `running`, `launchable`, `cap`, `booked`, and a per-window breakdown.
+  separately, plus `running`, `launchable`, `cap`, `booked`, `interval` (how long until the
+  next tick, so a varying cadence does not read as a stall), and a per-window breakdown.
   The question worth asking of it is `gate=open, action=nothing, launchable>0`: quota going
   unspent while work waits.
 - **`failure`** — a launch or drain kandev refused, with the reason and the consecutive count.

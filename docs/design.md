@@ -46,6 +46,31 @@ line's own release — clearing the ceiling does not by itself reopen the gate.
 
 Both stay estimates: a turn still running keeps spending `c` and pushes them out.
 
+The loop paces itself by that same instant. One fixed tick answers two questions at once —
+how eagerly to look for work that could start *now*, and how often to re-check a wait whose
+end is already computed — and tying them together makes both wrong at the extremes: at 120s
+up to two minutes of quota goes unspent at the moment the gate clears, and at 5s a two-hour
+pause is polled 1440 times to learn nothing.
+
+So they are split. `PACER_INTERVAL` keeps the first. A tick at `h < 0` answers the second
+for itself: sleep **half** of what is left of its own estimate, clipped to a fixed
+**5s..120s**. Halving converges from above — an hour out costs two ticks an hour, and the
+reopening is met within 5s rather than up to two minutes late, a 90-minute pause paying
+five extra ticks for that. Each tick re-estimates, so a running turn pushing the release
+out simply lengthens the next sleep.
+
+The band is deliberately *not* bounded by `PACER_INTERVAL`, so the wait paces itself slower
+than the configured tick at `PACER_INTERVAL=5` and faster than it at the 120s default, from
+the same rule.
+
+The switch is the sign of `h`, not which gate is shut. At **`h ≥ 0`** the configured
+interval always stands: there is nothing to climb back to, and the interval is the pacing
+rate rather than a poll ceiling — shortening it there would start turns sooner, which is a
+different decision from noticing something sooner. That is an open gate, a blind one (no
+arithmetic predicts its release anyway), and the CEILING that binds while `h` is already
+back above the line, which waits out its window at the configured rate. Only the CEILING
+still below the line adapts, on the later of the two instants above.
+
 ## Enforcement: hold in place, launch on release (Design 13)
 
 Don't kill running turns — gate what's allowed to *start*. The unit is a **turn** (a prompt
@@ -386,8 +411,10 @@ Three record kinds, append-only, ~300 KB/day at the default 120s tick:
 - `tick` — one per tick, **in every branch**. Carries `gate` (the quota verdict:
   `open`/`paused`/`ceiling`/`blind`) and `action` (what was done: `launched`/`drained`/`full`/
   `nothing`/`skipped`/`empty`/`exhausted`/`withheld`) as separate fields, plus `running`,
-  `launchable`, `cap`, `booked`, and the full per-window breakdown `{label, c, e, h, d,
-  resets_at}`. Gate and action are split because the decisive question — is quota going unspent
+  `launchable`, `cap`, `booked`, `interval`, and the full per-window breakdown `{label, c, e,
+  h, d, resets_at}`. `interval` is how long until the next tick: it is no longer constant, so
+  without it the gap between two records is indistinguishable from a stall. Gate and action
+  are split because the decisive question — is quota going unspent
   while work waits? — is exactly the `gate=open, action=nothing, launchable>0` combination,
   which one merged field hides. Windows are logged individually rather than collapsed to
   `min(h)` because headroom is in *window-fraction* units, which are not comparable across

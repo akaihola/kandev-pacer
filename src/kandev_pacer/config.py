@@ -30,6 +30,10 @@ class Settings(BaseSettings):
     alpha: float = Field(1.0, alias="PACER_ALPHA", gt=0)
     # Hard ceiling on consumed fraction, whatever the burn line says. 1.0 disables it.
     backstop: float = Field(0.97, alias="PACER_BACKSTOP", gt=0, le=1.0)
+    # Seconds between ticks while headroom is at or above the burn line. Below it the tick
+    # paces itself on the wait instead, in MIN_INTERVAL..MAX_INTERVAL -- so this can be set
+    # low for a responsive gate without polling a two-hour pause at that rate. See
+    # quota.poll_interval.
     interval: int = Field(120, alias="PACER_INTERVAL", gt=0)
 
     # kandev answers session.launch only once the session it started is done needing it --
@@ -42,8 +46,8 @@ class Settings(BaseSettings):
     # has to outlive that or the pacer launches the same task twice.
     launch_latency: float = Field(90.0, alias="PACER_LAUNCH_LATENCY", ge=0)
 
-    # Unset means "three ticks"; see the fail_backoff property. 0 is a real value --
-    # retry with no backoff at all.
+    # Unset means "three ticks at the configured interval"; see the fail_backoff property.
+    # 0 is a real value -- retry with no backoff at all.
     fail_backoff_override: int | None = Field(None, alias="PACER_FAIL_BACKOFF", ge=0)
     # Consecutive failures before the card is flagged BLOCKED. 0 keeps the pacer read-only.
     block_after: int = Field(2, alias="PACER_BLOCK_AFTER", ge=0)
@@ -84,9 +88,14 @@ class Settings(BaseSettings):
     def booking_ttl(self):
         """How long a booking is honoured before the task counts as launchable again.
 
-        Three board re-checks, plus however long kandev may take to make an accepted
-        launch visible -- a reservation that expires before the board catches up is how
-        the same task gets launched twice.
+        Three ticks at the configured interval, plus however long kandev may take to make
+        an accepted launch visible -- a reservation that expires before the board catches
+        up is how the same task gets launched twice.
+
+        What does the protecting is the `launch_latency` term, not the tick count: ticks
+        are only evenly spaced while `h >= 0`, and a withheld one can be as far apart as
+        MAX_INTERVAL whatever `interval` says. Since nothing launches while withheld, a
+        reservation outliving the latency is enough however the ticks fall.
         """
         return 3 * self.interval + self.launch_latency
 
@@ -125,6 +134,12 @@ IDLE_STATES = {CREATED_STATE, READY_STATE}
 DRAINABLE_STATES = {READY_STATE}   # a CREATED session cannot take a queued prompt yet
 BLOCKED_STATE = "BLOCKED"
 
+# The band the tick paces itself in while headroom is negative -- fixed, and deliberately
+# independent of PACER_INTERVAL, which governs only the at-or-above-the-line rate. The
+# floor is how late a reopening may be noticed and how hard kandev is asked at the busiest
+# moment; the ceiling keeps a long wait cheap even when the configured interval is seconds.
+MIN_INTERVAL = 5
+MAX_INTERVAL = 120
 # Candidates one tick will try before giving up, so a board of broken cards can't turn
 # one tick into a walk of the whole backlog.
 MAX_ATTEMPTS = 3
