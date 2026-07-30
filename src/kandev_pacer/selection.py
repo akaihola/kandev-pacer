@@ -64,29 +64,49 @@ def is_launchable(task, sessions, board, skip):
     return step in board.queue_steps and (newest is None or state in IDLE_STATES)
 
 
+def drain_session(task, sessions, queued, skip=frozenset()):
+    """The session whose queued prompt this task should drain, or None.
+
+    A task can hold several idle sessions, and the queue lives on whichever one the user
+    had open -- often the primary session created with the task, not the newest. Picking
+    the newest and reading its (empty) queue made a task with a waiting prompt look like
+    it had none, so the drain never fired: the card stayed parked while the pacer spent
+    its slots launching tasks further down the order. Among the idle sessions that do
+    have a queue, the newest wins.
+    """
+    step = task.get("workflow_step_id", "")
+    holding = [
+        session
+        for session in sessions
+        if session.get("state") in DRAINABLE_STATES
+        and queued.get(session["id"], 0) > 0
+        and ActionKey(task["id"], step, session["id"]) not in skip
+    ]
+    return newest_session(holding)
+
+
 def is_drainable(task, sessions, queued, skip):
     """Whether this task has a user prompt parked and waiting to be released."""
-    newest = newest_session(sessions)
-    if newest is None or newest.get("state") not in DRAINABLE_STATES:
-        return False
-    if queued.get(newest["id"], 0) <= 0:
-        return False
-    return ActionKey(task["id"], task.get("workflow_step_id", ""), newest["id"]) not in skip
+    return drain_session(task, sessions, queued, skip) is not None
 
 
 def select_action(ordered, task_sessions, queued, board, skip):
-    """The one turn to spend now, or (None, None).
+    """The one turn to spend now as (kind, task, session), or (None, None, None).
+
+    The session is the one holding the queue, for a drain -- which is not always the
+    task's newest -- and None for a launch, which resumes the newest.
 
     Drains come first, in full: launching a task that has a prompt queued spends the
     turn on the step prompt and lets the queued entry leak out un-paced afterwards.
     """
     for task in ordered:
-        if is_drainable(task, task_sessions.get(task["id"], []), queued, skip):
-            return "drain", task
+        session = drain_session(task, task_sessions.get(task["id"], []), queued, skip)
+        if session is not None:
+            return "drain", task, session["id"]
     for task in ordered:
         if is_launchable(task, task_sessions.get(task["id"], []), board, skip):
-            return "launch", task
-    return None, None
+            return "launch", task, None
+    return None, None, None
 
 
 def launch_target(task, board):

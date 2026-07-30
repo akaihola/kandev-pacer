@@ -10,6 +10,7 @@ from conftest import task as _task
 from kandev_pacer.selection import (
     action_key,
     backed_off,
+    drain_session,
     effective_sidebar_view,
     fail_backoff,
     has_custom_sort_view,
@@ -222,8 +223,14 @@ def test_is_drainable_requires_queue_and_idle_session():
     # session_not_promptable, so its queued prompt must wait for the admission turn.
     assert not is_drainable(at_rv, [_sess("s", "CREATED")], {"s": 1}, set())
     # Counts are keyed by session, so a queue on an older session doesn't license a drain.
-    assert not is_drainable(at_rv, [_sess("old", "WAITING_FOR_INPUT", "1"),
-                                    _sess("new", "WAITING_FOR_INPUT", "2")], {"old": 1}, set())
+    # The queue lives on whichever session the user had open -- often the primary one, not
+    # the newest. Looking only at the newest made this task read as having no prompt, so the
+    # card sat parked while the pacer launched others.
+    two = [_sess("old", "WAITING_FOR_INPUT", "1"), _sess("new", "WAITING_FOR_INPUT", "2")]
+    assert is_drainable(at_rv, two, {"old": 1}, set())
+    assert drain_session(at_rv, two, {"old": 1}, set())["id"] == "old"
+    # Among idle sessions that do hold a queue, the newest wins.
+    assert drain_session(at_rv, two, {"old": 1, "new": 1}, set())["id"] == "new"
     # Dup-guard, same shape as the launch path.
     assert not is_drainable(at_rv, [_sess("s", "WAITING_FOR_INPUT")], {"s": 1}, {("t", "rv", "s")})
 
@@ -236,14 +243,14 @@ def test_select_action_prefers_drain():
     at_ip = {"id": "t", "workflow_step_id": "ip", "created_at": "1"}
     sessions = {"t": [_sess("s", "WAITING_FOR_INPUT")]}
     # Same task is both launchable (work step, idle) and drainable (queue non-empty) -> drain.
-    kind, chosen = select_action(_ord([at_ip]), sessions, {"s": 1}, BOARD,  set())
+    kind, chosen, _ = select_action(_ord([at_ip]), sessions, {"s": 1}, BOARD, set())
     assert (kind, chosen["id"]) == ("drain", "t")
     # Empty queue -> falls through to the launch path unchanged.
     assert select_action(_ord([at_ip]), sessions, {}, BOARD,  set())[0] == "launch"
     # Kind beats column: the drainable task sits in the LEFTMOST column, which pull ordering
     # would rank last, and it still wins over a launchable task further downstream.
     at_bk = {"id": "u", "workflow_step_id": "bk", "created_at": "9"}
-    kind, chosen = select_action(_ord([at_ip, at_bk]), {"t": [_sess("a", "WAITING_FOR_INPUT")],
+    kind, chosen, _ = select_action(_ord([at_ip, at_bk]), {"t": [_sess("a", "WAITING_FOR_INPUT")],
                                                  "u": [_sess("b", "WAITING_FOR_INPUT")]},
                                 {"b": 1}, BOARD,  set())
     assert (kind, chosen["id"]) == ("drain", "u")
@@ -269,10 +276,10 @@ def test_select_action_uses_board_pull_order():
     assert select_action(_ord([at_bk, at_rv]), both, {"x": 1, "y": 1},
                          BOARD, set())[1]["id"] == "rv1"
     # Nothing to do at all.
-    assert select_action([], {}, {}, BOARD,  set()) == (None, None)
+    assert select_action([], {}, {}, BOARD, set()) == (None, None, None)
     # Parked, nothing queued -> not actionable (today's behaviour, unchanged).
     assert select_action([at_rv], {"rv1": [_sess("s", "WAITING_FOR_INPUT")]},
-                         {}, BOARD,  set()) == (None, None)
+                         {}, BOARD, set()) == (None, None, None)
 
 def test_pick_intent():
     assert pick_intent([]) == ("start", None)
@@ -481,10 +488,10 @@ def test_sidebar_order_reaches_drain_selection():
     queued = {"sa": 1, "sb": 1}                      # both have a prompt parked
     dragged = _settings(ordered=["b"])               # user put b on top
     ordered = ordered_tasks([a, b], dragged, "auto", RANKS)
-    kind, chosen = select_action(ordered, sessions, queued, BOARD,  set())
+    kind, chosen, _ = select_action(ordered, sessions, queued, BOARD, set())
     assert (kind, chosen["id"]) == ("drain", "b")
     # Without the drag, pull order decides (equal here -> id tiebreak keeps it total).
-    kind, chosen = select_action(_ord([a, b]), sessions, queued, BOARD,  set())
+    kind, chosen, _ = select_action(_ord([a, b]), sessions, queued, BOARD, set())
     assert (kind, chosen["id"]) == ("drain", "a")
 
 def test_ordered_tasks_layers_manual_over_board_pull_order():

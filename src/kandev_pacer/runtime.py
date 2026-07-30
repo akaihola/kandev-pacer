@@ -33,7 +33,6 @@ from .selection import (
     fail_backoff,
     is_launchable,
     launch_target,
-    newest_session,
     ordered_tasks,
     pick_intent,
     prune_booked,
@@ -140,7 +139,7 @@ class Pacer:
         return set(self.booked) | backed_off(self.failed, now)
 
     def next_action(self, snapshot, queued):
-        """The (kind, task) to spend this turn on, or (None, None)."""
+        """The (kind, task, session) to spend this turn on, or (None, None, None)."""
         ordered = ordered_tasks(
             snapshot.tasks, snapshot.sidebar, self.config.order, self.board.step_ranks
         )
@@ -197,13 +196,20 @@ class Pacer:
 
         queued = client.queued_counts(snapshot.sessions)
         for _ in range(MAX_ATTEMPTS):
-            kind, task = self.next_action(snapshot, queued)
+            kind, task, drain_id = self.next_action(snapshot, queued)
             if kind is None:
                 held = f", {len(self.failed)} held after a failed launch" if self.failed else ""
                 return report("open", Outcome("nothing", "nothing to launch"),
                               f" ({snapshot.running}/{cap} running{held})")
-            key = action_key(task, snapshot.sessions.get(task["id"], []))
-            outcome = self.attempt(kind, task, key, snapshot)
+            # A drain books against the session that holds the queue, not the task's
+            # newest -- a booking naming a session the board never lists is pruned next
+            # tick, and the same prompt gets drained twice.
+            key = (
+                ActionKey(task["id"], task.get("workflow_step_id", ""), drain_id)
+                if kind == "drain"
+                else action_key(task, snapshot.sessions.get(task["id"], []))
+            )
+            outcome = self.attempt(kind, task, key, snapshot, drain_id)
             if outcome is None:      # refused, no quota spent -- try the next candidate
                 continue
             # The occupancy count only means anything when a turn was actually spent.
@@ -216,7 +222,7 @@ class Pacer:
             warn=True,
         )
 
-    def attempt(self, kind, task, key, snapshot):
+    def attempt(self, kind, task, key, snapshot, drain_id=None):
         """Try one action. Returns the Outcome for the caller to report, or None.
 
         None means kandev refused: the refusal spent no quota, so the tick still owes
@@ -232,14 +238,20 @@ class Pacer:
         if fresh is None or fresh.get("workflow_step_id", "") != task.get("workflow_step_id", ""):
             return Outcome("skipped", f"{label(task)!r} moved since selection -> skip")
         sessions = client.sessions_of(task["id"])
-        act = self.drain if kind == "drain" else self.launch
-        return act(fresh, key, sessions, snapshot)
+        if kind == "drain":
+            return self.drain(fresh, key, sessions, snapshot, drain_id)
+        return self.launch(fresh, key, sessions, snapshot)
 
-    def drain(self, task, key, sessions, snapshot):
-        """Release a user prompt parked on the task's message queue."""
-        newest = newest_session(sessions)
-        if newest is None or newest.get("state") not in DRAINABLE_STATES:
+    def drain(self, task, key, sessions, snapshot, drain_id):
+        """Release the user prompt parked on `drain_id`, the session holding the queue.
+
+        Re-read from the fresh session list rather than trusting the snapshot: the state
+        may have moved on since selection chose it.
+        """
+        holder = next((s for s in sessions if s["id"] == drain_id), None)
+        if holder is None or holder.get("state") not in DRAINABLE_STATES:
             return Outcome("skipped", f"{label(task)!r} no longer idle -> skip drain")
+        newest = holder
         try:
             drained = bool((client.ws_drain(newest["id"]) or {}).get("drained"))
         except Exception as error:

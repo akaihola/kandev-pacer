@@ -8,7 +8,6 @@ import urllib.request
 import websocket
 
 from .config import DRAINABLE_STATES, settings
-from .selection import newest_session
 
 log = logging.getLogger("kandev-pacer")
 
@@ -173,19 +172,24 @@ def ws_queue_count(session_id):
 
 
 def queued_counts(task_sessions):
-    """Pending prompt counts, for the idle sessions that could actually take one.
+    """Pending prompt counts, for every idle session that could hold one.
 
-    A session we cannot ask about is left out, which reads downstream as "empty" --
-    a queue-status hiccup must degrade to launch-only pacing, never stop the tick.
+    Every idle session, not just each task's newest: kandev queues a prompt on whichever
+    session the user had open, which is regularly the primary one created with the task.
+    Asking only the newest reported an empty queue for a task that had a prompt waiting,
+    so the drain never fired and the card sat parked indefinitely.
+
+    A session we cannot ask about is left out, which reads downstream as "empty" -- a
+    queue-status hiccup must degrade to launch-only pacing, never stop the tick.
     """
     counts = {}
     for sessions in task_sessions.values():
-        newest = newest_session(sessions)
-        if newest is None or newest.get("state") not in DRAINABLE_STATES:
-            continue
-        try:
-            counts[newest["id"]] = ws_queue_count(newest["id"])
-        except Exception as error:
-            log.warning(f"queue status failed for session {newest['id']} ({error}) "
-                        "-> treating as empty")
+        for session in sessions:
+            if session.get("state") not in DRAINABLE_STATES:
+                continue
+            try:
+                counts[session["id"]] = ws_queue_count(session["id"])
+            except Exception as error:
+                log.warning(f"queue status failed for session {session['id']} ({error}) "
+                            "-> treating as empty")
     return counts
