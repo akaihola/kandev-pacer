@@ -59,9 +59,16 @@ def is_launchable(task, sessions, board, skip):
     if ActionKey(task["id"], step, session_id) in skip:
         return False
     state = newest["state"] if newest else None
-    if step in board.work_steps:
-        return state in IDLE_STATES
-    return step in board.queue_steps and (newest is None or state in IDLE_STATES)
+    # A sessionless task counts on a work step too, not only in the queue. kandev moves a
+    # task to the requested step *before* it validates that the launch can happen (state ->
+    # SCHEDULING, then move, then the agent-profile check), so an admission it rejects
+    # strands the card on the work step with no session. Requiring an idle session there
+    # made that state permanently unlaunchable -- nothing creates the session afterwards,
+    # so the card was skipped on every later tick while the log said "nothing to launch".
+    # Four subtasks of a Heartbeat task sat like that for ~7.75h.
+    if step in board.work_steps or step in board.queue_steps:
+        return newest is None or state in IDLE_STATES
+    return False
 
 
 def drain_session(task, sessions, queued, skip=frozenset()):
@@ -113,6 +120,21 @@ def launch_target(task, board):
     """The step to launch the task into: where it already sits, or its board's admission step."""
     step = task.get("workflow_step_id", "")
     return step if step in board.work_steps else board.admission.get(task.get("workflow_id", ""))
+
+
+def task_agent_profile(task):
+    """The task's own agent profile from its launch metadata, or None.
+
+    The pacer has no opinion about which agent runs a task -- it passes this back verbatim
+    so kandev's intent:start path can find it. That path needs the help: it resolves the
+    *executor* from task metadata but not the agent profile, and no profile means the
+    launch is refused outright ("task has no agent_profile_id configured"). The prepare
+    path does resolve it, so the same task can be prepared and yet not started.
+
+    Costs no extra request: it rides along in the task list every tick already fetches.
+    """
+    profile = (task.get("metadata") or {}).get("agent_profile_id")
+    return profile if isinstance(profile, str) and profile else None
 
 
 def pick_intent(sessions):

@@ -24,6 +24,7 @@ from kandev_pacer.selection import (
     prune_booked,
     prune_failures,
     select_action,
+    task_agent_profile,
     task_order_key,
     visible_task_order,
 )
@@ -147,7 +148,11 @@ def test_is_launchable_work_step():
     at_ip = {"id": "t", "workflow_step_id": "ip"}
     assert is_launchable(at_ip, [_sess("s", "WAITING_FOR_INPUT")], BOARD, booked)
     assert not is_launchable(at_ip, [_sess("s", "RUNNING")], BOARD, booked)   # in flight
-    assert not is_launchable(at_ip, [], BOARD, booked)                        # no session
+    # A sessionless task on a work step is launchable, not stuck: kandev moves the card and
+    # sets SCHEDULING before it validates the launch, so a refused admission strands it here
+    # with no session. Requiring one made that state permanently unlaunchable -- the card was
+    # skipped every tick while the log said "nothing to launch".
+    assert is_launchable(at_ip, [], BOARD, booked)
 
 def test_is_launchable_queue_admission():
     booked = set()
@@ -537,3 +542,13 @@ def test_ordered_tasks_modes():
     assert [t["id"] for t in ordered_tasks(tasks, None, "auto")] == fifo
     assert [t["id"] for t in ordered_tasks(tasks, {}, "custom")] == fifo
     assert [t["id"] for t in ordered_tasks(tasks, _settings(), "auto")] == fifo
+
+
+def test_task_agent_profile_reads_launch_metadata():
+    """intent:start is refused outright without one, and kandev will not look it up itself."""
+    assert task_agent_profile({"metadata": {"agent_profile_id": "prof-1"}}) == "prof-1"
+    # Nothing usable -> None, and the pacer never invents a profile for a task without one.
+    assert task_agent_profile({}) is None
+    assert task_agent_profile({"metadata": {}}) is None
+    assert task_agent_profile({"metadata": {"agent_profile_id": ""}}) is None
+    assert task_agent_profile({"metadata": {"agent_profile_id": 7}}) is None

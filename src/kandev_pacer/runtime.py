@@ -38,6 +38,7 @@ from .selection import (
     prune_booked,
     prune_failures,
     select_action,
+    task_agent_profile,
     uses_manual_order,
 )
 from .workflow import Board, lint_workflow, queue_step_id
@@ -279,8 +280,13 @@ class Pacer:
             )
             return None
         intent, session_id = pick_intent(sessions)
+        # Only intent:start needs the profile, and only because kandev's start path will
+        # not resolve one itself. intent:workflow_step is how a profile-switch step spawns
+        # its own session, so it stays profile-free -- kandev owns routing, the pacer owns
+        # timing.
+        profile = task_agent_profile(task) if intent == "start" else None
         try:
-            client.ws_launch(task["id"], intent, session_id, target)
+            client.ws_launch(task["id"], intent, session_id, target, agent_profile_id=profile)
         except Exception as error:
             self.note_failure(key, task, str(error), snapshot.now)
             return None

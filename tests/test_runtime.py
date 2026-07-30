@@ -370,3 +370,32 @@ def test_drains_the_session_holding_the_queue_not_the_newest(pacer, board):
     # The booking has to name that session too: one naming a session the board never lists
     # is pruned on the next tick, and the same prompt gets drained a second time.
     assert ("t1", "rv", "old") in pacer.booked
+
+
+def test_a_never_run_task_is_started_with_its_own_agent_profile(pacer, board):
+    """kandev's start path resolves the executor but not the profile, and refuses without one.
+
+    That refusal is expensive rather than noisy: kandev sets SCHEDULING and moves the card
+    before the check, so it strands the task on a work step with no session.
+    """
+    task = _task("t", "ip", "Fresh")
+    task["metadata"] = {"agent_profile_id": "prof-1"}
+    tick(pacer, board, [task], {"t": []}, {})           # no session at all -> intent:start
+
+    launch = next(p for a, p in board.ws_log if a == "session.launch")
+    assert launch["intent"] == "start"
+    assert launch["agent_profile_id"] == "prof-1"
+
+
+def test_an_in_place_turn_carries_no_agent_profile(pacer, board):
+    """intent:workflow_step is how a profile-switch step spawns its own session.
+
+    Sending a profile on every turn would pin the task to whichever one it started with.
+    """
+    task = _task("t", "ip", "Running on")
+    task["metadata"] = {"agent_profile_id": "prof-1"}
+    tick(pacer, board, [task], {"t": _sess("s", "WAITING_FOR_INPUT")}, {})
+
+    launch = next(p for a, p in board.ws_log if a == "session.launch")
+    assert launch["intent"] == "workflow_step"
+    assert "agent_profile_id" not in launch
