@@ -83,6 +83,22 @@ def test_drains_prompt_parked_at_review():
     assert ("t1", "rv", "s1") in runtime._BOOKED, "a spent drain must be booked against concurrency"
 
 
+def test_drains_the_session_that_holds_the_queue_not_the_newest():
+    """The bug this guards: a task parked at Review with two idle sessions, the prompt on the
+    older (primary) one -- kandev queues it on whichever session the user had open. Reading and
+    draining only the newest saw an empty queue, so the card stayed parked while the pacer spent
+    its slots on tasks further down the order. The booking must name the drained session too, or
+    the next tick prunes a reservation that matches no live key and drains the prompt twice.
+    """
+    sessions = {"t1": [{"id": "old", "state": "WAITING_FOR_INPUT", "started_at": "1"},
+                       {"id": "new", "state": "WAITING_FOR_INPUT", "started_at": "2"}]}
+    acts = _tick([_task("t1", "rv", "Feedback")], sessions, {"old": 1})
+    assert acts == ["message.queue.drain"], acts
+    drained = [p["session_id"] for a, p, _ in WS_LOG if a == "message.queue.drain"]
+    assert drained == ["old"], drained
+    assert ("t1", "rv", "old") in runtime._BOOKED, "the booking must name the drained session"
+
+
 def test_parked_with_empty_queue_still_does_nothing():
     acts = _tick([_task("t1", "rv", "Feedback")], {"t1": _sess("s1", "WAITING_FOR_INPUT")}, {})
     assert acts == [], acts

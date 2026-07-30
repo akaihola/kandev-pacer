@@ -191,26 +191,41 @@ def is_launchable(task, sessions, work_steps, queue_steps, skip):
     return False
 
 
+def drain_session(task, sessions, queued, skip=frozenset()):
+    """The session whose queued prompt this task should drain, or None.
+
+    A task can hold several idle sessions, and the queue lives on whichever one the user had
+    open -- often the primary session created with the task, not the newest. Picking the newest
+    and reading its (empty) queue made a task with a waiting prompt look like it had none, so
+    the drain never fired: the card stayed parked while the pacer spent its slots launching
+    tasks further down the order. Among the idle sessions that do have a queue, the newest wins.
+    """
+    step = task.get("workflow_step_id", "")
+    candidates = [
+        session
+        for session in sessions
+        if session.get("state") in DRAINABLE_STATES
+        and queued.get(session["id"], 0) > 0
+        and (task["id"], step, session["id"]) not in skip
+    ]
+    return newest_session(candidates)
+
+
 def is_drainable(task, sessions, queued, skip):
-    newest = newest_session(sessions)
-    if newest is None or newest.get("state") not in DRAINABLE_STATES:
-        return False
-    if queued.get(newest["id"], 0) <= 0:
-        return False
-    key = (task["id"], task.get("workflow_step_id", ""), newest["id"])
-    return key not in skip
+    return drain_session(task, sessions, queued, skip) is not None
 
 
 def select_action(ordered, task_sessions, queued, work_steps, queue_steps, skip):
     for task in ordered:
-        if is_drainable(task, task_sessions.get(task["id"], []), queued, skip):
-            return "drain", task
+        session = drain_session(task, task_sessions.get(task["id"], []), queued, skip)
+        if session is not None:
+            return "drain", task, session["id"]
     for task in ordered:
         if is_launchable(
             task, task_sessions.get(task["id"], []), work_steps, queue_steps, skip
         ):
-            return "launch", task
-    return None, None
+            return "launch", task, None
+    return None, None, None
 
 
 def launch_target(task, work_steps, admission):
@@ -338,12 +353,21 @@ def action_key(task, sessions):
 
 
 def live_keys(tasks, task_sessions):
-    return {
-        action_key(task, task_sessions.get(task["id"], [])): (
-            newest_session(task_sessions.get(task["id"], [])) or {}
-        ).get("state")
-        for task in tasks
-    }
+    """(task, step, session) -> that session's state, for every session a task holds.
+
+    One key per session, not just the newest: a drain books the session that actually carries
+    the queue, which need not be the newest one. Keying only the newest dropped such a booking
+    on the very next tick -- the reservation vanished and the same prompt could be drained twice.
+    """
+    live = {}
+    for task in tasks:
+        sessions = task_sessions.get(task["id"], [])
+        step = task.get("workflow_step_id", "")
+        if not sessions:
+            live[(task["id"], step, None)] = None
+        for session in sessions:
+            live[(task["id"], step, session["id"])] = session.get("state")
+    return live
 
 
 def fail_backoff(attempts, base=None):

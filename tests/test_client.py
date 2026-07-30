@@ -35,6 +35,22 @@ def test_queued_counts_only_asks_about_drainable_sessions():
     assert WS_LOG[0][2] == f"http://127.0.0.1:{fake_kandev.HTTP_PORT}"
 
 
+def test_queued_counts_asks_about_every_session_a_task_holds():
+    """A task's queue can sit on any of its sessions, not just the most recently started one.
+
+    Kandev queues a prompt on whichever session the user had open -- routinely the primary
+    session created with the task. Asking only the newest reported an empty queue for a task
+    that had a prompt waiting, and the drain that would have released it never fired.
+    """
+    load([], {}, {"sOld": 1, "sNew": 0})
+    WS_LOG.clear()
+    counts = queued_counts({"a": [{"id": "sOld", "state": "WAITING_FOR_INPUT", "started_at": "1"},
+                                  {"id": "sNew", "state": "WAITING_FOR_INPUT", "started_at": "2"}]})
+    assert counts == {"sOld": 1, "sNew": 0}, counts
+    asked = sorted(p["session_id"] for a, p, _ in WS_LOG if a == "message.queue.get")
+    assert asked == ["sNew", "sOld"], asked
+
+
 def test_drain_reports_whether_it_took_anything():
     load([], {}, {"sReview": 1})
     assert ws_drain("sReview")["drained"] is True
