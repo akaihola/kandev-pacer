@@ -299,31 +299,44 @@ def prune_failures(failures, tasks, task_sessions):
     return {key: value for key, value in failures.items() if key in live}
 
 
-def booking_still_applies(state, age, ttl):
+def booking_still_applies(state, age, ttl, uncertain=False):
     """Whether a booking is still doing its job, given the session's state now.
 
     A booking exists to stop the pacer spending a second turn on something it has
     already paid for. Three cases, and they are the whole rule:
 
-    - no session yet, or `CREATED` -- the launch was made but the agent has not
-      visibly picked it up. Hold, but only up to `ttl`: if the turn never appears,
-      something went wrong out of view and the task has to become launchable again.
-    - `WAITING_FOR_INPUT` -- the turn ran and finished. Hold with no expiry, or the
-      next tick would launch the same session at the same step all over again.
+    - no session yet, `CREATED`, or an unconfirmed request -- the launch was made but the
+      agent has not visibly picked it up. Hold, but only while the session is still idle
+      and only up to `ttl`: if the turn never appears, something went wrong out of view
+      and the task has to become launchable again.
+    - `WAITING_FOR_INPUT` -- the turn ran and finished. Held, but bounded by `ttl` too: a
+      launch kandev accepted and never turned into a turn leaves the session at READY
+      under the same key, so nothing else clears the booking. Without the bound a no-op
+      launch reserved a slot forever and the card, launchable in every other respect, was
+      skipped on every later tick.
     - anything else (`STARTING`/`RUNNING`) -- the turn is visibly in flight. The
       booking has done its job; the concurrency count takes over from here.
     """
-    if state is None or state == CREATED_STATE:
-        return age < ttl
+    if age >= ttl:
+        return False
+    if state is None or state == CREATED_STATE or uncertain:
+        return state is None or state in IDLE_STATES
     return state == READY_STATE
+
+
+def booking_age(booking, now):
+    """Seconds since a booking was made. Plain timestamp, or an unconfirmed record."""
+    return now - (booking["at"] if isinstance(booking, dict) else booking)
 
 
 def prune_booked(booked, tasks, task_sessions, now, ttl):
     """Drop the bookings that have stopped meaning anything."""
-    return {
-        key: booked[key]
-        for key, state in live_keys(tasks, task_sessions).items()
-        # `state` is None exactly when the task has no session, which is the same
-        # thing key.session being None says -- both come from the one newest_session().
-        if key in booked and booking_still_applies(state, now - booked[key], ttl)
-    }
+    kept = {}
+    for key, state in live_keys(tasks, task_sessions).items():
+        if key not in booked:
+            continue
+        booking = booked[key]
+        uncertain = isinstance(booking, dict) and bool(booking.get("uncertain"))
+        if booking_still_applies(state, booking_age(booking, now), ttl, uncertain):
+            kept[key] = booking
+    return kept

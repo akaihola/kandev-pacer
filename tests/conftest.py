@@ -198,6 +198,9 @@ class FakeBoard:
             body = {"session_id": session_id, "drained": took}
         elif action == "task.state" and str(payload.get("id", "")).startswith("boomflag"):
             return fail("no")
+        elif action == "session.launch" and str(payload.get("task_id", "")).startswith("silent"):
+            # Sent, never answered: kandev may have acted and only the reply was lost.
+            return []
         elif action == "session.launch" and str(payload.get("task_id", "")).startswith("boom"):
             # What kandev answers for a CREATED session with no executors_running row:
             # refused outright, and no retry of the same call will ever work.

@@ -399,3 +399,43 @@ def test_an_in_place_turn_carries_no_agent_profile(pacer, board):
     launch = next(p for a, p in board.ws_log if a == "session.launch")
     assert launch["intent"] == "workflow_step"
     assert "agent_profile_id" not in launch
+
+
+def test_an_unconfirmed_launch_reserves_the_slot_instead_of_freeing_it(pacer, board,
+                                                                       monkeypatch):
+    """kandev may have started the turn and only the answer was lost.
+
+    Treating that like a refusal frees the slot for the next candidate, which is how the
+    same turn gets started twice. The reservation waits for the board to say.
+    """
+    monkeypatch.setattr(settings, "refusal_window", 0.05)
+    was_open = tick(pacer, board, [_task("silent1", "ip", "Unanswered")],
+                    {"silent1": _sess("s1", "WAITING_FOR_INPUT")}, {})
+
+    assert was_open is True
+    booking = pacer.booked[("silent1", "ip", "s1")]
+    assert booking["uncertain"] is True, "the slot must stay reserved, not be freed"
+    assert pacer.failed == {}, "an unknown outcome is not a refusal"
+
+
+def test_a_reservation_expires_so_a_lost_launch_is_retried(pacer, board):
+    """Bounded by the TTL: if the turn never appears, the card has to become launchable."""
+    tasks = [_task("t", "ip", "Ready")]
+    sessions = {"t": _sess("s", "WAITING_FOR_INPUT")}
+    board.load(tasks, sessions, {})
+    pacer.booked[("t", "ip", "s")] = {"at": 0.0, "uncertain": True}   # long expired
+
+    pacer.tick(was_open=True)
+    assert actions(board) == ["session.launch"], "an expired reservation must not wedge it"
+
+
+def test_a_launch_that_never_became_a_turn_stops_reserving_forever(pacer, board):
+    """A launch kandev accepted but never ran leaves the session at READY under the same key.
+
+    Nothing else clears that booking, so without the TTL the card -- launchable in every
+    other respect -- was skipped on every later tick.
+    """
+    board.load([_task("t", "ip", "Ready")], {"t": _sess("s", "WAITING_FOR_INPUT")}, {})
+    pacer.booked[("t", "ip", "s")] = 0.0                              # plain, long expired
+    pacer.tick(was_open=True)
+    assert actions(board) == ["session.launch"]

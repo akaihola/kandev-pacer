@@ -255,6 +255,9 @@ class Pacer:
         newest = holder
         try:
             drained = bool((client.ws_drain(newest["id"]) or {}).get("drained"))
+        except client.RequestOutcomeUnknown as error:
+            self.note_uncertain(key, task, f"drain: {error}")
+            return Outcome("uncertain", f"{label(task)!r} drain unconfirmed", launched={})
         except Exception as error:
             self.note_failure(key, task, f"drain rejected: {error}", snapshot.now)
             return None
@@ -287,6 +290,12 @@ class Pacer:
         profile = task_agent_profile(task) if intent == "start" else None
         try:
             client.ws_launch(task["id"], intent, session_id, target, agent_profile_id=profile)
+        except client.RequestOutcomeUnknown as error:
+            self.note_uncertain(
+                ActionKey(task["id"], task.get("workflow_step_id", ""), session_id),
+                task, str(error),
+            )
+            return Outcome("uncertain", f"{label(task)!r} launch unconfirmed", launched={})
         except Exception as error:
             self.note_failure(key, task, str(error), snapshot.now)
             return None
@@ -299,6 +308,25 @@ class Pacer:
             f"target={self.board.name_of(target)!r}",
             {"task": task["id"], "intent": intent, "session": session_id, "target": target},
         )
+
+    def note_uncertain(self, key, task, reason):
+        """Reserve the slot when kandev may have acted but its answer never arrived.
+
+        Routine, not alarming: kandev answers an accepted launch long after the pacer
+        stops listening, so this is what a normal launch looks like from here. Only the
+        board can say whether it took, which is exactly what the reservation waits for.
+        Deliberately not a failure -- a failure frees the slot for another candidate, and
+        that is how the same turn gets started twice.
+        """
+        now = time.time()
+        self.booked[key] = {"at": now, "uncertain": True}
+        for stale in [k for k in self.failed if k.task == key.task]:
+            del self.failed[stale]
+        log.info(f"{label(task)!r} is in kandev's hands, unconfirmed ({reason}) -- holding "
+                 f"its slot for {self.config.booking_ttl:g}s until the board shows it")
+        self.log_event({
+            "t": round(now, 3), "kind": "uncertain", "task": task["id"], "reason": reason,
+        })
 
     def book(self, task_id, step, session_id, now):
         """Record a spent turn, and forget this task's failures -- something worked."""
