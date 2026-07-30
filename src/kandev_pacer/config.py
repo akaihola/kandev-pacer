@@ -34,6 +34,20 @@ class Settings(BaseSettings):
     # Hard ceiling on consumed fraction, whatever the burn line says. 1.0 disables it.
     backstop: float = Field(0.97, alias="PACER_BACKSTOP", gt=0, le=1.0)
     interval: int = Field(120, alias="PACER_INTERVAL", gt=0)
+
+    # Absolute deadline for one WebSocket request once it has been sent. The socket's own
+    # timeout is not enough: every unrelated pushed event makes recv() return and starts a
+    # fresh socket timeout, so a busy event stream could keep one request alive forever.
+    ws_timeout: float = Field(30.0, alias="PACER_WS_TIMEOUT", gt=0)
+    # kandev answers session.launch only once the session it started is done needing it --
+    # observed 17s to 15 minutes after the send. A *refusal* comes back in milliseconds. So a
+    # launch waits only long enough to catch a refusal, then treats the request as in flight
+    # and lets the board confirm it. Waiting for the real answer freezes the loop for minutes
+    # with nothing printed, which is what made a restarted pacer look hung.
+    refusal_window: float = Field(10.0, alias="PACER_REFUSAL_WINDOW", gt=0)
+    # How long kandev may take to make an accepted launch visible on the board. A reservation
+    # has to outlive that or the pacer launches the same task twice.
+    launch_latency: float = Field(90.0, alias="PACER_LAUNCH_LATENCY", ge=0)
     order: Literal["auto", "custom", "board"] = Field("auto", alias="PACER_ORDER")
 
     # Unset means "three ticks"; see the fail_backoff property. 0 is a real value --
@@ -76,8 +90,13 @@ class Settings(BaseSettings):
 
     @property
     def booking_ttl(self):
-        """How long a booking is honoured before the task counts as launchable again."""
-        return 3 * self.interval
+        """How long a booking is honoured before the task counts as launchable again.
+
+        Three board re-checks, plus however long kandev may take to make an accepted
+        launch visible -- a reservation that expires before the board catches up is how
+        the same task gets launched twice.
+        """
+        return 3 * self.interval + self.launch_latency
 
     @field_validator("order", mode="before")
     @classmethod

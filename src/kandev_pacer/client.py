@@ -2,6 +2,7 @@
 
 import json
 import logging
+import time
 import urllib.request
 
 import websocket
@@ -68,22 +69,52 @@ def _ws_connect():
     return websocket.create_connection(settings.ws_url, timeout=30, origin=settings.url)
 
 
-def _ws_call(connection, action, payload, request_id):
-    connection.send(
-        json.dumps(
-            {
-                "id": request_id,
-                "type": "request",
-                "action": action,
-                "payload": payload,
-            }
+class RequestOutcomeUnknown(RuntimeError):
+    """A sent request got no matching response before the deadline or a disconnect.
+
+    Distinct from a refusal on purpose. A refusal means kandev did nothing, so the slot is
+    free. This means kandev may have acted and only the answer was lost -- spending the
+    slot again could start the same turn twice.
+    """
+
+
+def _ws_call(connection, action, payload, request_id, timeout=None):
+    """One request and its answer, matched on `id`, under an absolute deadline."""
+    timeout = settings.ws_timeout if timeout is None else timeout
+    deadline = time.monotonic() + timeout
+    try:
+        connection.settimeout(max(deadline - time.monotonic(), 0))
+        connection.send(
+            json.dumps(
+                {
+                    "id": request_id,
+                    "type": "request",
+                    "action": action,
+                    "payload": payload,
+                }
+            )
         )
-    )
+    except Exception as error:
+        raise RequestOutcomeUnknown(
+            f"{action} outcome unknown: connection failed while sending"
+        ) from error
     while True:
-        raw = connection.recv()
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise RequestOutcomeUnknown(
+                f"{action} outcome unknown: no response within {timeout:g}s"
+            )
+        try:
+            # Recomputed every pass, so unrelated pushed events spend this request's
+            # budget instead of refreshing a per-recv socket timeout.
+            connection.settimeout(remaining)
+            raw = connection.recv()
+        except Exception as error:
+            raise RequestOutcomeUnknown(
+                f"{action} outcome unknown: no response within {timeout:g}s"
+            ) from error
         if not raw:
-            # recv() returns "" for any non-text frame, so this skips ping/pong. A
-            # real close does not spin here: the next recv() raises instead.
+            # recv() returns "" for any non-text frame, so this skips ping/pong.
             continue
         message = json.loads(raw)
         if message.get("id") != request_id:
@@ -96,7 +127,7 @@ def _ws_call(connection, action, payload, request_id):
         return response
 
 
-def ws_request(action, payload, request_id="pace-1"):
+def ws_request(action, payload, request_id="pace-1", timeout=None):
     """One action over its own connection.
 
     The request id only has to be unique within a connection, and this opens a fresh
@@ -104,12 +135,12 @@ def ws_request(action, payload, request_id="pace-1"):
     """
     connection = _ws_connect()
     try:
-        return _ws_call(connection, action, payload, request_id)
+        return _ws_call(connection, action, payload, request_id, timeout)
     finally:
         connection.close()
 
 
-def ws_launch(task_id, intent, session_id, workflow_step_id):
+def ws_launch(task_id, intent, session_id, workflow_step_id, agent_profile_id=None):
     payload = {
         "task_id": task_id,
         "intent": intent,
@@ -117,7 +148,14 @@ def ws_launch(task_id, intent, session_id, workflow_step_id):
     }
     if session_id:
         payload["session_id"] = session_id
-    return ws_request("session.launch", payload)
+    # Only intent:start needs this, and only because kandev's start path will not look it
+    # up itself. The caller decides when to pass one.
+    if agent_profile_id:
+        payload["agent_profile_id"] = agent_profile_id
+    # Waits only long enough to catch a refusal. An accepted launch is answered minutes
+    # later -- kandev waits for the session -- and waiting for that freezes the loop. What
+    # arrives after the window is not news: the board shows the session.
+    return ws_request("session.launch", payload, timeout=settings.refusal_window)
 
 
 def ws_set_state(task_id, state):

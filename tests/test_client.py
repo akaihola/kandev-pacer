@@ -4,6 +4,7 @@ Covers what the pure tests cannot -- request/response matching past unrelated pu
 Origin header /ws insists on, error frames, and which sessions are worth asking about.
 No real kandev, no agent turn, no quota.
 """
+import websocket
 from conftest import one_session as _sess
 
 from kandev_pacer import client
@@ -94,3 +95,54 @@ def test_get_reads_an_empty_body_as_nothing(monkeypatch):
 
     monkeypatch.setattr(client.urllib.request, "urlopen", lambda url, timeout=None: _Empty())
     assert client.get("/api/v1/anything") is None
+
+
+# --- a request whose answer never comes ---
+
+def test_a_request_that_never_answers_raises_outcome_unknown(board, monkeypatch):
+    """Not a refusal: kandev may have acted and only the answer was lost.
+
+    The distinction is what stops the pacer spending the same slot twice.
+    """
+    monkeypatch.setattr(settings, "ws_timeout", 0.05)
+    fake = board.connect("ws://x", origin=None)
+    monkeypatch.setattr(websocket, "create_connection", lambda *a, **k: fake)
+    fake.inbox.clear()
+    monkeypatch.setattr(fake, "send", lambda raw: None)      # sent, never answered
+    try:
+        client.ws_drain("s1")
+    except client.RequestOutcomeUnknown as error:
+        assert "outcome unknown" in str(error)
+    else:
+        raise AssertionError("a silent request must not read as success or refusal")
+
+
+def test_unrelated_pushes_spend_the_same_deadline(board, monkeypatch):
+    """A busy event stream must not keep one request alive forever.
+
+    Every push makes recv() return, and a per-recv socket timeout would restart on each
+    one. The deadline is absolute, so the budget shrinks instead of resetting.
+    """
+    monkeypatch.setattr(settings, "ws_timeout", 30)
+    board.load([], {}, {"sReview": 1})
+    client.ws_drain("sReview")
+    connection = board.connections[-1]
+    assert connection.timeouts == sorted(connection.timeouts, reverse=True), \
+        f"deadlines must shrink, got {connection.timeouts}"
+
+
+def test_a_launch_waits_only_for_a_refusal(board, monkeypatch):
+    """An accepted launch is answered minutes later; waiting for it froze the loop."""
+    monkeypatch.setattr(settings, "refusal_window", 7)
+    monkeypatch.setattr(settings, "ws_timeout", 30)
+    client.ws_launch("t", "workflow_step", "s", "ip")
+    assert max(board.connections[-1].timeouts) <= 7, "launch must use the refusal window"
+
+
+def test_a_launch_can_carry_the_tasks_agent_profile(board):
+    """intent:start needs it -- kandev's start path will not resolve one itself."""
+    client.ws_launch("t", "start", None, "ip", agent_profile_id="prof-1")
+    action, payload = board.ws_log[-1]
+    assert payload["agent_profile_id"] == "prof-1"
+    client.ws_launch("t", "workflow_step", "s", "ip")
+    assert "agent_profile_id" not in board.ws_log[-1][1], "only start carries it"

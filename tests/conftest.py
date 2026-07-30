@@ -105,6 +105,10 @@ class _FakeConnection:
         self.origin = origin
         self.inbox = deque()
         self.closed = False
+        self.timeouts = []     # every deadline _ws_call set, for the timeout tests
+
+    def settimeout(self, seconds):
+        self.timeouts.append(seconds)
 
     def send(self, raw):
         self.inbox.extend(self.board.reply(json.loads(raw)))
@@ -125,6 +129,7 @@ class FakeBoard:
         self.queues = {}
         self.ws_log = []       # (action, payload) per action the pacer sent
         self.origins = []      # the Origin header each connection presented
+        self.connections = []  # every connection opened, for the deadline tests
         self.paths = []        # every REST path fetched, for counting round trips
         self.sidebar = {}      # what GET /user/settings answers
         # Quota the board reports. The defaults leave the gate open; a test that wants
@@ -163,7 +168,9 @@ class FakeBoard:
 
     def connect(self, url, timeout=None, origin=None):
         self.origins.append(origin)
-        return _FakeConnection(self, origin)
+        connection = _FakeConnection(self, origin)
+        self.connections.append(connection)
+        return connection
 
     def reply(self, message):
         """The frames kandev sends back for one request frame."""
