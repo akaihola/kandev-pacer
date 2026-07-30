@@ -181,7 +181,7 @@ def note_uncertain(key, task, reason):
     _clear_failures(task["id"])
     print(
         f"kandev did not confirm start of {label(task)!r} ({reason}) -- "
-        f"reserving its slot for {BOOKING_TTL}s pending board re-check",
+        f"reserving its slot for {BOOKING_TTL:g}s pending board re-check",
         file=sys.stderr,
         flush=True,
     )

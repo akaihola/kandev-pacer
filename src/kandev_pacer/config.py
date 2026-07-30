@@ -17,7 +17,10 @@ BACKSTOP = float(os.environ.get("PACER_BACKSTOP", "0.97"))
 INTERVAL = int(os.environ.get("PACER_INTERVAL", "120"))
 WS_REQUEST_TIMEOUT = float(os.environ.get("PACER_WS_TIMEOUT", "30"))
 ORDER = (os.environ.get("PACER_ORDER") or "auto").lower()
-BOOKING_TTL = 3 * INTERVAL
+# Three board re-checks *after* the moment the request could still have been in flight.
+# Without the deadline term, a short interval expires an uncertain reservation before the
+# launch it guards could possibly show up on the board, and the task gets launched twice.
+BOOKING_TTL = 3 * INTERVAL + WS_REQUEST_TIMEOUT
 FAIL_BACKOFF = int(os.environ.get("PACER_FAIL_BACKOFF", str(3 * INTERVAL)))
 FAIL_BACKOFF_MAX_MULT = 8
 BLOCK_AFTER = int(os.environ.get("PACER_BLOCK_AFTER", "2"))
