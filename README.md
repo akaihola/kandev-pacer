@@ -53,6 +53,9 @@ pacer with the variable's name in the message rather than failing hours later.
 | `PACER_RESUME_MARGIN` | `0.0` | headroom the gate must regain before reopening, to stop it flapping at zero |
 | `PACER_BACKSTOP` | `0.97` | consumed fraction at which everything is withheld regardless. `1.0` disables |
 | `PACER_INTERVAL` | `120` | seconds between ticks |
+| `PACER_WS_TIMEOUT` | `30` | absolute deadline for one WebSocket request, so a busy event stream cannot keep one alive forever |
+| `PACER_REFUSAL_WINDOW` | `10` | how long a launch waits. Only long enough to catch a refusal — an accepted launch is answered minutes later, and waiting froze the loop |
+| `PACER_LAUNCH_LATENCY` | `90` | how long kandev may take to make an accepted launch visible. Bookings last three ticks plus this |
 | `PACER_ORDER` | `auto` | `auto` \| `custom` \| `board` — see below |
 | `PACER_FAIL_BACKOFF` | 3 ticks | seconds before a refused launch is retried; doubles per consecutive failure, up to 8× |
 | `PACER_BLOCK_AFTER` | `2` | consecutive failures before the card is flagged `BLOCKED`. `0` keeps the pacer read-only |
@@ -112,6 +115,9 @@ to be argued from. Three record kinds, append-only, ~300 KB/day at the default t
 **Nothing ever launches, every tick logs `nothing to launch`.** The workflow is probably not
 enrolled, or its steps are tagged but do not route on turn completion. `--dump-order` names
 what is out of scope and why; `make-paced '<workflow>'` shows what enrollment would change.
+
+**A prompt you queued never runs.** Check it is on a session the pacer can see: it reads
+every *idle* session, so a prompt parked on a `RUNNING` one waits for that turn to finish.
 
 **A card is flagged `BLOCKED`.** The pacer gave up on it after `PACER_BLOCK_AFTER` refused
 launches — usually a `CREATED` session with no executor record, which no retry will fix.

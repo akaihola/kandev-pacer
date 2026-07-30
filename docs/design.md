@@ -58,6 +58,44 @@ step prompt and lets the queued entry leak out un-paced afterwards. A drainable 
 *any* step, including parked ones like Review where a launch never applies. Full derivation and
 the verified Kandev drain triggers: [`queueing-user-prompts.md`].
 
+**The queue is not necessarily on the newest session.** A launch resumes the newest session,
+but a drain must target the one that actually holds the queue: kandev queues a prompt on
+whichever session the user had open, which for a task with several sessions is routinely the
+primary one created with the task. So the pacer reads `message.queue.get` for *every* idle
+session and drains the newest of those that came back non-empty — and books the slot against
+that session id, since a booking naming a session the board never lists is pruned on the next
+tick and the same prompt gets drained twice. Reading only the newest reported an empty queue
+for a task that had a prompt waiting: the card stayed parked indefinitely while the pacer spent
+its slots further down the order, with nothing in the log to say a prompt was being skipped.
+
+**`intent: start` must carry the task's own agent profile.** Kandev's start path resolves the
+*executor* from task metadata but **not** the agent profile, and refuses a launch that has
+neither: `task has no agent_profile_id configured`. Its *prepare* path does resolve it, so the
+same task can be prepared and yet not started. The pacer reads `metadata.agent_profile_id` off
+the task and passes it back — free, since it rides along in the task list every tick already
+fetches. Two limits keep this from becoming a routing decision, which is kandev's business: it
+is sent on **`intent: start` only** (`intent: workflow_step` is the path a profile-switch step
+uses to spawn its own session, so it stays profile-free), and even there a step-level profile
+still overrides it on kandev's side. The pacer never invents a profile for a task that has none.
+
+**A task with no session at all is launchable too — including on a work step.** This is the
+recovery half of the same story. Kandev moves a task to the requested step and sets it
+`SCHEDULING` *before* it validates that the launch can happen, so any admission it rejects
+leaves the card sitting on the work step with no session ever created. Requiring an idle session
+there made that state permanently unlaunchable — nothing creates the session afterwards, so the
+card is skipped on every subsequent tick. That is the same silent-and-total failure as the
+`CREATED` case above, and it is how four subtasks of a `Heartbeat` task sat on the board for
+~7.75h with the gate open, no turns running, and `launchable=0` logged the whole time.
+
+**A request that is sent and never answered is not a refusal.** A refusal means kandev did
+nothing and the slot is free; a lost answer means it may have started the turn. Spending the
+slot again would run the same turn twice, so an unconfirmed request reserves its slot
+(`uncertain`) and waits for the board to confirm. That wait is bounded by the booking TTL in
+both directions: an uncertain reservation expires so a silently-failed launch is retried, and a
+booking on a `WAITING_FOR_INPUT` session expires too — a launch kandev accepted but never
+turned into a turn leaves the session at `READY` under the same key, where nothing else would
+ever clear it.
+
 **A never-run task already has a session.** Creating a task provisions its workspace, worktree
 and branch immediately and parks the session in `CREATED` — prepared, agent never started. So
 "never run" does **not** mean "no session", and the pacer treats `CREATED` as launchable
