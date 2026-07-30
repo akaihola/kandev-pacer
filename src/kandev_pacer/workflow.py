@@ -375,6 +375,10 @@ def prune_booked(booked, tasks, task_sessions, now, ttl):
         if key[2] is None or state == CREATED_STATE or uncertain:
             if (state in IDLE_STATES or state is None) and now - booked_at < ttl:
                 kept[key] = booking
-        elif state == READY_STATE:
+        # A launch kandev accepted but never turned into a turn leaves the session sitting at
+        # READY with the same (task, step, session) key, so the booking has nothing to clear it.
+        # The TTL bounds that wait here too: without it a no-op launch reserved a slot forever
+        # and the card -- launchable in every other respect -- was skipped on every later tick.
+        elif state == READY_STATE and now - booked_at < ttl:
             kept[key] = booking
     return kept

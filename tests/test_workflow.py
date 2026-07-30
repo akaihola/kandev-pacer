@@ -393,6 +393,21 @@ def test_prune_booked():
     ts_running = {"t": [_sess("s", "RUNNING")]}
     assert prune_booked({("t", "ip", "s"): 990.0}, tasks, ts_running, now, ttl) == {}
 
+def test_prune_booked_expires_a_launch_that_spent_no_turn():
+    """A launch kandev accepts but never turns into a turn must not reserve its slot forever.
+
+    The session stays WAITING_FOR_INPUT under the same (task, step, session) key, so nothing
+    else clears the booking: the card -- launchable in every other respect -- was skipped on
+    every later tick while the log said "nothing to launch" with the gate open and 0 running.
+    Observed on "Bash in subshells" (booked 14:16 -> 18:26, then again from 18:27).
+    """
+    now, ttl = 1000.0, 360.0
+    tasks = [{"id": "t", "workflow_step_id": "ip"}]
+    waiting = {"t": [_sess("s", "WAITING_FOR_INPUT")]}
+    # Older than the TTL -> expired, so the launch can be retried instead of wedging the slot.
+    assert prune_booked({("t", "ip", "s"): 500.0}, tasks, waiting, now, ttl) == {}
+
+
 def test_prune_booked_never_run_admission():
     """W1: a never-run admission booking (sid None) must survive while its session is invisible."""
     now, ttl = 1000.0, 360.0

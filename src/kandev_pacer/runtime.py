@@ -428,9 +428,12 @@ def tick(was_open):
             held = (
                 f", {len(_FAILED)} held after a failed launch" if _FAILED else ""
             )
+            # Without the reservation count this line reads as an idle fleet, which hid a
+            # slot held by a booking whose task was the only launchable one.
+            pending = f", {len(_BOOKED)} pending" if _BOOKED else ""
             print(
                 f"headroom={worst:+.3f} open, nothing to launch "
-                f"({running}/{CONCURRENCY} running{held})",
+                f"({running}/{CONCURRENCY} running{pending}{held})",
                 flush=True,
             )
             emit("open", "nothing")
