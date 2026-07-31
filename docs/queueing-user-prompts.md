@@ -94,13 +94,37 @@ parking place:
 - **No background reconciler.** Every drain site above is event-driven. The only
   `time.NewTicker`s in the orchestrator are inside `waitForAgentPromptReady` and
   the session-ready wait loop — no sweeper visits idle sessions.
-- **A server restart does not flush it.** `reconcileSessionsOnStartup`
-  (`internal/orchestrator/service.go:1414`) "does NOT launch any agent processes —
-  sessions are recovered lazily"; it flips active sessions to `WAITING_FOR_INPUT`
-  and abandons open turns without prompting. Entries are in SQLite, so they
-  survive the restart untouched.
+- **A server restart does not flush it — the next agent boot does.**
+  `reconcileSessionsOnStartup` (`internal/orchestrator/service.go:1504`) "does NOT
+  launch any agent processes — sessions are recovered lazily"; it flips active
+  sessions to `WAITING_FOR_INPUT` and abandons open turns without prompting, and
+  the entries survive in SQLite. But the recovery it defers is exactly drain site
+  3: the first thing that boots that session's agent — the UI opening the task,
+  `RecoverSession`, a peer message, the pacer's own next launch — fires
+  `agent.boot_ready`, and `handleAgentBootReady` drains the queue
+  *unconditionally* (`event_handlers_agent.go:295`), un-paced. A restart therefore
+  arms every parked prompt in the board; whoever next wakes each agent pulls the
+  trigger. See [the 2026-07-31 incident](#incident-2026-07-31-a-restart-armed-three-parked-prompts).
 - **`RecoverSession`** is a user-triggered WS action (the UI's Recover button), not
-  an automatic path.
+  an automatic path — but per the bullet above, triggering it releases the parked
+  prompt.
+
+### Incident 2026-07-31: a restart armed three parked prompts
+
+kandev was restarted at 12:48:40 local. At 12:50–12:51 five sessions were booted
+back (`is_resuming: true` in the turn metadata); two of them drained a parked
+prompt on boot — `"merge"` at 12:51:57 on session `6e144a9f`, a review reply at
+12:51:56 on `22ccdd91` — each starting a turn. The pacer was `paused` the whole
+time and launched nothing, and its tick at 12:52:03 reported
+`headroom=-0.136 PAUSED (3 running)` with `cap=2`: three un-paced turns, one over
+the concurrency cap, none of them the pacer's.
+
+Nothing in the pacer can prevent this: the drain is kandev's, it needs no client,
+and by the time the pacer's next tick reads the board the turns are already
+running. What the pacer does do is report it honestly — the paused line carries the
+running count precisely so an un-paced turn is visible rather than silent. The
+mitigation is operational: after a kandev restart, expect every parked prompt to
+fire as its task is opened.
 
 ## How the pacer releases it
 
