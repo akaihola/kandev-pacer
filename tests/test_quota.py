@@ -5,16 +5,19 @@ No network.
 
 from datetime import datetime
 
-from kandev_pacer.config import Settings, settings
+from kandev_pacer.config import MAX_INTERVAL, MIN_INTERVAL, Settings, settings
 from kandev_pacer.quota import (
+    Verdict,
     binding_label,
     elapsed_frac,
     format_wait,
     headroom,
     parse_windows,
+    poll_interval,
     provider_missing,
     quota_verdict,
     resume_at,
+    resume_note,
     tick_record,
     usage_providers,
     window_records,
@@ -167,10 +170,11 @@ def test_quota_verdict_says_when_a_paused_gate_reopens():
     # 80% consumed at e=0.5 -> h=-0.30, healing when e reaches 0.80: 3600s before the
     # reset, which is 9000s out, so 5400s from now.
     verdict = quota_verdict(_usage(), _windows(0.80), 1000.0, Settings())
-    assert verdict.resume == (
+    assert resume_note(verdict.resumes_at, 1000.0) == (
         f", resumes in ~1h 30m 00s (~{datetime.fromtimestamp(6400.0):%H:%M})"
     )
-    assert quota_verdict(_usage(), _windows(0.10), 1000.0, Settings()).resume == ""
+    open_gate = quota_verdict(_usage(), _windows(0.10), 1000.0, Settings())
+    assert resume_note(open_gate.resumes_at, 1000.0) == ""
 
 
 def test_quota_verdict_says_when_a_ceiling_lifts():
@@ -179,7 +183,9 @@ def test_quota_verdict_says_when_a_ceiling_lifts():
     # when e reaches 0.99 -- but the backstop reads `c`, which only falls at the roll.
     verdict = quota_verdict(_usage(), _windows(0.99, resets_in=1800), 1000.0, Settings())
     assert verdict.gate == "ceiling"
-    assert verdict.resume == f", resumes in ~30m 00s (~{datetime.fromtimestamp(2800.0):%H:%M})"
+    assert resume_note(verdict.resumes_at, 1000.0) == (
+        f", resumes in ~30m 00s (~{datetime.fromtimestamp(2800.0):%H:%M})"
+    )
 
 
 def test_resume_at_is_when_e_catches_up_with_c():
@@ -212,3 +218,80 @@ def test_quota_verdict_reads_only_the_numbers_it_is_given():
     barely = _windows(0.4999)                       # h ~ +0.0001, just above the line
     assert quota_verdict(_usage(), barely, 1000.0, Settings()).is_open
     assert quota_verdict(_usage(), barely, 1000.0, Settings()).is_open
+
+
+# --- how often to look while the gate is shut ---
+
+def test_a_withheld_verdict_carries_the_instant_it_reopens():
+    """The instant, not just the rendered clause: the loop paces itself by it too."""
+    paused = quota_verdict(_usage(), _windows(0.80), 1000.0, Settings())
+    assert paused.resumes_at == resume_at(_windows(0.80), 1000.0)
+    ceiling = quota_verdict(_usage(), _windows(0.99, resets_in=1800), 1000.0, Settings())
+    assert ceiling.resumes_at == 2800.0                     # the roll, not the burn line
+    # Nothing to wait for: already through, or no idea what we are waiting on.
+    assert quota_verdict(_usage(), _windows(0.10), 1000.0, Settings()).resumes_at is None
+    assert quota_verdict(_usage("openai"), [], 1000.0, Settings()).resumes_at is None
+
+
+def _behind(resumes_at):
+    """A verdict short of the burn line, reopening at `resumes_at`."""
+    return Verdict("paused", -0.3, "", resumes_at)
+
+
+def test_poll_interval_halves_the_remaining_wait():
+    """Each tick closes half the distance, so the reopening is met, not slept through."""
+    config = Settings()                                            # interval 120
+    assert poll_interval(_behind(1100.0), 1000.0, config) == 50.0   # 100s out -> 50s
+    assert poll_interval(_behind(1100.0), 1080.0, config) == 10.0   # 20s out -> 10s
+
+
+def test_poll_interval_is_clipped_at_both_ends():
+    config = Settings()
+    far, imminent, stale = _behind(6400.0), _behind(1000.5), _behind(900.0)
+    assert poll_interval(far, 1000.0, config) == MAX_INTERVAL       # 90m -> the ceiling
+    assert poll_interval(imminent, 1000.0, config) == MIN_INTERVAL  # never spins
+    assert poll_interval(stale, 1000.0, config) == MIN_INTERVAL     # nor on a stale eta
+
+
+def test_poll_interval_is_the_configured_one_whenever_headroom_is_not_negative():
+    """h >= 0 has nothing to climb back to: PACER_INTERVAL is the pacing rate, always.
+
+    Including the ceiling that binds while `h` is already back above the line -- it has
+    an estimate, but the rule reads the headroom, not whether an estimate exists.
+    """
+    config = Settings()
+    assert poll_interval(Verdict("open", 0.4, ""), 1000.0, config) == config.interval
+    assert poll_interval(Verdict("blind", 1.0, "x"), 1000.0, config) == config.interval
+    healthy_ceiling = Verdict("ceiling", 0.01, "", resumes_at=1010.0)
+    assert poll_interval(healthy_ceiling, 1000.0, config) == config.interval
+
+
+def test_a_ceiling_below_the_line_adapts_like_any_other_wait():
+    """No special case for the gate: what decides is h, and h is negative here too.
+
+    The estimate it converges on is the ceiling's own -- the later of the roll and the
+    burn line -- not the burn line's, but the halving is the same.
+    """
+    binding = Verdict("ceiling", -0.09, "", resumes_at=1100.0)
+    assert poll_interval(binding, 1000.0, Settings()) == 50.0
+
+
+def test_a_short_configured_interval_does_not_make_a_long_wait_busy():
+    """PACER_INTERVAL=5 asks for a responsive gate, not for polling a two-hour pause.
+
+    The band is fixed, so the wait paces itself *slower* than the configured tick here --
+    the opposite direction from the default, and the point of not tying it to `interval`.
+    """
+    eager = Settings(PACER_INTERVAL=5)
+    assert poll_interval(_behind(9000.0), 1000.0, eager) == MAX_INTERVAL   # 2h out -> 120s
+    assert poll_interval(_behind(1100.0), 1000.0, eager) == 50.0           # 100s out -> 50s
+    # ...and back to the eager rate the moment there is nothing to wait for.
+    assert poll_interval(Verdict("open", 0.4, ""), 1000.0, eager) == 5
+
+
+def test_the_band_holds_however_the_interval_is_set():
+    """Neither end of the band moves with PACER_INTERVAL -- that is what "fixed" means."""
+    for interval in (1, 5, 120, 600):
+        config = Settings(PACER_INTERVAL=interval)
+        assert poll_interval(_behind(9000.0), 1000.0, config) == MAX_INTERVAL
+        assert poll_interval(_behind(1000.5), 1000.0, config) == MIN_INTERVAL
