@@ -27,7 +27,7 @@ source (`~/repos/ai/kandev`, 2026-07-24).
 | 7. Shared launchpad | 1 | No | Yes in theory | Racy and loses step settings |
 | 8. Shadow workflow | 0 in the main flow | No | Yes | Duplicates the whole workflow |
 | 9. Completion-signal gate | 0–1 | No | Yes | The agent releases itself |
-| 10. Agent-specific hook | 0 | No | Yes | Not portable across agents |
+| 10. Agent-specific hook | 0 | No | Yes | Not portable across agents; strong *complement* — see below |
 | 11. Model API proxy | 0 | No | Yes | Gates API calls, not turns |
 | 12. ACP turnstile | 0 | No | Yes | Strong, but misses passthrough |
 | 13. Hold in place, launch on release | 0 | No | Yes | Best fit for the criteria |
@@ -206,6 +206,19 @@ Claude Code's `UserPromptSubmit` hook is one example.
 - **Good:** Zero workflow changes, and the hook runs at the correct turn boundary.
 - **Bad:** Hook systems and behavior differ between Claude Code, Codex, and
   Hermes Agent. This does not meet the requirement to support all three equally.
+
+The verdict stands, but it undersells what the design *is* good for. Investigated
+in depth on 2026-08-02 against Claude Code 2.1.220 —
+[`claude-code-hook-feasibility.md`]. In short: the hook can hold a turn on every
+Claude Code frontend except the web one, it can be overridden by a keyword in the
+prompt, and Claude Code ships an `http` hook type that POSTs the hook input to a
+URL — so the pacing logic can live in one service with `quota.py` as its brain,
+rather than in a script per machine. Two caveats decide whether it is usable: a
+hook that hits its timeout **releases** the turn rather than holding it, and it
+brakes work someone else launched rather than launching the next task itself.
+
+So it is a complement, not a rival, to design 13: the hook paces *attended* work
+in any Claude Code frontend, the pacer starts *unattended* work in Kandev.
 
 ## 11. Model API proxy
 
@@ -438,33 +451,68 @@ with a cancelled session.
 To act on later, once a prototype works. This applies to every design above,
 because they all insert waiting time between turns.
 
-Anthropic caches the unchanged beginning of a conversation (the "prefix") for
-a few minutes — 5 by default. A request that reuses a cached prefix pays about
-0.1× the normal token price for it; a request whose cache has expired pays
-about 1.25× to re-read and re-cache the whole prefix. That is roughly a 12.5×
-price difference on the conversation history, and a long-running agent session
-carries 50k–150k tokens of history.
+> **Corrected 2026-08-02.** This section originally assumed the 5-minute TTL.
+> Claude Code on a Claude subscription requests the **1-hour** TTL automatically,
+> which changes both the numbers and the advice. Rewritten below; the derivation
+> and its verification are in [`claude-code-hook-feasibility.md`].
 
-During a turn the agent calls the model every few seconds, so the cache stays
-warm on its own. The pacer only adds delay between turns — exactly where the
-cache clock runs. Every pause longer than the TTL means the next turn re-reads
-the whole history at full price. Because the pacer's gate measures the same
-usage number that cache misses inflate, this cannot make it overspend; it just
-means fewer useful turns per quota window.
+Anthropic caches the unchanged beginning of a conversation (the "prefix"). A
+request that reuses a cached prefix pays about 0.1× the normal token price for
+it; a request whose cache has expired pays a write premium to re-read and
+re-cache the whole prefix. A long-running agent session carries 50k–150k tokens
+of history, so the difference is large in absolute terms.
+
+Which TTL applies is not a single answer:
+
+| context | TTL | write price |
+|---|---|---|
+| Claude Code main conversation, on a subscription | **1 hour**, automatic | 2× |
+| …once spending usage credits rather than plan allowance | 5 minutes | 1.25× |
+| Subagents, always | 5 minutes | 1.25× |
+| API key / Bedrock / Vertex | 5 minutes unless `ENABLE_PROMPT_CACHING_1H=1` | 1.25× / 2× |
+
+`FORCE_PROMPT_CACHING_5M=1` forces 5 minutes anywhere. Verified on the pacer's
+own host: every recent session logs `cache_creation.ephemeral_1h_input_tokens`
+against a zero `ephemeral_5m_input_tokens`.
+
+The TTL is **sliding, and refreshing is free** — "the cache is refreshed for no
+additional cost each time the cached content is used", so only idle time expires
+a prefix. During a turn the agent calls the model every few seconds, so the cache
+stays warm on its own. The pacer only adds delay between turns — exactly where
+the cache clock runs. Because the pacer's gate measures the same usage number
+that cache misses inflate, a miss cannot make it overspend; it just means fewer
+useful turns per quota window.
 
 Practical consequences, in order of importance:
 
-- Quota pauses are unavoidable misses: they last far longer than the TTL, and
-  keeping the cache warm would cost about as much as the miss. Accept them.
-- Scheduling misses are avoidable: round-robining several tasks makes every
-  task's between-turn gap longer than the TTL. Prefer depth-first scheduling —
-  while the gate is open, run one task's steps back-to-back, then the next.
-  Tasks do not compete for cache space; only elapsed time expires a prefix.
+- **Pauses under an hour are now free.** That covers most of them. The old
+  advice to simply accept quota misses was right for a 5-minute TTL and is too
+  pessimistic for a 1-hour one.
+- **When a pause does cross the line, release just before it, not just after.**
+  For a prefix of `P` tokens, crossing expiry costs an extra `1.9 P` input
+  tokens (2.0× write instead of a 0.1× read) — on 100k of history, roughly 190k
+  tokens spent on nothing. Releasing a little early costs a bounded headroom
+  overshoot that elapsed time repays. This only applies when the remaining wait
+  is comparable to the remaining TTL; when headroom is hours-deep negative the
+  prefix is unsalvageable and the miss should be accepted.
+- **A keepalive would be better still and we cannot issue one.** A hit costs
+  `0.1 P` against the `1.9 P` miss, some 19× less — but nothing outside the
+  agent harness can make it send a request against the same prefix. Worth
+  remembering as an argument for pacing living *inside* the harness.
+- **Scheduling misses are much cheaper than feared.** Round-robining several
+  tasks pushes each task's between-turn gap out, but that gap now has an hour of
+  slack rather than five minutes. Depth-first scheduling is still preferable,
+  but on an hour's budget it is a mild preference, not a constraint. Tasks do
+  not compete for cache space; only elapsed time expires a prefix.
+- **Worktrees do not share a cache.** The cache key includes the model, the
+  effort level and the working directory, so two tasks in two worktrees of one
+  repo miss each other's prefix, and switching model or effort mid-pause voids
+  the prefix regardless of the clock.
 - React to turn-completed events instead of a slow polling tick, so an open
   gate releases the next turn within seconds, not minutes.
-- A 1-hour cache TTL exists (2× write price instead of 1.25×) and would
-  survive most quota pauses — but the TTL is chosen by the agent harness, not
-  by Kandev or the pacer. Verify it is configurable before counting on it.
 - To measure the real cost, read `cache_read_input_tokens` and
   `cache_creation_input_tokens` from the agent's session logs for a paced
-  task.
+  task — and `cache_creation.ephemeral_{1h,5m}_input_tokens` to confirm which
+  TTL was actually in force.
+
+[`claude-code-hook-feasibility.md`]: claude-code-hook-feasibility.md

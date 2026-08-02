@@ -145,7 +145,11 @@ window at `WINDOW/INTERVAL` = 150 turns, which makes tick rate a competing lever
 For *throughput alone*, `N=1` at a 15-second tick matches `N=2` at 120 s while staying serial —
 which does not multiply dead-time overshoot (`N × burn × dead_time`) and keeps scheduling
 depth-first, which `docs/history/pacing-designs.md` wants on prompt-cache grounds, since round-robining
-pushes every task's between-turn gap past the cache TTL. That document already named the fix:
+pushes every task's between-turn gap past the cache TTL. (That cache argument has since been
+weakened: Claude Code on a subscription uses a **1-hour** TTL, not the 5-minute one assumed
+there, so a round-robin gap has far more slack before it costs anything. Depth-first remains
+preferable, but it is no longer a reason on its own to prefer `N=1`. The dead-time argument
+below is unaffected.) That document already named the fix:
 *"react to turn-completed events instead of a slow polling tick."* But the tick lever does
 nothing for the occupied-slot problem above, so the two are complements, not alternatives.
 
@@ -165,7 +169,8 @@ nothing for the occupied-slot problem above, so the two are complements, not alt
    independently puts the throughput at the second slot (+47 %) should the queue ever be deep;
    the third and fourth are nearly free but nearly worthless.
 4. **Prefer the tick rate for further throughput.** Same gain, no overshoot amplification,
-   keeps cache locality. Event-driven launch on turn completion is the endpoint.
+   keeps cache locality — though with a 1-hour TTL that last point carries less weight than
+   when this was written. Event-driven launch on turn completion is the endpoint.
 5. **Size any dynamic cap from measured `r`.** `N ≤ (α + h·D/T) / r`: headroom converted to
    seconds via the window duration `D`, over reaction time `T`, divided by measured burn.
    Assuming `r ≈ α` overstates `N` by exactly the factor `r`. Take the minimum over windows of
