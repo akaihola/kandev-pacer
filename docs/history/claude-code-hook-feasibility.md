@@ -45,10 +45,10 @@ the whole pacer:
    modes release work rather than holding it.
 2. **A hook is a brake, not a starter.** It holds work someone else launched. It cannot
    launch the next backlog task when the gate opens, which is most of what `kandev-pacer`
-   does (§6). `asyncRewake` narrows this gap without closing it.
+   does (§8). `asyncRewake` narrows this gap without closing it.
 3. **The web frontend does not run it.** User-level `~/.claude/settings.json` hooks are
    explicitly not carried into cloud sessions — only repo-committed and org-managed ones
-   (§5).
+   (§6).
 4. **Hooks are blind to quota.** No hook event receives usage on stdin; headroom has to be
    sourced separately, and the best sources are either stale or undocumented (§3).
 
@@ -57,7 +57,7 @@ interactive session — yours, in a terminal, at 11pm — from eating the window
 backlog was meant to burn down steadily.
 
 The one finding that changes a conclusion already recorded in [`pacing-designs.md`] is the
-cache arithmetic in §4: Claude Code on a subscription now requests the **one-hour** TTL
+cache arithmetic in §5: Claude Code on a subscription now requests the **one-hour** TTL
 automatically, not the five-minute one, which inverts the "keeping the cache warm costs as
 much as the miss" trade-off.
 
@@ -94,7 +94,7 @@ the primary gate:
 - Blocking there stalls an agent **mid-turn**, holding whatever it holds — a worktree, a
   half-applied edit, a running server — for the length of the wait.
 - A mid-turn pause runs the cache clock *inside* a turn, the one place it otherwise never
-  runs (§4). It turns a warm session cold for no gain.
+  runs (§5). It turns a warm session cold for no gain.
 
 There is **no event that fires before each model request**. That is the mirror image of what
 we already recorded against design 11, the model API proxy: a proxy sees every request but
@@ -241,6 +241,14 @@ writes a marker keyed by session and `Stop` clears it — making the override tu
 rather than permanent. Non-keyword channels also exist on every hook's stdin if you would
 rather not put it in the prompt: `permission_mode` and `effort`.
 
+**The `if` field is not an override channel.** Every hook type carries one, which looks
+promising until you read what it does: "Permission rule syntax to filter when this hook runs
+(e.g. `Bash(git *)`). Only runs if the tool call matches the pattern. Avoids spawning hooks
+for non-matching commands." It matches *tool calls*, so it is meaningless on
+`UserPromptSubmit` and cannot see prompt text. It is genuinely useful for a `PreToolUse`
+gate, though — it keeps the pacer from spawning on cheap tool calls you do not care to
+meter.
+
 ## 5. The prompt cache — a correction to what we recorded before
 
 [`pacing-designs.md`] concludes that quota pauses are unavoidable cache misses because
@@ -303,11 +311,29 @@ mechanism.
 | CLI in a terminal | yes | stated |
 | Desktop app | yes | stated — "Hooks and skills defined in settings apply to both"; `~/.claude/settings.json` is shared |
 | VS Code extension | yes | stated — shares `~/.claude/settings.json`; spawns a real `claude` process |
-| JetBrains | probably | **inference** — same architecture, unverified |
+| JetBrains | yes | stated — "The plugin runs the `claude` command in your IDE's integrated terminal and connects to it. It does not bundle its own copy of the CLI." Its `ide` MCP docs even list a "Tool name (as seen by hooks)" column |
 | Agent SDK (TS/Python) | yes | stated — filesystem hooks load unless `settingSources: []`, alongside programmatic `hooks` |
-| kandev, Zed, other CLI/SDK drivers | yes | **inference with a verified mechanism** — hook loading happens inside the engine, not the UI; Zed's `claude-code-acp` bundles the Agent SDK, which spawns the bundled `cli.js` |
+| **T3 Code** | yes | **verified in its source** — depends on `@anthropic-ai/claude-agent-sdk`, sets `pathToClaudeCodeExecutable` to your installed binary and `settingSources: ["user","project","local"]`. It also renders `hook_started`/`hook_progress`/`hook_completed` in its own UI |
+| Zed (`claude-code-acp`) | yes | **verified in its source** — Agent SDK with an explicit `settingSources: ["user","project","local"]` |
+| vibe-kanban / Kandev-likes | yes | **verified for vibe-kanban** — its executor shells out to `npx -y @anthropic-ai/claude-code@<pinned>`. Kandev's own invocation was **not** verified locally |
 | **Web / cloud sessions** | **no** | **stated** — "user-level settings stay on your machine"; only the repo's `.claude/settings.json` and org server-managed settings run |
-| Frontends that reimplement the agent loop | no | no Claude Code hook system exists in them |
+| Cursor, opencode, Warp Agent Mode | no | independent harnesses against model APIs; no Claude Code hook system exists in them. (Running `claude` *inside* their terminal is a different thing, and does fire hooks) |
+
+Two failure modes that a "does it spawn `claude`?" test would miss:
+
+- **`settingSources: []` silently skips your hooks.** An SDK-based frontend runs the real
+  engine and still loads no filesystem settings if it passes an empty list. T3 Code and Zed
+  both set the three sources explicitly rather than relying on the default, so neither is
+  exposed — but it is the first thing to check in any new tool. (T3 Code does pass `[]` for
+  its capability *probe*, which is separate from your sessions.)
+- **A pinned engine version pins the hook semantics.** An orchestrator that runs
+  `npx -y @anthropic-ai/claude-code@<version>` gets that version's behaviour, not your
+  installed one — so a pacer relying on `asyncRewake` or on a 600 s `UserPromptSubmit`
+  budget can work in your terminal and quietly fail open under the orchestrator. This is the
+  same hazard as the shadowed install described at the top of this document.
+- **A redirected config dir does too.** T3 Code can set `CLAUDE_CONFIG_DIR` per provider
+  instance; when set, that instance reads a different `settings.json` and your usual
+  user-level hooks do not run for it. Default is empty, meaning the normal `~/.claude`.
 
 Two things to be blunt about:
 
