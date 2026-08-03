@@ -309,6 +309,59 @@ def prune_failures(failures, tasks, task_sessions):
     return {key: value for key, value in failures.items() if key in live}
 
 
+# --- stalls: turns that changed nothing ---
+#
+# A failure is kandev refusing a launch. A stall is kandev accepting one, running the
+# turn, and the turn having nothing to show for it -- which is what a *finished* task
+# looks like from here, over and over. The two need separate records: a failure backs
+# off and retries, while a stall is the pacer concluding the card needs a person.
+
+
+def workspace_moved(previous, current):
+    """Whether something changed between two launches of the same action.
+
+    True whenever the pacer cannot be sure it did not. `None` is progress.py's "cannot
+    say", so it never compares equal -- not even to another `None` -- and an unreadable
+    worktree can never accumulate towards a stall. The first launch of an action has no
+    `previous` and is progress by the same rule.
+    """
+    return previous is None or current is None or previous != current
+
+
+def note_stall(stalls, key, fingerprint):
+    """The stall record for `key` after one more launch, given the workspace right now.
+
+    `count` is how many consecutive turns have left the workspace alone, so it is still
+    0 on the launch that first observes a repeat -- the turn that changed nothing has
+    only just been paid for.
+    """
+    previous = stalls.get(key) or {}
+    if workspace_moved(previous.get("fingerprint"), fingerprint):
+        return {"fingerprint": fingerprint, "count": 0, "flagged": False}
+    return {**previous, "fingerprint": fingerprint, "count": previous.get("count", 0) + 1}
+
+
+def stalled_out(stalls, key, limit):
+    """Whether `key` has been launched `limit` times over with the workspace standing still."""
+    return bool(limit) and (stalls.get(key) or {}).get("count", 0) >= limit
+
+
+def stalled_keys(stalls, limit):
+    """Every action the pacer has given up on, for this tick's skip set."""
+    return {key for key in stalls if stalled_out(stalls, key, limit)}
+
+
+def prune_stalls(stalls, tasks, task_sessions):
+    """Forget stalls whose situation no longer exists -- the task moved, or was re-sessioned.
+
+    This is the whole recovery path, and it needs no separate release: moving the card
+    off the step, or giving the task a new session, changes the key, and the card is
+    launchable again on the next tick.
+    """
+    live = live_keys(tasks, task_sessions)
+    return {key: value for key, value in stalls.items() if key in live}
+
+
 class Booking(NamedTuple):
     """A turn the pacer has spent, holding that task's slot until the board catches up.
 

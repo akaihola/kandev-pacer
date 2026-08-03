@@ -612,3 +612,76 @@ def test_a_launch_that_never_became_a_turn_stops_reserving_forever(pacer, board)
     pacer.booked[("t", "ip", "s")] = Booking(0.0)                     # plain, long expired
     pacer.tick()
     assert actions(board) == ["session.launch"]
+
+
+# --- a finished task is not launched forever ---
+#
+# The fake board's sessions carry no worktree, so progress.fingerprint reads `{}` on every
+# tick: a task that never changes anything, which is exactly the case under test. Each
+# tick clears the booking first, so what these measure is the stall check and nothing else.
+
+
+def _relaunch(pacer, board, times):
+    """Drive `times` consecutive ticks on one unchanging card, as the real loop would."""
+    launched = 0
+    for _ in range(times):
+        pacer.booked.clear()                 # the previous turn finished; the slot is free
+        board.ws_log.clear()
+        pacer.tick()
+        launched += actions(board).count("session.launch")
+    return launched
+
+
+def test_a_task_that_changes_nothing_stops_being_launched(pacer, board):
+    """The whole bug: 509 turns of "the task is complete; stopping", one every two minutes."""
+    board.load([_task("done", "ip", "Finished")], {"done": _sess("s", "WAITING_FOR_INPUT")}, {})
+    assert _relaunch(pacer, board, 20) == settings.stall_after, \
+        "one launch per no-op turn up to the limit, then never again"
+
+
+def test_the_card_is_flagged_so_a_person_can_see_it(pacer, board):
+    """Giving up silently would trade a loud waste for a quiet one."""
+    board.load([_task("done", "ip", "Finished")], {"done": _sess("s", "WAITING_FOR_INPUT")}, {})
+    _relaunch(pacer, board, 20)
+    assert pacer.stalled[("done", "ip", "s")]["flagged"] is True
+    assert [p for a, p in board.ws_log if a == "task.state"] == [], \
+        "flagged on the tick it gave up, not again on every tick after it"
+
+
+def test_giving_up_is_not_a_failure(pacer, board):
+    """Nothing refused the launch, so the backoff machinery must not own this card."""
+    board.load([_task("done", "ip", "Finished")], {"done": _sess("s", "WAITING_FOR_INPUT")}, {})
+    _relaunch(pacer, board, 20)
+    assert pacer.failed == {}
+
+
+def test_work_keeps_the_card_launchable(pacer, board, monkeypatch):
+    """A task whose turns commit must never be stopped, however long it runs."""
+    trees = iter(range(100))
+    monkeypatch.setattr(runtime.progress, "fingerprint",
+                        lambda sessions: {"/w": (str(next(trees)), False)})
+    board.load([_task("busy", "ip", "Working")], {"busy": _sess("s", "WAITING_FOR_INPUT")}, {})
+    assert _relaunch(pacer, board, 20) == 20
+
+
+def test_an_unreadable_worktree_never_stops_a_task(pacer, board, monkeypatch):
+    """git being briefly unavailable is not evidence, and must not hold up a live card."""
+    monkeypatch.setattr(runtime.progress, "fingerprint", lambda sessions: None)
+    board.load([_task("t", "ip", "Ready")], {"t": _sess("s", "WAITING_FOR_INPUT")}, {})
+    assert _relaunch(pacer, board, 20) == 20
+
+
+def test_the_limit_can_be_switched_off(pacer, board, monkeypatch):
+    """PACER_STALL_AFTER=0 restores the old behaviour, for an operator who wants it."""
+    monkeypatch.setattr(settings, "stall_after", 0)
+    board.load([_task("done", "ip", "Finished")], {"done": _sess("s", "WAITING_FOR_INPUT")}, {})
+    assert _relaunch(pacer, board, 20) == 20
+
+
+def test_moving_the_card_makes_it_launchable_again(pacer, board):
+    """The recovery path a person actually uses, end to end through real ticks."""
+    board.load([_task("done", "ip", "Finished")], {"done": _sess("s", "WAITING_FOR_INPUT")}, {})
+    _relaunch(pacer, board, 20)
+    # Same task, same session, different step: a different key, so the stall does not follow.
+    board.load([_task("done", "bk", "Finished")], {"done": _sess("s", "WAITING_FOR_INPUT")}, {})
+    assert _relaunch(pacer, board, 1) == 1
