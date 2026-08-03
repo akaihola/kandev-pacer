@@ -3,7 +3,7 @@
 from dataclasses import dataclass
 from datetime import datetime
 
-from .config import MAX_INTERVAL, MIN_INTERVAL, WINDOW_DURATIONS, settings
+from .config import MAX_INTERVAL, MIN_INTERVAL, settings, window_duration
 
 
 def elapsed_frac(now, resets_at, duration_s):
@@ -204,7 +204,7 @@ def parse_windows(usage):
         if agent_usage.get("provider") != provider:
             continue
         for window in agent_usage.get("windows", []):
-            duration = WINDOW_DURATIONS.get(window.get("label"))
+            duration = window_duration(window.get("label"))
             reset_at = window.get("reset_at")
             if duration is None or not reset_at:
                 continue

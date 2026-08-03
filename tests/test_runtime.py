@@ -15,7 +15,7 @@ from conftest import CLEAN
 from conftest import board_task as _task
 from conftest import one_session as _sess
 
-from kandev_pacer import client, runtime
+from kandev_pacer import client, provider, runtime
 from kandev_pacer.config import MAX_ATTEMPTS, MAX_INTERVAL, MIN_INTERVAL, settings
 from kandev_pacer.runtime import (
     ERROR_RESTATE,
@@ -160,17 +160,24 @@ def test_a_recovered_tick_closes_out_the_outage(pacer, tmp_path, monkeypatch, ca
     assert pacer._tick_error is None
 
 
-def test_an_unreadable_usage_endpoint_names_itself(pacer, board, monkeypatch):
-    """The two halves together: read() raises, and the message says which path failed."""
-    def boom(path):
-        raise client.ReadFailed(f"GET {path}: HTTP Error 404: Not Found")
+def test_an_unreadable_quota_names_what_failed(pacer, board, monkeypatch):
+    """The two halves together: read() raises, and the message says what could not be read.
+
+    The quota comes from the provider now, not from kandev (see provider.py), so what a
+    tick names here is that read. The shape is what matters either way: no quota is not one
+    more anonymous read failure, it is the tick's whole verdict gone.
+    """
+    def boom(fresh=False, now=None):
+        raise provider.QuotaUnavailable(
+            "provider usage read failed: HTTP Error 401: Unauthorized"
+        )
 
     board.load([], {}, {})
-    monkeypatch.setattr(client, "get", boom)
+    monkeypatch.setattr(provider, "usage", boom)
     try:
         pacer.read()
     except QuotaUnreadable as error:
-        assert "/api/v1/agents/usage" in str(error)
+        assert "provider usage read failed" in str(error)
     else:
         raise AssertionError("an unreadable quota must stop the tick")
 
@@ -483,7 +490,7 @@ def test_the_loop_meets_a_reopening_it_would_otherwise_sleep_through(pacer, boar
     clock = {"t": 0.0}
     # 80% consumed against a 5-hour window resetting at t=9000: h=-0.30 now, healed at 5400.
     reset_at = datetime.fromtimestamp(9000.0, UTC).isoformat()
-    monkeypatch.setattr(client, "get", lambda path: {"agents": [{"usage": {
+    monkeypatch.setattr(provider, "usage", lambda fresh=False, now=None: {"agents": [{"usage": {
         "provider": "anthropic",
         "windows": [{"label": "5-hour", "utilization_pct": 80, "reset_at": reset_at}]}}]})
     monkeypatch.setattr(runtime.time, "time", lambda: clock["t"])
@@ -548,6 +555,55 @@ def test_an_unknown_provider_withholds_rather_than_pacing_blind(pacer, board, mo
                 {"t": _sess("s", "WAITING_FOR_INPUT")}, {}) is False
     assert actions(board) == []
     assert (written[0]["gate"], written[0]["action"]) == ("blind", "withheld")
+
+
+def test_an_expired_credential_shuts_the_gate_and_says_what_to_do(
+    pacer, board, tmp_path, monkeypatch, caplog
+):
+    """The one quota failure an operator can actually fix, end to end through the loop.
+
+    The provider's sentence has to survive the whole trip: `QuotaUnavailable` carries it,
+    `QuotaUnreadable` passes it on, and `note_tick_error` puts it under the headline about
+    the gate. So what broke and what to do about it arrive on the same line.
+    """
+    records = _errors(pacer, tmp_path, monkeypatch)
+
+    def unavailable(fresh=False, now=None):
+        raise provider.QuotaUnavailable(
+            "quota credentials expired -- re-auth Claude Code (`claude` then `/login`)"
+        )
+
+    board.load([_task("t", "ip", "Ready")], {"t": _sess("s", "WAITING_FOR_INPUT")}, {})
+    board.ws_log.clear()
+    monkeypatch.setattr(provider, "usage", unavailable)
+    with caplog.at_level(logging.WARNING, logger="kandev-pacer"):
+        with pytest.raises(QuotaUnreadable) as caught:
+            pacer.tick()
+        pacer.note_tick_error(caught.value, 1_000)
+
+    line = caplog.records[-1].message
+    assert "gate is shut" in line and "re-auth Claude Code" in line
+    assert records()[-1]["where"] == "quota"
+    assert actions(board) == []      # nothing was launched on the way to failing
+
+
+def test_the_quota_is_only_read_fresh_once_the_estimate_has_come_due(pacer, board):
+    """The cache bypass a converging pause is allowed, and no more than that.
+
+    `poll_interval` halves the wait down to a 5s floor, so a tick that always asked for a
+    fresh reading would poll the provider 60x harder than kandev ever did. Asking only
+    once the previous tick's own estimate says the gate is back costs one extra call per
+    pause instead of one per tick.
+    """
+    board.usage_pct = 99                      # shut, with an estimate ~9000s out
+    tick(pacer, board, [], {}, {})
+    assert board.usage_reads == [False]       # nothing due yet: cache is good enough
+    tick(pacer, board, [], {}, {})
+    assert board.usage_reads == [False, False]
+
+    pacer.resumes_at = 0.0                    # as a tick that reached its estimate leaves it
+    tick(pacer, board, [], {}, {})
+    assert board.usage_reads[-1] is True
 
 
 def test_a_shut_gate_still_records_the_board(pacer, board, monkeypatch):

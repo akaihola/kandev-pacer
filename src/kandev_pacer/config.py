@@ -64,6 +64,12 @@ class Settings(BaseSettings):
         str(Path.home() / ".kandev" / "data" / "kandev.db"), alias="KANDEV_DB"
     )
 
+    # Where Claude Code keeps the subscription token the quota is read with. Read, never
+    # written -- see provider.py on why the pacer refuses to refresh it.
+    credentials_path: str = Field(
+        str(Path.home() / ".claude" / ".credentials.json"), alias="PACER_CREDENTIALS"
+    )
+
     # Empty disables logging.
     log_path: str = Field(
         str(Path.home() / ".local" / "state" / "kandev-pacer" / "pacer.jsonl"),
@@ -126,8 +132,26 @@ point one knob somewhere else without re-importing half the package.
 WINDOW_DURATIONS = {
     "5-hour": 5 * 3600,
     "7-day": 7 * 24 * 3600,
-    "7-day (Fable)": 7 * 24 * 3600,
 }
+
+
+def window_duration(label):
+    """How long the window behind this label runs, or None if the label is not one of ours.
+
+    Matched on the family the label starts with, not the whole string. A per-model weekly
+    limit is labelled `7-day (<whatever the provider calls that model>)`, so an exact-match
+    table can only ever list the models someone thought of -- and a label the table misses
+    is not reported as odd, it is dropped, which quietly removes a window from the gate.
+    Dropping the *binding* window is the direction that under-withholds.
+    """
+    return next(
+        (
+            duration
+            for prefix, duration in WINDOW_DURATIONS.items()
+            if label and label.startswith(prefix)
+        ),
+        None,
+    )
 # A step carrying one of these on on_turn_complete routes the task away when a turn ends,
 # which is what makes it safe to pace: a task still sitting there has an unfinished turn.
 TRANSITION_KINDS = {"move_to_next", "move_to_previous", "move_to_step"}
