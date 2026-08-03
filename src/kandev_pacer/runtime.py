@@ -101,6 +101,32 @@ def queued_counts(task_sessions):
     return counts
 
 
+class QuotaUnreadable(RuntimeError):
+    """The usage endpoint could not be read, so this tick has no quota to reason from.
+
+    Every other read failure costs the tick some information. This one costs it the
+    verdict itself: no windows means no headroom, and the gate stays shut for as long
+    as it lasts. Named so a long outage says that, rather than reading as one more
+    anonymous tick error.
+    """
+
+
+# How long the loop stays quiet about an unchanged failure before restating it. Short
+# enough that a live tail still shows a standing outage, long enough that a tick every
+# few seconds does not write a line per tick.
+ERROR_RESTATE = 600
+
+
+@dataclass
+class TickError:
+    """The failure the loop is currently repeating, and how much of it went unsaid."""
+
+    message: str
+    since: float      # when this failure was first seen
+    told: float       # when it was last reported
+    count: int = 1    # ticks that failed this way, reported or not
+
+
 @dataclass(frozen=True)
 class Outcome:
     """What one attempt did, for the caller to log and record. No I/O of its own.
@@ -133,6 +159,7 @@ class Pacer:
         # quota says is coming, so a long pause is not polled at a short gate's rate.
         self.interval = config.interval
         self._log_failed = False
+        self._tick_error = None   # the failure being repeated, or None if the last tick worked
 
     # --- the event log ---
 
@@ -159,7 +186,12 @@ class Pacer:
         tick(), because they cost a WebSocket round trip per idle session and are only
         needed once the gate is open and there is room to launch.
         """
-        usage = client.get("/api/v1/agents/usage")
+        try:
+            usage = client.get("/api/v1/agents/usage")
+        except Exception as error:
+            # Distinct from any other read: without a quota there is no verdict, so the
+            # gate stays shut and nothing starts at all. Worth its own words.
+            raise QuotaUnreadable(str(error)) from error
         now = time.time()
         tasks = client.paced_tasks(self.board.scope)
         sessions = {task["id"]: client.sessions_of(task["id"]) for task in tasks}
@@ -443,17 +475,63 @@ class Pacer:
         log.warning(f"flagged {label(task)!r} {BLOCKED_STATE} on the board: {reason}")
         return True
 
+    def note_tick_error(self, error, now):
+        """Report a failed tick, saying an unchanged failure once instead of every tick.
+
+        A tick that keeps failing the same way -- a removed endpoint, a server that is
+        down -- used to write one warning and one JSONL record per tick for as long as
+        it lasted, which at a five-second gate is how the event log reached tens of
+        megabytes. First occurrence in full, identical repeats counted silently and
+        restated every ERROR_RESTATE seconds, so a standing outage stays visible in a
+        live tail without either log growing at tick rate.
+        """
+        message = str(error)
+        quota = isinstance(error, QuotaUnreadable)
+        headline = (
+            f"quota unreadable ({message}) -> the gate is shut: nothing will start "
+            "until this read works"
+            if quota
+            else f"tick error: {message} -> pausing this tick"
+        )
+        repeat = self._tick_error
+        if repeat is None or repeat.message != message:
+            self._tick_error = TickError(message, since=now, told=now)
+            log.warning(headline)
+            self.log_event({
+                "t": round(now, 3), "kind": "error",
+                "where": "quota" if quota else "tick", "msg": message,
+            })
+            return
+        repeat.count += 1
+        if now - repeat.told < ERROR_RESTATE:
+            return
+        minutes = (now - repeat.since) / 60
+        log.warning(f"{headline} (unchanged for {minutes:.0f}m, {repeat.count} ticks)")
+        self.log_event({
+            "t": round(now, 3), "kind": "error", "where": "quota" if quota else "tick",
+            "msg": message, "ticks": repeat.count, "since": round(repeat.since, 3),
+        })
+        repeat.told = now
+
+    def note_tick_recovered(self, now):
+        """Close out a reported outage, so the quiet stretch has a visible end."""
+        repeat, self._tick_error = self._tick_error, None
+        if repeat is None:
+            return
+        log.warning(f"recovered after {repeat.count} failed tick(s): {repeat.message}")
+        self.log_event({
+            "t": round(now, 3), "kind": "recovered", "msg": repeat.message,
+            "ticks": repeat.count, "since": round(repeat.since, 3),
+        })
+
     def run(self):
         """Tick forever. A tick that raises skips its turn rather than ending the run."""
         while True:
             try:
                 self.tick()
+                self.note_tick_recovered(time.time())
             except Exception as error:
-                log.warning(f"tick error: {error} -> pausing this tick")
-                self.log_event({
-                    "t": round(time.time(), 3), "kind": "error",
-                    "where": "tick", "msg": str(error),
-                })
+                self.note_tick_error(error, time.time())
                 # A failed tick produced no verdict, so it has no estimate to pace by --
                 # the same position as `h >= 0`, and it takes the same answer. Without
                 # this the loop would keep whatever the last good tick chose, which near

@@ -17,7 +17,13 @@ from conftest import one_session as _sess
 
 from kandev_pacer import client, runtime
 from kandev_pacer.config import MAX_ATTEMPTS, MAX_INTERVAL, MIN_INTERVAL, settings
-from kandev_pacer.runtime import Pacer, dump_order, queued_counts
+from kandev_pacer.runtime import (
+    ERROR_RESTATE,
+    Pacer,
+    QuotaUnreadable,
+    dump_order,
+    queued_counts,
+)
 from kandev_pacer.selection import Booking, fail_backoff
 from kandev_pacer.workflow import Board
 
@@ -89,6 +95,84 @@ def test_log_event_roundtrip_and_never_raises(tmp_path, monkeypatch):
 
     monkeypatch.setattr(settings, "log_path", "")            # disabled -> no-op
     logger.log_event({"kind": "tick"})
+
+
+# --- a failure that repeats every tick ---
+
+def _errors(pacer, tmp_path, monkeypatch):
+    """The pacer's error reporting, writing to a real log we can count."""
+    monkeypatch.setattr(settings, "log_path", str(tmp_path / "pacer.jsonl"))
+    return lambda: [json.loads(line) for line in
+                    (tmp_path / "pacer.jsonl").read_text().splitlines()]
+
+
+def test_a_standing_failure_is_said_once_then_restated_on_a_slow_clock(
+    pacer, tmp_path, monkeypatch, caplog
+):
+    """One line per tick is how the event log reached 30.7 MB. Say it, then be quiet."""
+    records = _errors(pacer, tmp_path, monkeypatch)
+    error = RuntimeError("GET /api/v1/agents/usage: HTTP Error 404: Not Found")
+    with caplog.at_level(logging.WARNING, logger="kandev-pacer"):
+        for tick in range(100):                              # 100 ticks, 5s apart
+            pacer.note_tick_error(error, 1_000 + tick * 5)
+    lines = [r.message for r in caplog.records]
+    # 100 ticks span 495s, short of one restate -- so exactly the first occurrence.
+    assert len(lines) == 1 and "/api/v1/agents/usage" in lines[0]
+    assert len(records()) == 1
+
+    # Past the restate window the outage is stated again, with what it cost meanwhile.
+    with caplog.at_level(logging.WARNING, logger="kandev-pacer"):
+        pacer.note_tick_error(error, 1_000 + 100 * ERROR_RESTATE)
+    restated = caplog.records[-1].message
+    assert "unchanged for" in restated and "101 ticks" in restated
+    assert records()[-1]["ticks"] == 101
+
+
+def test_a_different_failure_is_never_suppressed(pacer, tmp_path, monkeypatch, caplog):
+    """Suppression is per-message: a new symptom is news even inside the quiet window."""
+    records = _errors(pacer, tmp_path, monkeypatch)
+    with caplog.at_level(logging.WARNING, logger="kandev-pacer"):
+        pacer.note_tick_error(RuntimeError("GET /api/v1/workflows: HTTP Error 500"), 1_000)
+        pacer.note_tick_error(RuntimeError("GET /api/v1/tasks/t1: HTTP Error 404"), 1_005)
+    assert len(records()) == 2
+
+
+def test_an_unreadable_quota_says_the_gate_is_shut(pacer, tmp_path, monkeypatch, caplog):
+    """Not an anonymous tick error: no quota means nothing starts at all."""
+    records = _errors(pacer, tmp_path, monkeypatch)
+    with caplog.at_level(logging.WARNING, logger="kandev-pacer"):
+        pacer.note_tick_error(QuotaUnreadable("GET /api/v1/agents/usage: HTTP 404"), 1_000)
+    line = caplog.records[-1].message
+    assert "gate is shut" in line and "/api/v1/agents/usage" in line
+    assert records()[-1]["where"] == "quota"
+
+
+def test_a_recovered_tick_closes_out_the_outage(pacer, tmp_path, monkeypatch, caplog):
+    """The quiet stretch needs a visible end, or a live tail cannot tell it ended."""
+    records = _errors(pacer, tmp_path, monkeypatch)
+    with caplog.at_level(logging.WARNING, logger="kandev-pacer"):
+        pacer.note_tick_error(RuntimeError("boom"), 1_000)
+        pacer.note_tick_error(RuntimeError("boom"), 1_005)
+        pacer.note_tick_recovered(1_010)
+        pacer.note_tick_recovered(1_015)                     # nothing to close out
+    assert [r["kind"] for r in records()] == ["error", "recovered"]
+    assert records()[-1]["ticks"] == 2
+    assert pacer._tick_error is None
+
+
+def test_an_unreadable_usage_endpoint_names_itself(pacer, board, monkeypatch):
+    """The two halves together: read() raises, and the message says which path failed."""
+    def boom(path):
+        raise client.ReadFailed(f"GET {path}: HTTP Error 404: Not Found")
+
+    board.load([], {}, {})
+    monkeypatch.setattr(client, "get", boom)
+    try:
+        pacer.read()
+    except QuotaUnreadable as error:
+        assert "/api/v1/agents/usage" in str(error)
+    else:
+        raise AssertionError("an unreadable quota must stop the tick")
 
 
 # --- tick(): queued-prompt release ---

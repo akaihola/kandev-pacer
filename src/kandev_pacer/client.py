@@ -12,15 +12,28 @@ from .config import WS_TIMEOUT, settings
 log = logging.getLogger("kandev-pacer")
 
 
+class ReadFailed(RuntimeError):
+    """A GET that failed, named by the path it failed on.
+
+    urllib's own message says "HTTP Error 404: Not Found" and nothing else -- the URL
+    is on the exception object but never reaches the text, so a 404 from any of the
+    seven endpoints the pacer reads looks identical in the log. A RuntimeError so the
+    `except Exception` handlers that already guard these calls keep catching it.
+    """
+
+
 def get(path):
     """Read one `/api/v1` endpoint. GET is the only HTTP verb the pacer uses.
 
     Everything that changes kandev -- launching, draining, flagging -- goes over the
     WebSocket instead, so there is no body to send and no other method to pick.
     """
-    with urllib.request.urlopen(settings.url + path, timeout=15) as response:
-        raw = response.read()
-        return json.loads(raw) if raw else None
+    try:
+        with urllib.request.urlopen(settings.url + path, timeout=15) as response:
+            raw = response.read()
+            return json.loads(raw) if raw else None
+    except Exception as error:
+        raise ReadFailed(f"GET {path}: {error}") from error
 
 
 def workflow_entries():
