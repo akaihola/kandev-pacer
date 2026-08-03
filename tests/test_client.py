@@ -3,6 +3,9 @@
 Covers what the pure tests cannot -- request/response matching past unrelated pushes, the
 Origin header /ws insists on, and error frames. No real kandev, no agent turn, no quota.
 """
+import urllib.error
+from email.message import Message
+
 import websocket
 
 from kandev_pacer import client
@@ -75,6 +78,23 @@ def test_get_reads_an_empty_body_as_nothing(monkeypatch):
 
     monkeypatch.setattr(client.urllib.request, "urlopen", lambda url, timeout=None: _Empty())
     assert client.get("/api/v1/anything") is None
+
+
+def test_a_failed_get_names_the_path_it_failed_on(monkeypatch):
+    """A bare urllib 404 says only "HTTP Error 404: Not Found" -- which of the seven
+    endpoints answered it is on the exception object and never in the message."""
+
+    def fake_urlopen(url, timeout=None):
+        raise urllib.error.HTTPError(url, 404, "Not Found", Message(), None)
+
+    monkeypatch.setattr(client.urllib.request, "urlopen", fake_urlopen)
+    try:
+        client.get("/api/v1/agents/usage")
+    except RuntimeError as error:
+        assert "/api/v1/agents/usage" in str(error)
+        assert "404" in str(error)
+    else:
+        raise AssertionError("a 404 must raise")
 
 
 # --- a request whose answer never comes ---
