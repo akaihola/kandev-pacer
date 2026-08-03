@@ -51,6 +51,12 @@ class Settings(BaseSettings):
     fail_backoff_override: int | None = Field(None, alias="PACER_FAIL_BACKOFF", ge=0)
     # Consecutive failures before the card is flagged BLOCKED. 0 keeps the pacer read-only.
     block_after: int = Field(2, alias="PACER_BLOCK_AFTER", ge=0)
+    # Consecutive launches whose turn left the worktree untouched before the pacer gives
+    # up on the card and flags it BLOCKED. This is the only stop on a task that is simply
+    # *finished*: nothing on the board distinguishes done from mid-flight, so without it a
+    # completed task is relaunched every tick until its context window fills. 0 disables
+    # the check and restores that behaviour. See progress.py for what "untouched" reads.
+    stall_after: int = Field(5, alias="PACER_STALL_AFTER", ge=0)
 
     # The database make-paced edits. kandev has no API for stage_type, so enrolling a
     # workflow is a direct write -- see make_paced.py.

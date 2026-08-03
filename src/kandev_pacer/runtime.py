@@ -17,7 +17,7 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 
-from . import client
+from . import client, progress
 from .config import (
     BLOCKED_STATE,
     DRAINABLE_STATES,
@@ -43,11 +43,15 @@ from .selection import (
     fail_backoff,
     is_launchable,
     launch_target,
+    note_stall,
     ordered_tasks,
     pick_intent,
     prune_booked,
     prune_failures,
+    prune_stalls,
     select_action,
+    stalled_keys,
+    stalled_out,
     task_agent_profile,
     uses_manual_order,
 )
@@ -124,6 +128,7 @@ class Pacer:
         self.config = config
         self.booked = {}     # key -> when the turn was spent
         self.failed = {}     # key -> {at, attempts, flagged}
+        self.stalled = {}    # key -> {fingerprint, count, flagged}
         # Seconds run() waits after the current tick. Each tick sets it from what the
         # quota says is coming, so a long pause is not polled at a short gate's rate.
         self.interval = config.interval
@@ -172,8 +177,12 @@ class Pacer:
     # --- 2. decide (the pure parts live in quota.py and workflow.py) ---
 
     def skip_keys(self, now):
-        """Actions this tick must leave alone: already paid for, or backing off."""
-        return set(self.booked) | backed_off(self.failed, now)
+        """Actions this tick must leave alone: paid for, backing off, or given up on."""
+        return (
+            set(self.booked)
+            | backed_off(self.failed, now)
+            | stalled_keys(self.stalled, self.config.stall_after)
+        )
 
     def next_action(self, snapshot, queued):
         """The one Candidate to spend this turn on, or None."""
@@ -192,6 +201,7 @@ class Pacer:
             snapshot.now, self.config.booking_ttl,
         )
         self.failed = prune_failures(self.failed, snapshot.tasks, snapshot.sessions)
+        self.stalled = prune_stalls(self.stalled, snapshot.tasks, snapshot.sessions)
         records = window_records(snapshot.windows, snapshot.now, self.config.alpha)
         launchable = sum(
             1
@@ -313,6 +323,14 @@ class Pacer:
 
     def launch(self, task, key, sessions, snapshot):
         """Start a turn: in place at a work step, or admitting the task from the queue."""
+        # Before anything is spent: has the last run of launches achieved anything? The
+        # fingerprint read here is what the *previous* turn left behind, so comparing it
+        # against the one taken at the previous launch is what says whether that turn did
+        # any work. A finished task answers "no" every time, forever, and nothing on the
+        # board would ever say so.
+        self.stalled[key] = note_stall(self.stalled, key, progress.fingerprint(sessions))
+        if stalled_out(self.stalled, key, self.config.stall_after):
+            return self.give_up(key, task)
         workflow = self.board.name_of(task.get("workflow_id"))
         target = launch_target(task, self.board)
         if target is None:
@@ -346,6 +364,31 @@ class Pacer:
             f"target={self.board.name_of(target)!r}",
             {"task": task["id"], "intent": intent, "session": session_id, "target": target},
         )
+
+    def give_up(self, key, task):
+        """Stop launching a card whose turns have stopped changing anything, and say so.
+
+        Deliberately not a failure. Nothing refused this launch, so the backoff machinery
+        would keep retrying it for as long as the board stands still -- which, for a task
+        that is simply finished, is forever. This is the pacer concluding the card needs
+        a person, and BLOCKED on the board is how it says so.
+
+        Returning None puts it on `attempt`'s refusal path: no quota was spent, so the
+        tick still owes the board a turn and moves on to the next candidate.
+        """
+        record = self.stalled[key]
+        turns = record["count"]
+        if not record["flagged"]:
+            record["flagged"] = self.flag_blocked(
+                task, f"{turns} consecutive turns left the workspace untouched"
+            )
+        log.warning(f"giving up on {label(task)!r}: {turns} turns changed nothing -- "
+                    "flagged for a person, and left alone until the card moves")
+        self.log_event({
+            "t": round(time.time(), 3), "kind": "stalled", "task": task["id"],
+            "turns": turns, "step": key.step, "session": key.session,
+        })
+        return None
 
     def note_uncertain(self, key, task, reason):
         """Reserve the slot when kandev may have acted but its answer never arrived.

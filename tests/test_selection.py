@@ -8,6 +8,7 @@ from conftest import sess as _sess
 from conftest import task as _task
 
 from kandev_pacer.selection import (
+    ActionKey,
     Booking,
     action_key,
     backed_off,
@@ -19,15 +20,20 @@ from kandev_pacer.selection import (
     is_launchable,
     launch_target,
     newest_session,
+    note_stall,
     ordered_tasks,
     pick_intent,
     priority_rank,
     prune_booked,
     prune_failures,
+    prune_stalls,
     select_action,
+    stalled_keys,
+    stalled_out,
     task_agent_profile,
     task_order_key,
     visible_task_order,
+    workspace_moved,
 )
 from kandev_pacer.workflow import Board, step_ranks
 
@@ -546,3 +552,82 @@ def test_task_agent_profile_reads_launch_metadata():
     assert task_agent_profile({"metadata": {}}) is None
     assert task_agent_profile({"metadata": {"agent_profile_id": ""}}) is None
     assert task_agent_profile({"metadata": {"agent_profile_id": 7}}) is None
+
+
+# --- stalls: turns that changed nothing ---
+
+KEY = ActionKey("t1", "ip", "s1")
+OTHER = ActionKey("t2", "ip", "s2")
+TREE = {"/w": ("abc123", False)}
+MOVED = {"/w": ("def456", False)}
+
+
+def test_the_first_launch_of_an_action_is_never_a_stall():
+    """There is no previous turn to have wasted, so nothing has stood still yet."""
+    assert note_stall({}, KEY, TREE) == {"fingerprint": TREE, "count": 0, "flagged": False}
+
+
+def test_an_unchanged_tree_accumulates():
+    """The observed runaway, in miniature: the same tree, launch after launch."""
+    stalls, counts = {}, []
+    for _ in range(4):
+        stalls[KEY] = note_stall(stalls, KEY, TREE)
+        counts.append(stalls[KEY]["count"])
+    assert counts == [0, 1, 2, 3]
+
+
+def test_work_resets_the_count():
+    """One real commit and the card is a working card again, not a nearly-blocked one."""
+    stalls = {KEY: {"fingerprint": TREE, "count": 3, "flagged": False}}
+    assert note_stall(stalls, KEY, MOVED)["count"] == 0
+
+
+def test_an_unreadable_tree_is_never_evidence_of_standing_still():
+    """A git hiccup must not stop a live task; `None` never matches, not even itself."""
+    assert workspace_moved(None, TREE) is True
+    assert workspace_moved(TREE, None) is True
+    assert workspace_moved(None, None) is True, \
+        "two unreadable reads in a row say nothing about whether work happened"
+    assert note_stall({KEY: {"fingerprint": None, "count": 9}}, KEY, None)["count"] == 0
+
+
+def test_a_task_with_no_worktree_still_stalls():
+    """`{}` is a real reading -- otherwise a repo-less task loops forever, which is the bug."""
+    assert workspace_moved({}, {}) is False
+    assert note_stall({KEY: {"fingerprint": {}, "count": 1}}, KEY, {})["count"] == 2
+
+
+def test_stalled_out_reads_the_limit():
+    stalls = {KEY: {"fingerprint": TREE, "count": 4, "flagged": False}}
+    assert stalled_out(stalls, KEY, 5) is False
+    assert stalled_out(stalls, KEY, 4) is True
+    assert stalled_out(stalls, OTHER, 1) is False, "an action with no record has not stalled"
+
+
+def test_a_zero_limit_disables_the_check():
+    """The escape hatch has to be real: 0 restores launching a finished task forever."""
+    stalls = {KEY: {"fingerprint": TREE, "count": 999, "flagged": False}}
+    assert stalled_out(stalls, KEY, 0) is False
+    assert stalled_keys(stalls, 0) == set()
+
+
+def test_stalled_keys_names_only_what_is_over_the_limit():
+    stalls = {
+        KEY: {"fingerprint": TREE, "count": 5, "flagged": True},
+        OTHER: {"fingerprint": TREE, "count": 1, "flagged": False},
+    }
+    assert stalled_keys(stalls, 5) == {KEY}
+
+
+def test_moving_the_card_releases_it():
+    """The whole recovery path: a person moves the card, the key changes, the stall is gone."""
+    stalls = {KEY: {"fingerprint": TREE, "count": 9, "flagged": True}}
+    moved = [{"id": "t1", "workflow_step_id": "rv"}]
+    assert prune_stalls(stalls, moved, {"t1": [_sess("s1", "WAITING_FOR_INPUT")]}) == {}
+
+
+def test_a_new_session_releases_it_too():
+    """A fresh session is a fresh context window -- the thing the runaway ran out of."""
+    stalls = {KEY: {"fingerprint": TREE, "count": 9, "flagged": True}}
+    same_step = [{"id": "t1", "workflow_step_id": "ip"}]
+    assert prune_stalls(stalls, same_step, {"t1": [_sess("s2", "WAITING_FOR_INPUT", "2")]}) == {}
