@@ -51,12 +51,29 @@ def newest_session(sessions):
     return max(sessions, key=lambda session: session.get("started_at", "")) if sessions else None
 
 
+def is_wip_admitted(task):
+    """Whether kandev has admitted this card into its step, rather than queueing it there.
+
+    Absent -- or null -- means admitted, deliberately: the field arrived in kandev 0.84,
+    and an older build, or any endpoint that leaves it out, must not read as a board where
+    nothing is admitted, which would stall the pacer completely. Only an explicit false
+    holds a card back.
+    """
+    admitted = task.get("wip_admitted")
+    return admitted is None or bool(admitted)
+
+
 def is_launchable(task, sessions, board, skip):
     """Whether starting a turn on this task now is both allowed and meaningful."""
     step = task.get("workflow_step_id", "")
     newest = newest_session(sessions)
     session_id = newest["id"] if newest else None
     if ActionKey(task["id"], step, session_id) in skip:
+        return False
+    # A card kandev queued because the step's WIP limit was full sits on that step with
+    # no session -- indistinguishable, from everything below, from a card waiting to be
+    # launched. Launching it would defeat the limit kandev is holding it behind.
+    if not is_wip_admitted(task):
         return False
     state = newest["state"] if newest else None
     # A sessionless task counts on a work step too, not only in the queue. kandev moves a

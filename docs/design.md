@@ -131,6 +131,20 @@ card is skipped on every subsequent tick. That is the same silent-and-total fail
 `CREATED` case above, and it is how four subtasks of a `Heartbeat` task sat on the board for
 ~7.75h with the gate open, no turns running, and `launchable=0` logged the whole time.
 
+**A card kandev queued behind a WIP limit is not launchable, however much it looks it.**
+Kandev 0.84 gave steps a `wip_limit`: when a limited step is full the task is still created and
+still shown *on that step*, with `wip_admitted=false` and `queued_for_step_id` naming where it
+is waiting. It has no session, so every other rule above reads it as a card waiting to be
+launched — and launching it would defeat the limit kandev is holding it behind, on top of
+burning a refusal through the failure/backoff machinery. `wip_admitted` rides along in the task
+list every tick already fetches, so the guard is free. **Absent means admitted**: the field only
+exists from 0.84, and reading a missing key as unadmitted would make every task on an older
+build look queued and stall the pacer completely — a far worse failure than the one guarded.
+`--dump-order` marks such a card, for the same reason `report_out_of_scope()` exists: one that
+will never launch otherwise looks identical in the order to one that will. The startup lint
+warns about a `wip_limit` on a paced work step, because that is also where kandev's
+`deferred_launch` metadata can auto-start a queued task on promotion — a turn the gate never saw.
+
 **A request that is sent and never answered is not a refusal.** A refusal means kandev did
 nothing and the slot is free; a lost answer means it may have started the turn. Spending the
 slot again would run the same turn twice, so an unconfirmed request reserves its slot
