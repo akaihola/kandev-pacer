@@ -194,6 +194,15 @@ spending, so a stale reading is stale-*low* on consumption and the hook under-wi
 `fetchedAtMs` bounds it; treat a reading older than a few minutes as a reason to fall back
 or fail closed.
 
+**Measured, and worse than "a few minutes" suggests.** Sampled again on 2026-08-04, while
+restoring the pacer's quota reads: `fetchedAtMs` was **2396 minutes — about 40 hours —
+old**, and its `seven_day.utilization` of 79 belonged to a window that had since rolled.
+That is stale-low by an enormous margin, in the direction that under-withholds. The field is
+refreshed when something in Claude Code happens to fetch usage, not on any schedule, so its
+age is unbounded in practice rather than merely uncertain. **Not a fallback**: source (c) is
+what the pacer now reads (`src/kandev_pacer/provider.py`), cached for five minutes, and this
+one is not worth an age check because there is no age at which it is the better answer.
+
 **b) The status line** — the *documented* path. A status line script receives
 `rate_limits.five_hour.{used_percentage,resets_at}` and the same for `seven_day`, refreshed
 every render at no token cost. Hooks do not get this; status lines do. So the sidecar
@@ -445,8 +454,9 @@ certainly cannot reach a private/tailnet address, so the web gap of §6 remains.
   echoed. Add a `PreToolUse` gate later for subagent spend, accepting the mid-turn cost.
 - **`http` hook against a service** holding `quota.py`, leases and the log; `command` hook
   instead if failing closed on service outage matters more.
-- **Headroom from `cachedUsageUtilization`** with a `fetchedAtMs` age check, falling back to
-  a status-line-written state file, then the OAuth endpoint.
+- **Headroom from the OAuth endpoint** — source (c), which the pacer already reads through
+  `provider.py` and could share outright; a status-line-written state file as the fallback.
+  *Not* `cachedUsageUtilization`: measured at 40 hours stale (see §3).
 - **Override by keyword**, detected on `UserPromptSubmit`, persisted per `session_id` and
   cleared on `Stop`. It cannot be stripped from the prompt — choose one the model ignores.
 - **Remove the shadowed 2.1.37 install first**, or the same config will behave two ways.

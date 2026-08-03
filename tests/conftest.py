@@ -4,6 +4,9 @@ The pacer talks to kandev two ways, and this fakes each at its own seam:
 
 - REST reads go through `client.get(path)`, so `FakeBoard.get`
   replaces that one function and answers from the board held here.
+- Quota no longer comes from kandev at all (see provider.py), so it is faked at its own
+  seam: `provider.usage`, which the board still owns because the tests that shut the gate
+  do it by moving a number on the board.
 - Actions go over a WebSocket, and the framing is the pacer's own code (matching a
   reply to its request id past unrelated pushes, spotting error frames). So the fake
   goes in one layer lower -- at `websocket.create_connection` -- and speaks real
@@ -16,7 +19,7 @@ from collections import deque
 import pytest
 import websocket
 
-from kandev_pacer import client
+from kandev_pacer import client, provider
 from kandev_pacer.config import settings
 
 # 10% consumed against a half-elapsed window -> headroom positive, gate open.
@@ -136,20 +139,25 @@ class FakeBoard:
         # it shut moves these instead of reaching into the pacer.
         self.usage_pct = USAGE_PCT
         self.provider = "anthropic"
+        self.usage_reads = []  # the `fresh` flag of every quota read, for counting them
         self.tasks_elsewhere = []   # tasks belonging to workflows outside the scope
 
     def load(self, tasks, sessions, queues):
         self.tasks, self.sessions, self.queues = tasks, dict(sessions), dict(queues)
 
+    # --- quota ---
+
+    def usage(self, fresh=False, now=None):
+        # A reset 2.5h out on a 5h window: half elapsed, 10% consumed.
+        self.usage_reads.append(fresh)
+        return {"agents": [{"usage": {"provider": self.provider, "windows": [
+            {"label": "5-hour", "utilization_pct": self.usage_pct,
+             "reset_at": _iso_in(9000)}]}}]}
+
     # --- REST ---
 
     def get(self, path):
         self.paths.append(path)
-        if path.endswith("/agents/usage"):
-            # A reset 2.5h out on a 5h window: half elapsed, 10% consumed.
-            return {"agents": [{"usage": {"provider": self.provider, "windows": [
-                {"label": "5-hour", "utilization_pct": self.usage_pct,
-                 "reset_at": _iso_in(9000)}]}}]}
         if path == "/api/v1/workflows":
             return {"workflows": [{"id": "wf", "name": "Fake Paced"}]}
         if path.endswith("/workflow/steps"):
@@ -234,5 +242,6 @@ def board(monkeypatch):
     """A fake kandev, with `client`'s two seams pointed at it."""
     fake = FakeBoard()
     monkeypatch.setattr(client, "get", fake.get)
+    monkeypatch.setattr(provider, "usage", fake.usage)
     monkeypatch.setattr(websocket, "create_connection", fake.connect)
     return fake

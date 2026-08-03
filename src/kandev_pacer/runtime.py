@@ -17,7 +17,7 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 
-from . import client, progress
+from . import client, progress, provider
 from .config import (
     BLOCKED_STATE,
     DRAINABLE_STATES,
@@ -159,6 +159,9 @@ class Pacer:
         # Seconds run() waits after the current tick. Each tick sets it from what the
         # quota says is coming, so a long pause is not polled at a short gate's rate.
         self.interval = config.interval
+        # The previous tick's estimate of when the gate reopens. Read only to decide
+        # whether this tick's quota reading may come from cache; see usage().
+        self.resumes_at: float | None = None
         self._log_failed = False
         self._tick_error = None   # the failure being repeated, or None if the last tick worked
 
@@ -180,6 +183,27 @@ class Pacer:
 
     # --- 1. gather ---
 
+    def usage(self, now):
+        """The quota reading this tick decides on.
+
+        Cached for five minutes, with one exception: once the previous tick's own estimate
+        says the gate is due back, this tick pays for a fresh read. That is what keeps a
+        converging pause -- whose interval halves down to `MIN_INTERVAL` -- from turning
+        into a five-second poll of the provider, while still noticing the reopening
+        promptly. Cost is one extra call per pause rather than one per tick.
+
+        A quota that cannot be read is `QuotaUnreadable`, same as when kandev answered for
+        it: no windows means no verdict, so the tick stops and the gate stays shut. What
+        changes is the message it carries -- the provider says which of an expired login, a
+        missing credentials file or a failed request it was, so the headline about the gate
+        arrives with something to do about it.
+        """
+        due = self.resumes_at is not None and now >= self.resumes_at
+        try:
+            return provider.usage(fresh=due, now=now)
+        except provider.QuotaUnavailable as error:
+            raise QuotaUnreadable(str(error)) from error
+
     def read(self):
         """Everything a tick needs before it can decide anything.
 
@@ -187,13 +211,8 @@ class Pacer:
         tick(), because they cost a WebSocket round trip per idle session and are only
         needed once the gate is open and there is room to launch.
         """
-        try:
-            usage = client.get("/api/v1/agents/usage")
-        except Exception as error:
-            # Distinct from any other read: without a quota there is no verdict, so the
-            # gate stays shut and nothing starts at all. Worth its own words.
-            raise QuotaUnreadable(str(error)) from error
         now = time.time()
+        usage = self.usage(now)
         tasks = client.paced_tasks(self.board.scope)
         sessions = {task["id"]: client.sessions_of(task["id"]) for task in tasks}
         running = sum(
@@ -248,6 +267,7 @@ class Pacer:
             snapshot.usage, snapshot.windows, snapshot.now, self.config
         )
         self.interval = poll_interval(verdict, snapshot.now, self.config)
+        self.resumes_at = verdict.resumes_at
 
         def report(gate, outcome, extra="", warn=False):
             """The one way a tick ends: say what happened, record it, hand back the gate.

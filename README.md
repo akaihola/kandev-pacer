@@ -89,6 +89,7 @@ pacer with the variable's name in the message rather than failing hours later.
 | `PACER_LAUNCH_LATENCY` | `90` | how long kandev may take to make an accepted launch visible. Bookings last three ticks at `PACER_INTERVAL` plus this |
 | `PACER_FAIL_BACKOFF` | 3 × `PACER_INTERVAL` | seconds before a refused launch is retried; doubles per consecutive failure, up to 8× |
 | `PACER_BLOCK_AFTER` | `2` | consecutive failures before the card is flagged `BLOCKED`. `0` keeps the pacer read-only |
+| `PACER_CREDENTIALS` | `~/.claude/.credentials.json` | the subscription token the quota is read with. **Read, never written** — Claude Code owns this file, and a second refresher racing it would rotate the token out from under the user's login |
 | `PACER_LOG` | `~/.local/state/kandev-pacer/pacer.jsonl` | JSONL event log. Empty disables it |
 | `KANDEV_DB` | `~/.kandev/data/kandev.db` | the database `make-paced` edits |
 
@@ -154,6 +155,12 @@ kandev clears the flag itself the next time anything runs the task.
 **`provider ... not in usage ... check PACER_PROVIDER`.** The name matches no provider in the
 usage payload. The pacer withholds rather than pacing blind with the backstop dead.
 
+**`quota credentials expired -- re-auth Claude Code`.** The access token in
+`PACER_CREDENTIALS` has run out and the pacer will not refresh it: Claude Code refreshes the
+same file, and two refreshers rotating one token is how a login gets broken. Run `claude` and
+`/login`; the next tick picks the new token up. Nothing is lost by withholding meanwhile —
+the turns the pacer releases run against that same credential.
+
 **The gate never closes even though work is running.** Check `PACER_BACKSTOP` and that the
 usage payload actually reports windows; a genuinely fresh account has none yet, and paces
 normally.
@@ -167,6 +174,7 @@ src/kandev_pacer/
   workflow.py   which workflows are paceable, and the startup lint (pure)
   selection.py  which task goes next, whether we may, what we already spent (pure)
   client.py     every kandev HTTP and WebSocket call
+  provider.py   the quota, read from Anthropic directly — kandev stopped answering for it
   runtime.py    the Pacer object, the loop, the CLI
   make_paced.py the enrollment tool (`make-paced`)
 tests/          one file per module, over conftest.py's fake kandev and builders

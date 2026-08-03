@@ -79,6 +79,19 @@ def test_parse_windows_provider_filter(monkeypatch):
     monkeypatch.setattr(settings, "provider", "nobody")
     assert parse_windows(USAGE) == []
 
+def test_parse_windows_keeps_a_scoped_window_whatever_the_model_is_called():
+    """Labels are matched on the family, so no model name has to be known in advance.
+
+    The provider labels a per-model weekly limit with whatever it calls that model. Under
+    exact matching, a name not in the table was dropped in silence -- and if the dropped
+    window was the binding one, the gate stopped seeing the limit about to bite.
+    """
+    u = {"agents": [{"usage": {"provider": "anthropic", "windows": [
+        {"label": "7-day (Model Nobody Listed)", "utilization_pct": 90,
+         "reset_at": "2026-07-27T12:59:59.5Z"}]}}]}
+    assert [w["duration_s"] for w in parse_windows(u)] == [604800]
+
+
 def test_parse_windows_skips_unknown_label():
     u = {"agents": [{"usage": {"provider": "anthropic", "windows": [
         {"label": "1-minute", "utilization_pct": 5, "reset_at": "2026-07-23T19:39:59Z"}]}}]}

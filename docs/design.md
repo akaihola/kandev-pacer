@@ -397,9 +397,16 @@ launches until the turn is observed to start.
   flag clears itself. The pacer never writes `title` or `description`: the description **is**
   the agent's prompt (`task_operations.go:409`), so a note left there would end up in the
   agent's context.
-- **Usage** `GET /api/v1/agents/usage` →
-  `agents[].usage{provider, windows[]{label, utilization_pct, reset_at}}`; `utilization_pct`
-  is *consumed*; labels `"5-hour"`, `"7-day"`, `"7-day (Fable)"`.
+- **Usage** does not come from kandev. `GET /api/v1/agents/usage` was removed in kandev
+  0.83.0 (upstream a7005e5d2, reverting #1697), which moved account-wide usage out of core
+  into a plugin; on 0.84.1 the path 404s. The pacer reads
+  `GET https://api.anthropic.com/api/oauth/usage` directly instead — see `provider.py`,
+  which is a read-only port of the client kandev still has — and rebuilds the envelope that
+  endpoint used to answer: `agents[].usage{provider, windows[]{label, utilization_pct,
+  reset_at}}`, `utilization_pct` *consumed*, labels `"5-hour"`, `"7-day"` and
+  `"7-day (<model>)"` for a per-model weekly limit. Labels are matched on that prefix, not
+  in full: the model name is whatever the provider calls it that month, and an unmatched
+  label is a window dropped from the gate rather than an error anyone sees.
 - **Tasks** `GET /api/v1/workflows/:id/tasks` → `{tasks:[…]}`, each with `workflow_step_id`,
   and — via `dto.FromTask` — the `position`, `priority` and `created_at` the launch ordering
   above needs. `position` is the board drag order **scoped to a workflow step**, `priority` is
