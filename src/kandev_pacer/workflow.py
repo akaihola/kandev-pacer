@@ -140,8 +140,16 @@ def _has_on_enter(step, kind):
     )
 
 
-def _bypass_warnings(step, name):
+def _bypass_warnings(step, name, is_paced):
     """Ways a step can start a turn behind the pacer's back, whatever else it is."""
+    if is_paced and step.get("wip_limit"):
+        # kandev queues the overflow rather than refusing it, and a queued card created
+        # with a launch request carries metadata.deferred_launch -- kandev starts it
+        # itself the moment a slot frees, which is a turn the pacer never gated.
+        yield (
+            f"work step {name!r} has wip_limit={step['wip_limit']} -- kandev queues "
+            "overflow there and may auto-start it on promotion (deferred_launch)"
+        )
     if _has_on_enter(step, "auto_start_agent"):
         yield f"step {name!r} still has on_enter:auto_start_agent (bypasses the gate)"
     if step.get("agent_profile_id") and (step.get("prompt") or "").strip():
@@ -209,8 +217,9 @@ def lint_workflow(steps):
     warnings = []
     for step in steps:
         name = step.get("name", "?")
-        warnings.extend(_bypass_warnings(step, name))
-        classification = _classification_warning(step, name, step["id"] in works)
+        is_paced = step["id"] in works
+        warnings.extend(_bypass_warnings(step, name, is_paced))
+        classification = _classification_warning(step, name, is_paced)
         if classification:
             warnings.append(classification)
     warnings.extend(_shape_warnings(steps, works))

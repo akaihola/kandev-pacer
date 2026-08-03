@@ -127,6 +127,13 @@ def test_lint_workflow():
         _step("ip", "In Progress", otc=["move_to_step"], stage="work", pos=1),
     ]
     assert any("parked queue will execute" in w for w in lint_workflow(executing_queue))
+    # A WIP limit on a paced work step is the configuration in which kandev queues the
+    # overflow itself and may auto-start it on promotion -- a turn the gate never saw.
+    limited = [{**_step("ip", "In Progress", otc=["move_to_step"], stage="work"), "wip_limit": 2}]
+    assert any("wip_limit=2" in w for w in lint_workflow(limited))
+    # An unlimited (0) work step is the normal shape and says nothing.
+    assert not any("wip_limit" in w for w in lint_workflow(
+        [{**_step("ip", "In Progress", otc=["move_to_step"], stage="work"), "wip_limit": 0}]))
     # clean workflow -> no warnings.
     assert lint_workflow(CLEAN) == []
     assert lint_workflow(FEATURE_DEV) == []

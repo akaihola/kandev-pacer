@@ -168,6 +168,32 @@ def test_is_launchable_queue_admission():
     assert is_launchable(at_bk, [_sess("s", "WAITING_FOR_INPUT")], BOARD, booked)  # re-queued
     assert not is_launchable(at_bk, [_sess("s", "RUNNING")], BOARD, booked)
 
+def test_is_launchable_wip_queued():
+    """A card kandev queued behind a full WIP limit is not the pacer's to start.
+
+    kandev creates it on the destination step with no session, so it reads exactly like a
+    card waiting to be launched -- launching it would defeat the limit kandev is holding it
+    behind, and kandev refuses it anyway, burning the failure/backoff machinery.
+    """
+    booked = set()
+    queued = {"id": "t", "workflow_step_id": "ip", "wip_admitted": False,
+              "queued_for_step_id": "ip"}
+    assert not is_launchable(queued, [], BOARD, booked)
+    assert not is_launchable(queued, [_sess("s", "WAITING_FOR_INPUT")], BOARD, booked)
+    assert not is_launchable({**queued, "workflow_step_id": "bk"}, [], BOARD, booked)
+    # Promotion admits the card, and nothing else about it changes.
+    assert is_launchable({**queued, "wip_admitted": True}, [], BOARD, booked)
+
+def test_is_launchable_without_wip_field():
+    """The field arrived in kandev 0.84: absent (or null) has to mean admitted.
+
+    Reading a missing key as unadmitted would make every task on an older build look
+    queued and stall the pacer completely -- a far worse failure than the one guarded.
+    """
+    assert is_launchable({"id": "t", "workflow_step_id": "ip"}, [], BOARD, set())
+    assert is_launchable({"id": "t", "workflow_step_id": "ip", "wip_admitted": None},
+                         [], BOARD, set())
+
 def test_is_launchable_created_session():
     """Kandev prepares a session at task creation, so a never-run task arrives CREATED.
 

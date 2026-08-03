@@ -42,6 +42,7 @@ from .selection import (
     backed_off,
     fail_backoff,
     is_launchable,
+    is_wip_admitted,
     launch_target,
     note_stall,
     ordered_tasks,
@@ -561,7 +562,11 @@ def dump_order(pacer):
     tasks = client.paced_tasks(board.scope)
     ordered = ordered_tasks(tasks, sidebar, board.step_ranks)
     for index, task in enumerate(ordered, start=1):
-        print(f"{index:3}. {label(task)}")
+        # Same complaint as report_out_of_scope(): a card that will never launch looks
+        # identical in the order to one that will. A WIP-queued card sits on its step,
+        # in order, and is skipped every tick.
+        queued = "" if is_wip_admitted(task) else "  (queued: step WIP limit full)"
+        print(f"{index:3}. {label(task)}{queued}")
     if board.skipped:
         report_out_of_scope(board, {task["id"] for task in tasks}, placed)
 
