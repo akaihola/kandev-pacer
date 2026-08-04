@@ -439,6 +439,13 @@ on the Host `Task`, and no step routing on the Host `WorkflowStep`. A plugin the
 start a turn, cannot see the quota it would be pacing against, and cannot tell which step a task
 is parked on — the three facts the worker side of a lease needs.
 
+*Re-verified against kandev v0.84.1 (2026-08-04):* the conclusion holds, one of its premises
+does not. The third write RPC is `SendMessage`, not `CreateComment`, and it does start or
+resume a session — so "cannot start a turn" is too strong. What it cannot do is start *this*
+turn: it delivers the caller's own text and carries no `workflow_step_id`, so a plugin still
+cannot launch a work step's configured prompt at a chosen step. The other two gaps are
+unchanged, and the worker side of a lease still needs an external adapter.
+
 The quota gap has since been closed *outside* the plugin contract rather than inside it: the
 pacer reads Anthropic directly, from a credential file on the host. A plugin is a JavaScript
 bundle plus a gRPC connection, with no route to that file, so the Host API's lack of a usage
@@ -678,9 +685,13 @@ health-kandev.internal
   `messages`, `workspaces`, `workflows`, `agent_profiles`, `repositories`, gated only by a
   capability the plugin declares about itself. A plugin is therefore inside the instance's trust
   domain, not a lesser one.
-- **Can plugins create, reorder, start, pause, or transition tasks?** No. `api_write` parses but
+- **Can plugins create, reorder, start, pause, or transition tasks?** ~~No. `api_write` parses but
   enforces nothing, and the deferred write RPCs are `CreateTask`, `UpdateTask`, `CreateComment` —
-  no session launch, no step transition.
+  no session launch, no step transition.~~ **Answer moved at v0.84.1:** partly yes. The writes
+  landed and are gated — undeclared `api_write:<resource>` is `PermissionDenied` — and they are
+  `CreateTask`, `UpdateTask`, `SendMessage`. So create yes; transition yes, via `UpdateTask`'s
+  `workflow_step_id`; start a turn yes, but only by sending the plugin's own text, not a work
+  step's prompt. Reorder and pause remain no.
 - **Can plugins add full UI pages or only panels?** Slots, e.g. `app-status-bar-left` and
   `plugin-settings`, from a JavaScript bundle Kandev loads into its own web app.
 - **Are there webhooks or event subscriptions?** Yes, inbound to plugins: Kandev pushes bus
@@ -848,7 +859,9 @@ The most balanced design is:
 6. Open the relevant local Kandev UI when detailed review or interaction is required.
 7. Treat a unified federated UI as a later enhancement, not as a reason to weaken isolation.
 8. Use Kandev plugins as the operator surface only; scheduling stays in an external adapter until
-   a session-launch write RPC and a quota reader exist in the Host API.
+   a *step-addressed* session launch and a quota reader exist in the Host API. (v0.84.1 has a
+   launch primitive, `SendMessage`, but it cannot name a workflow step — see
+   [`kandev-plugin-feasibility.md`].)
 
 And one sequencing point the original discussion did not make: **the isolation half is worth
 doing on its own, before any coordinator exists.** Splitting sensitive projects into separate

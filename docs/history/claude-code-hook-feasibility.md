@@ -191,8 +191,8 @@ That is **the same shape `quota.py:parse_windows` already consumes** — a consu
 and a reset instant per window — under different key names. The risk is staleness, and not
 the harmless kind: while *this* session is paused, other sessions and machines keep
 spending, so a stale reading is stale-*low* on consumption and the hook under-withholds.
-`fetchedAtMs` bounds it; treat a reading older than a few minutes as a reason to fall back
-or fail closed.
+`fetchedAtMs` bounds it; ~~treat a reading older than a few minutes as a reason to fall back
+or fail closed~~ — too soft, see the measurement immediately below.
 
 **Measured, and worse than "a few minutes" suggests.** Sampled again on 2026-08-04, while
 restoring the pacer's quota reads: `fetchedAtMs` was **2396 minutes — about 40 hours —
@@ -217,9 +217,20 @@ verified to return live data: `five_hour`, `seven_day`, `seven_day_opus`, `extra
 a `limits[]` array of `{kind, percent, severity, resets_at}`. **Undocumented internal API** —
 unstable by definition, and a hook using it cannot refresh an expired token.
 
-*Inference:* this is very likely what stands behind kandev's `GET /api/v1/agents/usage`,
-whose `utilization_pct` / `reset_at` map one-to-one onto `utilization` / `resets_at`. If so,
-a hook pacer gates on the same number the current pacer does, and the two cannot disagree.
+~~*Inference:* this is very likely what stands behind kandev's `GET /api/v1/agents/usage`~~
+— **confirmed 2026-08-04** by reading `internal/agent/usage/client_claude.go` at kandev
+v0.84.1: same URL (`claudeUsageURL = "https://api.anthropic.com/api/oauth/usage"`, line 15),
+same `{utilization, resets_at}` fields, preferring the richer `limits[]` array when present.
+It also does two things the guess did not cover — it refreshes an expired token against
+`https://platform.claude.com/v1/oauth/token` (line 16), and it maps limit kinds to the labels
+kandev then served: `session` → `"5-hour"`, `weekly_all` → `"7-day"`, `weekly_scoped` →
+`"7-day (<DisplayName>)"` (lines 192–200).
+
+So a hook pacer gates on the same number the current pacer does, and the two cannot disagree
+— which is now a fact about one shared upstream rather than a hope about two. It is also why
+`provider.py` exists: when the kandev endpoint went away the client behind it did not, and
+porting it was cheaper than inventing a second reading of the same account. The token refresh
+is the one part deliberately *not* ported, for the lost-update reason `provider.py` gives.
 
 What is *not* a source: the Admin API `usage_report` endpoints and the
 `anthropic-ratelimit-*` response headers describe API-key/org limits (RPM, ITPM), not the
