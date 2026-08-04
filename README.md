@@ -165,6 +165,26 @@ the turns the pacer releases run against that same credential.
 usage payload actually reports windows; a genuinely fresh account has none yet, and paces
 normally.
 
+## Multiple kandev instances
+
+The pacer drives one kandev instance. Splitting sensitive projects across several instances —
+one trust domain each — costs the single global priority order, since a kandev instance can
+read everything inside it and nothing outside it.
+[`docs/isolation-and-federation.md`] works through what a coordinator over several instances
+would look like: a redacted central queue holding rank ordinals and opaque ids, short-lived
+leases that authorize a *start* (never a kill — there is no preemption here), and prompts,
+logs and repositories that never leave their domain.
+
+Two facts shape it. The quota is read from Anthropic directly and is **account-level**, so
+independent pacers on separate instances already see each other's burn and hold the aggregate
+rate roughly right — what they cannot do is order across boards. And kandev's `/api/v1` is
+**unauthenticated** while `/ws` checks only `Origin`, so reaching an instance's port is full
+access to it: the pacing decision can be centralized, but the launching cannot. Nothing there
+is implemented.
+
+Upstream, [kdlbs/kandev#1669] tracks first-class pull-based pacing; kandev today offers
+per-workflow WIP limits, and "office mode" plans model tiers and provider routing.
+
 ## Layout
 
 ```
@@ -208,6 +228,8 @@ Coverage is one flag away and worth running when adding tests:
 `uv run pytest --cov=kandev_pacer --cov-report=term-missing`.
 
 [kandev]: https://github.com/kdlbs/kandev
-[docs/design.md]: docs/design.md
-[userscript/kandev-queue-button.user.js]: userscript/kandev-queue-button.user.js
-[docs/queueing-user-prompts.md]: docs/queueing-user-prompts.md
+[`docs/design.md`]: docs/design.md
+[`userscript/kandev-queue-button.user.js`]: userscript/kandev-queue-button.user.js
+[`docs/queueing-user-prompts.md`]: docs/queueing-user-prompts.md
+[`docs/isolation-and-federation.md`]: docs/isolation-and-federation.md
+[kdlbs/kandev#1669]: https://github.com/kdlbs/kandev/issues/1669

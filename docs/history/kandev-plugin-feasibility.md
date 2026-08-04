@@ -115,3 +115,20 @@ The honest upstream ask, if a native plugin is the goal, is four things:
 
 With those, the pacer becomes a genuinely native plugin and the direct SQLite
 write in `make_paced.py` is the only remaining out-of-band access.
+
+## Beyond one instance
+
+The same four gaps decide the plugin's role in the multi-instance design sketched in
+[`isolation-and-federation.md`]: a plugin there is a
+status readout, a settings form, a lifecycle supervisor and a durable store for
+lease tokens (Host state, which fits that as well as it fits the pacer's own booking ledger), while an
+external adapter beside it does the claiming and launching over `/api/v1` and `/ws`.
+
+One caveat from this document becomes a load-bearing constraint there. The pacer
+only works where it can reach an unauthenticated `/api/v1` — noted above as a cost
+to the plugin's portability. Across trust domains it reads the other way round:
+because reaching the port *is* full access to the instance, the pacing decision can
+never be made from outside the domain, and the sensitive side has to initiate every
+connection.
+
+[`isolation-and-federation.md`]: ../isolation-and-federation.md
