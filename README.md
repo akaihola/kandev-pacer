@@ -211,6 +211,7 @@ that spends a turn.
 ```bash
 uv run pytest                              # the whole suite (no network, no quota, no server)
 uv run pytest tests/test_quota.py -k alpha # one file, or one test by name
+PACER_LIVE_KANDEV=1 uv run pytest tests/test_contract_live.py   # after every kandev upgrade
 uv run ruff check src tests                # style and dead code, whole tree
 uv run ty check src tests                  # types, whole tree
 uv run darker                              # reformat what this branch changed
@@ -226,6 +227,37 @@ and graylint runs `ruff` and `ty` together.
 
 Coverage is one flag away and worth running when adding tests:
 `uv run pytest --cov=kandev_pacer --cov-report=term-missing`.
+
+### Run the contract test after every kandev upgrade
+
+The default suite runs entirely against `conftest.py`'s fake board, which means it stays
+green no matter what kandev does to its API. 0.82.0 → 0.84.1 removed
+`GET /api/v1/agents/usage`; every tick died on a 404, nothing launched, and the only
+evidence was a log full of anonymous errors — with the whole suite passing throughout.
+
+`tests/test_contract_live.py` is the one test that would have caught it at upgrade time.
+It checks the *shape* of everything the pacer reads from a running kandev — the endpoints,
+their envelopes, the keys, the session-state and step-event vocabulary — plus the
+Anthropic usage read that quota now comes from, and whether kandev still recognizes the
+WebSocket actions the pacer sends. It is skipped unless `PACER_LIVE_KANDEV=1`, so
+`uv run pytest` is unchanged, and it starts no turn and spends no quota.
+
+```bash
+PACER_LIVE_KANDEV=1 uv run pytest tests/test_contract_live.py -v
+KANDEV_URL=http://host:38429 PACER_LIVE_KANDEV=1 uv run pytest tests/test_contract_live.py
+```
+
+It asserts nothing about the board's contents, so it passes against any instance with at
+least one workflow; rows needing a task or a session skip themselves on an emptier one. A
+server that is not there is a skip, not a failure — only kandev answering differently is a
+failure, and the message names the endpoint and the key that moved.
+
+Two things it cannot cover, both worth knowing before trusting a green run. It never sends
+`session.launch` or `message.queue.drain`, because sending them is the one thing that could
+spend a turn — so a rename of those two action names would still reach production. And
+kandev omits empty fields, so `prompt` and `agent_profile_id` on a step can only be checked
+where some step actually carries one; no step of any workflow carries an `agent_profile_id`
+at 0.84.1, which leaves that branch of the startup lint unverifiable from outside.
 
 [kandev]: https://github.com/kdlbs/kandev
 [`docs/design.md`]: docs/design.md
