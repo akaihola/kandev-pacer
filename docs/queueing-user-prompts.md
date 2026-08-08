@@ -243,11 +243,26 @@ The backend needs nothing; only the typing surface does. Options, cheapest first
    entry then appears in Kandev's own queue chip, editable and removable, with
    **Send now** available. No Kandev source touched, no rebuild.
 
-   Verified in headless Chromium against a fixture mirroring the composer markup:
-   correct placement in the toolbar row, correct `message.queue.add` payload,
-   editor cleared, idempotent, and re-injected if React drops the node. Not yet
-   run against the live UI, so the real page's markup matching the fixture rests
-   on the source read (`chat-input-toolbar-desktop.tsx`, `-primitives.tsx`).
+   A drain replays the stored content verbatim (`message.queue.drain` →
+   `PromptTask`), so fidelity is the queueing client's problem: the stock
+   composer serializes its TipTap document (@-mention chips → `@label`,
+   `#`-reference chips → markdown links, `/`-command chips → `/name`) and
+   appends the CONTEXT PATHS / CONTEXT PROMPTS / REFERENCED TASKS
+   `<kandev-system>` blocks *before* `message.queue.add` — nothing expands
+   later. The userscript's first version queued `innerText`, which collapses a
+   chip to its visible label: a tab-completed `@heartbeat` arrived as plain
+   `heartbeat` with no prompt expansion (task `ad31370d`, 2026-08-08). v1.1
+   reads the document off the contenteditable (`.editor`, falling back to
+   ProseMirror's `pmViewDesc`) and mirrors kandev's own serialization,
+   context-block building and prompt-reference expansion;
+   `tests/userscript.test.mjs` pins the mirrored pipeline.
+
+   Verified in headless Chromium against a fixture mirroring the composer markup
+   (placement in the toolbar row, `message.queue.add` payload, editor cleared,
+   idempotent, re-injected if React drops the node) and, on 2026-08-08, against
+   the live UI: both document handles exist on the real composer, tab-completing
+   `@heart` in it and running the userscript's payload builder produced
+   `@heartbeat …` plus the same CONTEXT PROMPTS block the stock submit stores.
 3. **Type into the composer while the agent is still running.** Free, and Kandev
    already queues it — but drain sites 1 and 2 release it at turn end, so it is
    not paced. Do not rely on it.
