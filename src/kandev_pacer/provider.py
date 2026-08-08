@@ -30,6 +30,7 @@ host.go used -- which the loop spends once per pause, when its own estimate says
 is due to reopen.
 """
 
+import base64
 import json
 import time
 import urllib.request
@@ -45,6 +46,19 @@ BETA_HEADER = "oauth-2025-04-20"
 # Anything else leaves `parse_windows` with nothing and the gate blind -- which is the
 # existing fail-closed behaviour for a provider the payload does not carry.
 PROVIDER = "anthropic"
+
+# The second source: Codex, read from ChatGPT directly. Reported as "openai" -- the provider
+# a codex-acp agent's subscription burn shows up under (see config.AGENT_PROVIDERS) -- so a
+# board pacing it sets PACER_PROVIDERS=anthropic,openai.
+CODEX_USAGE_URL = "https://chatgpt.com/backend-api/codex/usage"
+CODEX_PROVIDER = "openai"
+# The endpoint is Cloudflare-fronted and refuses a bare Python-urllib User-Agent -- and a
+# browser one -- with 403; it answers only to the Codex CLI's own agent string. So the read
+# has to present as codex_cli_rs. The version is cosmetic to the check today (any codex_cli_rs
+# version answers), but is kept current in case that tightens -- the live contract test is
+# where a future requirement would surface. Verified 2026-08-08: no UA and Mozilla/5.0 both
+# 403, `codex_cli_rs/0.147.0` gets 200.
+CODEX_USER_AGENT = "codex_cli_rs/0.147.0"
 
 # The Go service's cacheTTL and failureCacheTTL, and host.go's freshMaxAge.
 CACHE_TTL = 300.0
@@ -206,6 +220,152 @@ def fetch(now, path=None):
     return usage_envelope(payload, now, oauth.get("subscriptionType") or "")
 
 
+# --- the second source: Codex, read from ChatGPT directly ---
+#
+# Same read-only rule as the Claude credential, for the same reason: Codex CLI owns and
+# refreshes ~/.codex/auth.json, and racing that refresh is the lost update provider.py refuses.
+# Three shape differences from Anthropic, all handled below: the duration arrives in the
+# payload (so it maps onto the internal window better than Anthropic's does), expiry is a JWT
+# claim rather than a field, and reset is an epoch rather than an ISO string.
+
+_CODEX_LABELS = {5 * 3600: "5-hour", 24 * 3600: "1-day", 7 * 24 * 3600: "7-day"}
+
+
+def _codex_label(duration_s):
+    """A readable label for a Codex window of `duration_s`, for the log and the paused line.
+
+    Only cosmetic here: the gate reads the duration the payload states, not this. So an
+    unfamiliar length still reaches the gate under a `<n>s` label rather than being dropped --
+    the opposite of Anthropic, where an unrecognised label *is* a dropped window.
+    """
+    return _CODEX_LABELS.get(duration_s) or (
+        f"{duration_s}s" if duration_s else "codex"
+    )
+
+
+def _jwt_exp(token):
+    """The `exp` claim (epoch seconds) of a JWT, decoded without verifying the signature.
+
+    The Codex access token states its expiry as a JWT claim, not a field like the Claude
+    credential's `expiresAt`. Verifying the signature is the issuer's job when the token is
+    used; all the pacer needs is when to stop trusting a cached read, so it reads the claim
+    only. An undecodable token yields None -- treated as "no stated expiry", i.e. used as-is,
+    since a live request will reject it soon enough if it really is dead.
+    """
+    try:
+        segment = token.split(".")[1]
+        padded = segment + "=" * (-len(segment) % 4)
+        return json.loads(base64.urlsafe_b64decode(padded)).get("exp")
+    except Exception:
+        return None
+
+
+def read_codex_credentials(path):
+    """The Codex OAuth tokens, or a QuotaUnavailable saying which part is missing."""
+    try:
+        raw = json.loads(Path(path).read_text())
+    except FileNotFoundError:
+        raise QuotaUnavailable(
+            f"no Codex credentials at {path} -- log in with Codex CLI"
+        ) from None
+    except (OSError, ValueError) as error:
+        raise QuotaUnavailable(f"cannot read {path}: {error}") from error
+    if raw.get("auth_mode") == "apikey":
+        raise QuotaUnavailable(
+            f"Codex login in {path} is api-key (auth_mode=apikey) -- no subscription quota "
+            "to pace, only metered spend"
+        )
+    tokens = raw.get("tokens") or {}
+    if not tokens.get("access_token"):
+        raise QuotaUnavailable(
+            f"no subscription token in {path} -- an API-key Codex login has no quota to pace"
+        )
+    return tokens
+
+
+def codex_access_token(tokens, now):
+    """The Codex access token, if it is still good. Never refreshes; see the module docstring."""
+    exp = _jwt_exp(tokens["access_token"])
+    if exp is not None and exp - now <= EXPIRY_SKEW:
+        raise QuotaUnavailable(
+            "Codex credentials expired -- re-auth Codex CLI; the pacer never refreshes the "
+            "token itself, to avoid racing Codex CLI over the same file"
+        )
+    return tokens["access_token"]
+
+
+def _codex_get(token, account_id):
+    """The one Codex HTTP call, alone in a function so a test can stand in for it."""
+    request = urllib.request.Request(
+        CODEX_USAGE_URL,
+        headers={
+            "Authorization": f"Bearer {token}",
+            "chatgpt-account-id": account_id or "",
+            # Without this the endpoint 403s (see CODEX_USER_AGENT).
+            "User-Agent": CODEX_USER_AGENT,
+        },
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=TIMEOUT) as response:
+            return json.loads(response.read())
+    except Exception as error:
+        raise QuotaUnavailable(f"Codex usage read failed: {error}") from error
+
+
+def codex_windows(payload, now):
+    """The rate-limit windows in a Codex usage payload, in the internal envelope shape.
+
+    Both `primary_window` and `secondary_window` are read: the names are slots, not durations,
+    so which is the binding one is not fixed. `limit_window_seconds` carries the duration
+    outright, so it rides along as `duration_s`; `parse_windows` prefers it over the label.
+    """
+    rate = payload.get("rate_limit") or {}
+    windows = []
+    for slot in ("primary_window", "secondary_window"):
+        window = rate.get(slot) or {}
+        if window.get("used_percent") is None:
+            continue
+        duration = window.get("limit_window_seconds")
+        reset_at = window.get("reset_at")
+        if reset_at is None and window.get("reset_after_seconds") is not None:
+            reset_at = now + window["reset_after_seconds"]
+        if reset_at is None:
+            continue
+        windows.append(
+            {
+                "label": _codex_label(duration),
+                "utilization_pct": window["used_percent"],
+                "reset_at": _iso(reset_at),
+                "duration_s": duration,
+            }
+        )
+    return windows
+
+
+def codex_envelope(payload, now, plan=""):
+    """The Codex payload wrapped in kandev's envelope, so quota.py reads it like any other."""
+    return {
+        "agents": [
+            {
+                "agent_id": "codex-acp",
+                "usage": {
+                    "provider": CODEX_PROVIDER,
+                    "plan": plan,
+                    "windows": codex_windows(payload, now),
+                },
+            }
+        ]
+    }
+
+
+def codex_fetch(now, path=None):
+    """One live read of the Codex usage endpoint, in kandev's envelope. Re-reads the token."""
+    tokens = read_codex_credentials(path or settings.codex_credentials_path)
+    payload = _codex_get(codex_access_token(tokens, now), tokens.get("account_id"))
+    # plan_type rides in the response body, not the credential -- cosmetic, for the log line.
+    return codex_envelope(payload, now, payload.get("plan_type") or "")
+
+
 # --- the cache in front of it ---
 
 @dataclass
@@ -223,31 +383,87 @@ class _Cache:
 
 
 _cache = _Cache()
+_codex_cache = _Cache()
 
 
 def reset_cache():
-    global _cache
+    global _cache, _codex_cache
     _cache = _Cache()
+    _codex_cache = _Cache()
+
+
+def _cached_read(cache, fetch_fn, fresh, now):
+    """Serve `cache` unless it is staler than the caller allows, else fetch and store.
+
+    One reading and one failure tracked apart, per source: a failed refresh of one provider
+    does not evict another's still-valid value, and does not evict its own -- a routine tick
+    keeps being served the cached reading while only the `fresh` caller sees the error.
+    """
+    now = time.time() if now is None else now
+    max_age = FRESH_MAX_AGE if fresh else CACHE_TTL
+    if cache.usage is not None and now - cache.at < max_age:
+        return cache.usage
+    if cache.error is not None and now - cache.error_at < min(FAILURE_TTL, max_age):
+        raise cache.error
+    try:
+        fetched = fetch_fn(now)
+    except QuotaUnavailable as error:
+        cache.error, cache.error_at = error, now
+        raise
+    cache.usage, cache.at, cache.error = fetched, now, None
+    return fetched
 
 
 def usage(fresh=False, now=None):
-    """The current usage envelope, from cache unless it is older than the caller allows.
+    """The Anthropic usage envelope, from cache unless it is older than the caller allows.
 
     `fresh=True` narrows the window a cached reading may have been taken in from five
     minutes to fifteen seconds. The loop spends that once per pause -- when the estimate
     it computed says the gate is due back -- so a converging pause costs one extra call
     in total rather than one per tick.
     """
+    return _cached_read(_cache, fetch, fresh, now)
+
+
+def codex_usage(fresh=False, now=None):
+    """The Codex usage envelope, behind its own cache -- see `usage` for the caching rule."""
+    return _cached_read(_codex_cache, codex_fetch, fresh, now)
+
+
+# The provider names each source answers under, mapping a PACER_PROVIDERS entry to a reader.
+# Looked up by `read`, but dispatched through the module globals `usage`/`codex_usage` so a
+# test standing in for either is honoured.
+SOURCE_PROVIDERS = {"anthropic", CODEX_PROVIDER, "codex"}
+
+
+def _read_source(name, fresh, now):
+    """One provider's usage envelope, from its source. Raises QuotaUnavailable like the sources."""
+    if name == "anthropic":
+        return usage(fresh=fresh, now=now)
+    if name in (CODEX_PROVIDER, "codex"):
+        return codex_usage(fresh=fresh, now=now)
+    raise QuotaUnavailable(
+        f"provider {name!r} has no usage source -- PACER_PROVIDERS names it but nothing reads it"
+    )
+
+
+def read(providers, fresh=False, now=None):
+    """Merge the named providers' usage envelopes, and the errors of those that could not.
+
+    Each source is read behind its own cache and fails on its own: a provider whose read fails
+    is recorded in the returned `errors` map and left out of the envelope, so the others still
+    form a verdict. The runtime decides what a missing provider means -- withhold its tasks --
+    while another provider's gate stays as open as its own quota says. When *every* configured
+    source fails the caller sees that (errors covers them all) and can fall back to the
+    single-provider behaviour of shutting the whole gate.
+    """
     now = time.time() if now is None else now
-    max_age = FRESH_MAX_AGE if fresh else CACHE_TTL
-    if _cache.usage is not None and now - _cache.at < max_age:
-        return _cache.usage
-    if _cache.error is not None and now - _cache.error_at < min(FAILURE_TTL, max_age):
-        raise _cache.error
-    try:
-        fetched = fetch(now)
-    except QuotaUnavailable as error:
-        _cache.error, _cache.error_at = error, now
-        raise
-    _cache.usage, _cache.at, _cache.error = fetched, now, None
-    return fetched
+    agents, errors = [], {}
+    for name in providers:
+        try:
+            envelope = _read_source(name, fresh, now)
+        except QuotaUnavailable as error:
+            errors[name] = error
+            continue
+        agents.extend(envelope.get("agents", []))
+    return {"agents": agents}, errors

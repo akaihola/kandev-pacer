@@ -55,6 +55,10 @@ class Board:
     admission: dict = field(default_factory=dict)      # workflow id -> its admission step
     step_names: dict = field(default_factory=dict)     # step id -> name, for readable logs
     step_ranks: dict = field(default_factory=dict)     # step id -> position, for pull order
+    # step id -> its agent-profile override, for the steps that carry one. A profile-switch
+    # step is what changes which subscription a task burns partway through a workflow, so
+    # attribution resolves this before task metadata. Only the steps with an override appear.
+    step_profiles: dict = field(default_factory=dict)
     workflow_names: dict = field(default_factory=dict)
     skipped: list = field(default_factory=list)        # (workflow, reason), out of scope
     steps: dict = field(default_factory=dict)          # workflow id -> its steps, as scanned
@@ -77,6 +81,12 @@ class Board:
                 step_id: rank
                 for _, steps in entries
                 for step_id, rank in step_ranks(steps).items()
+            },
+            step_profiles={
+                step["id"]: step["agent_profile_id"]
+                for _, steps in entries
+                for step in steps
+                if (step.get("agent_profile_id") or "").strip()
             },
             workflow_names={
                 workflow["id"]: workflow.get("name") or workflow["id"]

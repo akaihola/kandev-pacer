@@ -119,13 +119,23 @@ class Verdict:
         return self.gate == "open"
 
 
-def quota_verdict(usage, windows, now, config):
-    """Read the usage payload against the burn line. Pure: no I/O, no state."""
-    if not windows and provider_missing(usage, config.provider):
-        return Verdict("blind", 1.0, (
-            f"provider {config.provider!r} not in usage "
-            f"{sorted(usage_providers(usage))} -> WITHHOLDING (check PACER_PROVIDER)"
-        ))
+def quota_verdict(usage, windows, now, config, provider=None):
+    """Read the usage payload against the burn line for one provider. Pure: no I/O, no state.
+
+    Defaults to the configured single provider, so the pre-plural callers are unchanged; the
+    runtime passes each provider explicitly. The fail-closed `blind` branch is per provider:
+    a provider missing from the merged envelope withholds its own tasks and leaves the rest.
+    """
+    provider = config.provider if provider is None else provider
+    if not windows and provider_missing(usage, provider):
+        return Verdict(
+            "blind",
+            1.0,
+            (
+                f"provider {provider!r} not in usage "
+                f"{sorted(usage_providers(usage))} -> WITHHOLDING (check PACER_PROVIDER)"
+            ),
+        )
     worst = worst_headroom(windows, now, config.alpha)
     # Withholding with no end in sight reads as an outage. It is not one: the release is
     # arithmetic. An estimate all the same -- a turn still running keeps spending `c`.
@@ -169,12 +179,25 @@ def binding_label(window_recs):
 
 
 def tick_record(
-    now, gate, action, window_recs, running, launchable, cap, booked, launched=None,
+    now,
+    gate,
+    action,
+    window_recs,
+    running,
+    launchable,
+    cap,
+    booked,
+    launched=None,
     interval=None,
+    provider=None,
 ):
     return {
         "t": round(now, 3),
         "kind": "tick",
+        # Which subscription this record is about. None on a single-provider run, where the
+        # question the record answers -- gate=open, action=nothing, launchable>0 -- has only
+        # one subject; named once two are paced, so the same one-line filter still answers it.
+        "provider": provider,
         "gate": gate,
         "action": action,
         "wh": min((window["h"] for window in window_recs), default=1.0),
@@ -195,28 +218,62 @@ def _epoch(timestamp):
     return datetime.fromisoformat(timestamp.replace("Z", "+00:00")).timestamp()
 
 
-def parse_windows(usage):
-    """The quota windows for the configured provider, as fractions and epoch seconds."""
-    provider = settings.provider
-    windows = []
+def _internal_window(window):
+    """One envelope window in the pacer's internal shape, or None if it cannot be placed.
+
+    Duration comes from the payload when it carries one -- Codex states `duration_s`
+    (`limit_window_seconds`) outright -- and falls back to the label lookup for Anthropic,
+    which states only a reset. Preferring the stated duration is what lets a Codex window of
+    any length reach the gate, rather than being dropped because no label prefix matched it.
+    A window with neither a known duration nor a reset cannot be put on a burn line, so it is
+    dropped -- dropping the binding one is the direction that under-withholds.
+    """
+    duration = window.get("duration_s") or window_duration(window.get("label"))
+    reset_at = window.get("reset_at")
+    if duration is None or not reset_at:
+        return None
+    return {
+        "label": window.get("label"),
+        "consumed_frac": window["utilization_pct"] / 100.0,
+        "resets_at": _epoch(reset_at),
+        "duration_s": duration,
+    }
+
+
+def parse_windows(usage, provider=None):
+    """The quota windows for one provider, as fractions and epoch seconds.
+
+    Defaults to the configured single provider, so a caller passing nothing gets exactly what
+    it always got; the runtime passes each configured provider in turn.
+    """
+    provider = settings.provider if provider is None else provider
+    return [
+        internal
+        for agent in usage.get("agents", [])
+        if (agent.get("usage") or {}).get("provider") == provider
+        for window in (agent.get("usage") or {}).get("windows", [])
+        if (internal := _internal_window(window)) is not None
+    ]
+
+
+def windows_by_provider(usage):
+    """Every provider's windows, grouped as `{provider: [window, ...]}`.
+
+    A provider with no usable window is absent from the map rather than present empty, so the
+    runtime's blind check -- configured but not in the payload -- still reads off
+    `usage_providers`, which counts a provider that answered at all.
+    """
+    grouped = {}
     for agent in usage.get("agents", []):
         agent_usage = agent.get("usage") or {}
-        if agent_usage.get("provider") != provider:
+        provider = agent_usage.get("provider")
+        if not provider:
             continue
         for window in agent_usage.get("windows", []):
-            duration = window_duration(window.get("label"))
-            reset_at = window.get("reset_at")
-            if duration is None or not reset_at:
-                continue
-            windows.append(
-                {
-                    "label": window.get("label"),
-                    "consumed_frac": window["utilization_pct"] / 100.0,
-                    "resets_at": _epoch(reset_at),
-                    "duration_s": duration,
-                }
-            )
-    return windows
+            internal = _internal_window(window)
+            if internal is not None:
+                grouped.setdefault(provider, []).append(internal)
+    return grouped
 
 
 def usage_providers(usage):

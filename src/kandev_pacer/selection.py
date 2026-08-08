@@ -7,12 +7,14 @@ the pacer's own booking/failure records, and answer with a decision. No I/O.
 from typing import NamedTuple
 
 from .config import (
+    API_KEY,
     CREATED_STATE,
     DRAINABLE_STATES,
     FAIL_BACKOFF_MAX_MULT,
     IDLE_STATES,
     PRIORITY_RANK,
     READY_STATE,
+    agent_provider,
     settings,
 )
 
@@ -124,18 +126,35 @@ class Candidate(NamedTuple):
     session: str | None = None
 
 
-def select_action(ordered, task_sessions, queued, board, skip):
+def select_action(
+    ordered, task_sessions, queued, board, skip, allowed=None, provider_of=None
+):
     """The one turn to spend now, or None.
 
     Drains come first, in full: launching a task that has a prompt queued spends the
     turn on the step prompt and lets the queued entry leak out un-paced afterwards.
+
+    `allowed` restricts candidates to a set of providers -- one provider's shut gate must not
+    hide another's work behind it in the order, so the runtime calls this once per open
+    provider with the others held out. `provider_of(task, session)` maps a candidate to its
+    provider (`session` is the drain's session dict, or None for a launch); it is required
+    when `allowed` is given and ignored otherwise. `allowed=None` is the single-subscription
+    path: every candidate is eligible, exactly as before providers went plural.
     """
+
+    def eligible(task, session):
+        return allowed is None or (
+            provider_of is not None and provider_of(task, session) in allowed
+        )
+
     for task in ordered:
         session = drain_session(task, task_sessions.get(task["id"], []), queued, skip)
-        if session is not None:
+        if session is not None and eligible(task, session):
             return Candidate("drain", task, session["id"])
     for task in ordered:
-        if is_launchable(task, task_sessions.get(task["id"], []), board, skip):
+        if is_launchable(
+            task, task_sessions.get(task["id"], []), board, skip
+        ) and eligible(task, None):
             return Candidate("launch", task)
     return None
 
@@ -159,6 +178,51 @@ def task_agent_profile(task):
     """
     profile = (task.get("metadata") or {}).get("agent_profile_id")
     return profile if isinstance(profile, str) and profile else None
+
+
+def launch_profile(task, board):
+    """The agent profile a launch of this task will run under: step override, then metadata.
+
+    Attribution is per *launch*, not per task: the provider that will burn is the one at the
+    step the launch targets, so a profile-switch step's own `agent_profile_id` wins over the
+    task's. Task metadata is the answer for every ordinary step, which carries none.
+    """
+    override = board.step_profiles.get(task.get("workflow_step_id", ""))
+    return override or task_agent_profile(task)
+
+
+def profile_provider(profile_id, agents):
+    """Which subscription a profile burns: a provider name, `API_KEY`, or None if unknown.
+
+    None is the fail-closed answer -- no profile, or one the agents payload does not carry, so
+    the pacer cannot tell which gate applies and will not guess. `API_KEY` means the profile is
+    metered per token, with no subscription window; PACER_APIKEY_POLICY decides what happens to
+    it, not a gate.
+    """
+    if not profile_id:
+        return None
+    info = agents.get(profile_id)
+    if info is None:
+        return None
+    agent = info.get("agent")
+    # An explicit operator override wins over kandev's billing_type: an agent can burn a
+    # subscription kandev labels api_key (Hermes on the Codex OAuth subscription), and only the
+    # operator knows that, so PACER_AGENT_PROVIDERS states it and it is honoured first.
+    override = settings.agent_provider_overrides.get(agent)
+    if override:
+        return override
+    if (info.get("billing_type") or "") == "api_key":
+        return API_KEY
+    return agent_provider(agent)
+
+
+def task_provider(task, board, agents):
+    """The provider a launch of this task will spend against; see `profile_provider`.
+
+    Used for drains too: a drain acts on a task, so it is gated by that task's provider, which
+    keeps attribution consistent with the running-count and launchable-count that also read it.
+    """
+    return profile_provider(launch_profile(task, board), agents)
 
 
 def pick_intent(sessions):

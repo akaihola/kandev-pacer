@@ -81,7 +81,12 @@ pacer with the variable's name in the message rather than failing hours later.
 | `KANDEV_URL` | `http://127.0.0.1:38429` | where kandev listens |
 | `KANDEV_WS_URL` | derived from `KANDEV_URL` | the `/ws` endpoint, if it differs |
 | `PACER_PROVIDER` | `anthropic` | which usage agent to gate on. A name matching nothing **fails closed** rather than pacing blind |
-| `PACER_CONCURRENCY` | `1` | how many paced turns may run at once |
+| `PACER_PROVIDERS` | `$PACER_PROVIDER` | the subscriptions to pace, comma- or space-separated (e.g. `anthropic,openai`). Naming more than one turns on per-provider gating; see [Two subscriptions](#two-subscriptions) |
+| `PACER_CONCURRENCY` | `1` | how many paced turns may run at once **per provider** |
+| `PACER_CONCURRENCY_TOTAL` | unset | ceiling on the sum across providers — the machine running the worktrees. Unset means each provider is bound only by its own cap |
+| `PACER_APIKEY_POLICY` | `withhold` | what to do with an api-key task (no subscription window): `withhold` never launches it, `cap` launches it gated on the concurrency cap alone. Only consulted with two-plus providers |
+| `PACER_AGENT_PROVIDERS` | unset | override which subscription an agent burns, when kandev's `billing_type` is wrong for pacing. `agent=provider` pairs, e.g. `hermes-acp=openai`. Wins over `billing_type`, so an agent kandev labels `api_key` but which really spends a subscription is paced against it — see [Two subscriptions](#two-subscriptions) |
+| `PACER_CODEX_CREDENTIALS` | `~/.codex/auth.json` | the ChatGPT token the Codex quota is read with. **Read, never written** — same rule as the Claude credential |
 | `PACER_ALPHA` | `1.0` | target burn line. Below 1 aims under steady, finishing each window with quota spare |
 | `PACER_BACKSTOP` | `0.97` | consumed fraction at which everything is withheld regardless. `1.0` disables |
 | `PACER_INTERVAL` | `120` | seconds between ticks while headroom is at or above the burn line. Below it the tick paces itself on the wait, in 5–120s — see below |
@@ -165,6 +170,45 @@ the turns the pacer releases run against that same credential.
 usage payload actually reports windows; a genuinely fresh account has none yet, and paces
 normally.
 
+## Two subscriptions
+
+One pacer can gate more than one subscription. Set `PACER_PROVIDERS=anthropic,openai` and each
+paced task is held behind **its own** provider's window, not behind whichever one happens to be
+configured — so a board mixing Claude and Codex work no longer withholds Codex behind a Claude
+window it never touches.
+
+Everything that was scalar becomes per provider: a verdict, a running count, a `PACER_CONCURRENCY`
+cap, and a JSONL `tick` record each. One launch per provider per tick — the two are not competing
+for one resource, so serialising them would only starve whichever lost the global order. The loop
+paces itself on the **earliest** reopening across providers, so a two-hour Claude pause never
+stops it noticing Codex work it could start now. What you give up is a single global order *across*
+providers: two tasks on different subscriptions were never contending for the same quota, so "X
+before Y" holds only when X and Y share one.
+
+Which subscription a task burns is read from its agent profile — `GET /api/v1/agents` maps the
+profile to its agent (`claude-acp` → `anthropic`, `codex-acp` → `openai`) and its billing type.
+Mapping is **by agent, not by model**: an agent running an OpenAI model on an API key has no
+subscription window, and `PACER_APIKEY_POLICY` — not a gate — decides its fate (default
+`withhold`, so an upgrade never quietly starts spending metered money). A task the pacer cannot
+attribute is withheld, never paced against a guess.
+
+Reads degrade per provider: an unreachable Codex endpoint blinds *its* gate and leaves Claude's
+exactly as open as its own quota says. `PACER_CONCURRENCY_TOTAL` caps the sum across providers —
+the one genuinely shared thing is the machine running the worktrees.
+
+**When kandev's `billing_type` is wrong.** An agent can run a subscription-backed model while
+kandev still labels the profile `api_key` — Hermes runs `gpt-5.6-sol` on the Codex *OAuth*
+subscription (the same `~/.codex/auth.json` the openai source reads), yet its profile reports
+`api_key`. Left alone the pacer would withhold it, or under `cap` launch it **ungated against a
+window it actually spends**. `PACER_AGENT_PROVIDERS=hermes-acp=openai` states the truth: it wins
+over `billing_type`, so Hermes is paced on the Codex window it really burns. The pacer will not
+infer this from the model string (an agent *can* run an OpenAI model on a real API key); only the
+operator knows, so it is stated, not guessed.
+
+A single provider (the default) takes none of this path: every task burns it, one `tick` record,
+byte-identical to before. The full derivation, and why one process rather than two, is in
+[`docs/two-subscriptions.md`].
+
 ## Multiple kandev instances
 
 The pacer drives one kandev instance. Splitting sensitive projects across several instances —
@@ -194,7 +238,7 @@ src/kandev_pacer/
   workflow.py   which workflows are paceable, and the startup lint (pure)
   selection.py  which task goes next, whether we may, what we already spent (pure)
   client.py     every kandev HTTP and WebSocket call
-  provider.py   the quota, read from Anthropic directly — kandev stopped answering for it
+  provider.py   the quota, read from each provider directly (Anthropic, Codex) — kandev stopped answering for it
   runtime.py    the Pacer object, the loop, the CLI
   make_paced.py the enrollment tool (`make-paced`)
 tests/          one file per module, over conftest.py's fake kandev and builders
@@ -263,5 +307,6 @@ at 0.84.1, which leaves that branch of the startup lint unverifiable from outsid
 [`docs/design.md`]: docs/design.md
 [`userscript/kandev-queue-button.user.js`]: userscript/kandev-queue-button.user.js
 [`docs/queueing-user-prompts.md`]: docs/queueing-user-prompts.md
+[`docs/two-subscriptions.md`]: docs/two-subscriptions.md
 [`docs/isolation-and-federation.md`]: docs/isolation-and-federation.md
 [kdlbs/kandev#1669]: https://github.com/kdlbs/kandev/issues/1669

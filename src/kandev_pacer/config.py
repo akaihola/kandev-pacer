@@ -10,6 +10,10 @@ from pathlib import Path
 from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings
 
+# What PACER_APIKEY_POLICY may be. Defined here so the field validator can see it before
+# `settings = Settings()` runs at import.
+APIKEY_POLICIES = {"withhold", "cap"}
+
 
 class Settings(BaseSettings):
     """Every environment variable the pacer reads, validated once at startup.
@@ -22,10 +26,33 @@ class Settings(BaseSettings):
     url: str = Field("http://127.0.0.1:38429", alias="KANDEV_URL")
     # Empty means "derive it from url"; see the ws_url property.
     ws_url_override: str = Field("", alias="KANDEV_WS_URL")
+    # The single subscription to gate on. PACER_PROVIDERS supersedes it for more than one;
+    # see the `providers` property. Kept as its own field so a lone PACER_PROVIDER, and every
+    # single-provider run, reproduces exactly what the pacer did before two were possible.
     provider: str = Field("anthropic", alias="PACER_PROVIDER")
+    # Comma- or space-separated list of subscriptions to pace, in priority order. Empty means
+    # "just PACER_PROVIDER". Naming two here is what turns on per-provider gating.
+    providers_raw: str = Field("", alias="PACER_PROVIDERS")
+    # Operator override of which subscription an agent's burn shows up under, for when kandev's
+    # billing_type is wrong for pacing. Format: `agent=provider` pairs, comma- or space-
+    # separated, e.g. `hermes-acp=openai`. Consulted *before* billing_type, so it can pace an
+    # agent kandev reports as api_key but which actually spends a subscription -- Hermes runs
+    # gpt-5.6-sol on the Codex OAuth subscription (shared with ~/.codex/auth.json), which kandev
+    # nonetheless labels api_key. Without this the pacer would withhold it, or under `cap`
+    # launch it ungated -- and it burns the very Codex window the openai gate is pacing.
+    agent_providers_raw: str = Field("", alias="PACER_AGENT_PROVIDERS")
+    # What to do with a task whose agent is billed per token (billing_type=api_key): it has no
+    # subscription window to pace against. `withhold` never launches it (fail-closed, so an
+    # upgrade does not quietly start spending metered money); `cap` launches it gated on the
+    # concurrency cap alone. Only consulted when more than one provider is configured -- a
+    # single-provider run paces every task against that one, as it always did.
+    apikey_policy: str = Field("withhold", alias="PACER_APIKEY_POLICY")
 
-    # How many turns may be in flight at once.
+    # How many turns may be in flight at once, per provider. `concurrency_total` caps the sum
+    # across providers -- the machine running the worktrees is the one genuinely shared thing.
     concurrency: int = Field(1, alias="PACER_CONCURRENCY", ge=1)
+    # None means no ceiling on the sum; each provider is limited only by its own cap.
+    concurrency_total: int | None = Field(None, alias="PACER_CONCURRENCY_TOTAL", ge=1)
     # Target burn line: alpha < 1 aims below steady, finishing each window with quota spare.
     alpha: float = Field(1.0, alias="PACER_ALPHA", gt=0)
     # Hard ceiling on consumed fraction, whatever the burn line says. 1.0 disables it.
@@ -69,6 +96,12 @@ class Settings(BaseSettings):
     credentials_path: str = Field(
         str(Path.home() / ".claude" / ".credentials.json"), alias="PACER_CREDENTIALS"
     )
+    # Where Codex CLI keeps the ChatGPT token the second quota is read with. Same rule: read,
+    # never written -- Codex CLI owns and refreshes it, and racing that refresh is the same
+    # lost update the Claude credential refuses to risk.
+    codex_credentials_path: str = Field(
+        str(Path.home() / ".codex" / "auth.json"), alias="PACER_CODEX_CREDENTIALS"
+    )
 
     # Empty disables logging.
     log_path: str = Field(
@@ -88,6 +121,28 @@ class Settings(BaseSettings):
         if self.ws_url_override:
             return self.ws_url_override
         return self.url.replace("https://", "wss://").replace("http://", "ws://") + "/ws"
+
+    @property
+    def providers(self):
+        """The subscriptions to pace, in priority order.
+
+        PACER_PROVIDERS when set, otherwise the single PACER_PROVIDER -- so nothing configured
+        the old way changes meaning, and a run naming exactly one provider takes the pre-plural
+        path in full (see runtime.py: no agents lookup, no attribution, one tick record).
+        """
+        names = [name.strip() for name in self.providers_raw.replace(",", " ").split()]
+        # dict.fromkeys dedupes while keeping the priority order the operator wrote.
+        return list(dict.fromkeys(names)) if names else [self.provider]
+
+    @property
+    def agent_provider_overrides(self):
+        """`{agent name: provider}` from PACER_AGENT_PROVIDERS -- see the field's comment."""
+        overrides = {}
+        for pair in self.agent_providers_raw.replace(",", " ").split():
+            agent, _, provider = pair.partition("=")
+            if agent.strip() and provider.strip():
+                overrides[agent.strip()] = provider.strip()
+        return overrides
 
     @property
     def fail_backoff(self):
@@ -116,6 +171,15 @@ class Settings(BaseSettings):
     def _no_trailing_slash(cls, value):
         # Every caller appends a path that already starts with "/".
         return value.rstrip("/")
+
+    @field_validator("apikey_policy", mode="after")
+    @classmethod
+    def _known_apikey_policy(cls, value):
+        if value not in APIKEY_POLICIES:
+            raise ValueError(
+                f"PACER_APIKEY_POLICY must be one of {sorted(APIKEY_POLICIES)}, not {value!r}"
+            )
+        return value
 
 
 settings = Settings()
@@ -152,6 +216,30 @@ def window_duration(label):
         ),
         None,
     )
+
+
+# Which usage-envelope provider an agent's subscription burn shows up under. kandev names the
+# *agent* (claude-acp, codex-acp) while the usage payload names the *provider* (anthropic,
+# openai), so the two are bridged here, matched on a substring of the agent name. Deliberately
+# by agent, not by model: hermes-acp runs an OpenAI model on an API key, and reading `openai`
+# out of its model string would gate it on the ChatGPT quota it never touches -- billing_type
+# catches that first, but the mapping must not invite it. An agent listed nowhere here is
+# unresolvable, and its tasks are withheld rather than paced against a guess.
+AGENT_PROVIDERS = {"claude": "anthropic", "codex": "openai"}
+
+# Returned by the task-provider resolver for a profile billed per token: there is no
+# subscription window behind it, so PACER_APIKEY_POLICY -- not a gate -- decides its fate.
+API_KEY = "__api_key__"
+
+
+def agent_provider(agent):
+    """The usage provider an agent's subscription spends against, or None if unrecognised."""
+    name = (agent or "").lower()
+    return next(
+        (provider for key, provider in AGENT_PROVIDERS.items() if key in name), None
+    )
+
+
 # A step carrying one of these on on_turn_complete routes the task away when a turn ends,
 # which is what makes it safe to pace: a task still sitting there has an unfinished turn.
 TRANSITION_KINDS = {"move_to_next", "move_to_previous", "move_to_step"}

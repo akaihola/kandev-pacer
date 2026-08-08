@@ -58,6 +58,36 @@ def paced_tasks(scope):
     return [task for workflow_id in scope for task in tasks_of(workflow_id)]
 
 
+def agents():
+    """Every agent profile kandev knows, as `profile id -> {agent, billing_type, model}`.
+
+    The one call that says which subscription a task will burn: a task carries an
+    `agent_profile_id`, and this maps it to the agent that runs it and how that agent is
+    billed. Only fetched when more than one provider is being paced -- with one, every task
+    burns it and no attribution is needed.
+
+    Unreadable answers `{}`, which the resolver reads as "cannot say", so a hiccup here
+    withholds the tasks it cannot attribute rather than stopping the tick.
+    """
+    try:
+        response = get("/api/v1/agents") or {}
+    except Exception as error:
+        log.warning(
+            f"agents unavailable ({error}) -> cannot attribute tasks to a provider"
+        )
+        return {}
+    return {
+        profile["id"]: {
+            "agent": agent.get("name"),
+            "billing_type": profile.get("billing_type"),
+            "model": profile.get("model"),
+        }
+        for agent in response.get("agents") or []
+        for profile in agent.get("profiles") or []
+        if profile.get("id")
+    }
+
+
 def user_settings():
     """The sidebar preferences, or None if they cannot be read.
 
@@ -194,5 +224,3 @@ def ws_queue_count(session_id):
     """How many prompts are parked on this session's queue."""
     return int((ws_request("message.queue.get", {"session_id": session_id})
                 or {}).get("count") or 0)
-
-

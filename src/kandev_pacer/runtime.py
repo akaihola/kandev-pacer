@@ -19,6 +19,7 @@ from pathlib import Path
 
 from . import client, progress, provider
 from .config import (
+    API_KEY,
     BLOCKED_STATE,
     DRAINABLE_STATES,
     MAX_ATTEMPTS,
@@ -28,12 +29,13 @@ from .config import (
     settings,
 )
 from .quota import (
-    parse_windows,
+    Verdict,
     poll_interval,
     quota_verdict,
     resume_note,
     tick_record,
     window_records,
+    windows_by_provider,
 )
 from .selection import (
     ActionKey,
@@ -43,6 +45,7 @@ from .selection import (
     fail_backoff,
     is_launchable,
     is_wip_admitted,
+    launch_profile,
     launch_target,
     note_stall,
     ordered_tasks,
@@ -54,6 +57,7 @@ from .selection import (
     stalled_keys,
     stalled_out,
     task_agent_profile,
+    task_provider,
     uses_manual_order,
 )
 from .workflow import Board, lint_workflow, queue_step_id
@@ -67,15 +71,32 @@ class Snapshot:
 
     now: float
     usage: dict
-    windows: list
+    windows: dict  # provider -> [window, ...]; windows_by_provider(usage)
     tasks: list
-    sessions: dict       # task id -> its sessions
-    running: int         # turns in flight right now
+    sessions: dict  # task id -> its sessions
+    running: (
+        int  # every turn in flight right now, for the shared PACER_CONCURRENCY_TOTAL
+    )
     sidebar: dict | None  # the user's sidebar settings, or None if not consulted
+    # profile id -> {agent, billing_type, model}; empty on a single-provider run, which needs
+    # no attribution.
+    agents: dict
+    # task id -> the provider a launch of it burns, or None to withhold it (unresolvable, an
+    # unconfigured provider, or an api-key task under the withhold policy). On a single-provider
+    # run every task maps to that one provider, so nothing is attributed and nothing withheld.
+    task_providers: dict
+    # provider -> the QuotaUnavailable of a source that could not be read this tick. A provider
+    # in here has a shut gate; the others are unaffected. Empty when every source answered.
+    quota_errors: dict
 
 
 def label(task):
     return task.get("title") or task["id"]
+
+
+def _provider_label(provider_name):
+    """A gate's name for the log and the paused line -- the provider, or "api-key"."""
+    return "api-key" if provider_name == API_KEY else provider_name
 
 
 def queued_counts(task_sessions):
@@ -163,7 +184,16 @@ class Pacer:
         # whether this tick's quota reading may come from cache; see usage().
         self.resumes_at: float | None = None
         self._log_failed = False
-        self._tick_error = None   # the failure being repeated, or None if the last tick worked
+        self._tick_error = (
+            None  # the failure being repeated, or None if the last tick worked
+        )
+        self._spent = 0  # turns spent in the current tick, for the shared total cap
+        self._noted_withheld = (
+            set()
+        )  # tasks named as unattributable, so it is said once
+        # provider -> the TickError for a source outage being repeated, so a standing outage
+        # on one provider is said once and restated slowly, not printed every tick.
+        self._provider_errors = {}
 
     # --- the event log ---
 
@@ -199,10 +229,27 @@ class Pacer:
         arrives with something to do about it.
         """
         due = self.resumes_at is not None and now >= self.resumes_at
-        try:
-            return provider.usage(fresh=due, now=now)
-        except provider.QuotaUnavailable as error:
-            raise QuotaUnreadable(str(error)) from error
+        envelope, errors = provider.read(self.config.providers, fresh=due, now=now)
+        if len(errors) >= len(self.config.providers):
+            # Every configured source failed: no quota at all, so the whole tick withholds --
+            # the same position as before providers went plural, raising the same exception
+            # with the same sentence for a lone provider.
+            raise QuotaUnreadable("; ".join(str(error) for error in errors.values()))
+        return envelope, errors
+
+    def attribute(self, task, agents):
+        """Which gate a launch of this task runs under: a configured provider, or None.
+
+        `None` withholds the task -- it is unresolvable, resolves to a provider that is not
+        configured, or is an api-key task under the `withhold` policy. `API_KEY` is returned
+        only under the `cap` policy, where api-key tasks form a pseudo-provider gated on the
+        concurrency cap alone. The pacer will not guess which quota a task it cannot attribute
+        would spend.
+        """
+        provider_name = task_provider(task, self.board, agents)
+        if provider_name == API_KEY:
+            return API_KEY if self.config.apikey_policy == "cap" else None
+        return provider_name if provider_name in self.config.providers else None
 
     def read(self):
         """Everything a tick needs before it can decide anything.
@@ -212,7 +259,7 @@ class Pacer:
         needed once the gate is open and there is room to launch.
         """
         now = time.time()
-        usage = self.usage(now)
+        usage, quota_errors = self.usage(now)
         tasks = client.paced_tasks(self.board.scope)
         sessions = {task["id"]: client.sessions_of(task["id"]) for task in tasks}
         running = sum(
@@ -221,10 +268,31 @@ class Pacer:
             for session in sessions[task["id"]]
             if session.get("state") in RUNNING_STATES
         )
+        # Attribution is only needed, and only paid for, when more than one subscription is
+        # paced. With one, every task burns it -- exactly what the pacer assumed before.
+        if len(self.config.providers) > 1:
+            agents = client.agents()
+            task_providers = {
+                task["id"]: self.attribute(task, agents) for task in tasks
+            }
+        else:
+            agents = {}
+            task_providers = {task["id"]: self.config.providers[0] for task in tasks}
         # Read once per tick, not once per attempt: the drag order cannot change
         # mid-tick, and MAX_ATTEMPTS candidates would otherwise mean three fetches.
         sidebar = client.user_settings()
-        return Snapshot(now, usage, parse_windows(usage), tasks, sessions, running, sidebar)
+        return Snapshot(
+            now,
+            usage,
+            windows_by_provider(usage),
+            tasks,
+            sessions,
+            running,
+            sidebar,
+            agents,
+            task_providers,
+            quota_errors,
+        )
 
     # --- 2. decide (the pure parts live in quota.py and workflow.py) ---
 
@@ -236,17 +304,150 @@ class Pacer:
             | stalled_keys(self.stalled, self.config.stall_after)
         )
 
-    def next_action(self, snapshot, queued):
-        """The one Candidate to spend this turn on, or None."""
+    def withheld_reason(self, task, agents):
+        """Why a withheld task cannot be attributed to a gate -- the specific case, actionable.
+
+        The three are genuinely different situations with different fixes, and lumping them as
+        "unresolvable or api-key" left the operator unable to tell which: an api-key task is
+        working as configured, an unmapped agent is a code gap, and an unconfigured provider is
+        a PACER_PROVIDERS omission.
+        """
+        raw = task_provider(task, self.board, agents)
+        if raw == API_KEY:
+            return (
+                "runs on an api-key profile (metered, no subscription window) -- set "
+                "PACER_APIKEY_POLICY=cap to launch it on the concurrency cap alone"
+            )
+        if raw is None:
+            profile = launch_profile(task, self.board)
+            return (
+                f"its agent profile ({profile or 'none set'}) is not in GET /api/v1/agents, "
+                "or its agent maps to no provider (config.AGENT_PROVIDERS)"
+            )
+        return f"burns {raw!r}, which is not in PACER_PROVIDERS={self.config.providers}"
+
+    def note_withheld(self, snapshot):
+        """Say, once per task, that a task is withheld because it cannot be attributed.
+
+        A task mapped to None launches under no gate -- unresolvable, an unconfigured provider,
+        or an api-key task under the `withhold` policy. Silence would leave an operator asking
+        why a card never runs, so it is named the first time it is seen and not again, and
+        forgotten once it leaves the board so a real recurrence is named afresh."""
+        if len(self.config.providers) == 1:
+            return  # single subscription attributes everything; nothing is ever withheld here
+        withheld = {
+            tid for tid, provider in snapshot.task_providers.items() if provider is None
+        }
+        by_id = {task["id"]: task for task in snapshot.tasks}
+        for task_id in withheld - self._noted_withheld:
+            task = by_id.get(task_id, {"id": task_id})
+            log.warning(
+                f"{label(task)!r} withheld: {self.withheld_reason(task, snapshot.agents)}"
+            )
+        self._noted_withheld = withheld
+
+    def source_outage_quiet(self, provider_name, message, now):
+        """Whether to *suppress* this provider's source-outage line this tick.
+
+        First occurrence and every ERROR_RESTATE are said; the identical repeats between are
+        counted silently, exactly as `note_tick_error` does for the whole-tick outage -- a
+        standing Codex outage must not print a line every tick while Claude runs on. The tick
+        record is still written each tick, so the log dataset stays complete."""
+        repeat = self._provider_errors.get(provider_name)
+        if repeat is None or repeat.message != message:
+            self._provider_errors[provider_name] = TickError(
+                message, since=now, told=now
+            )
+            return False
+        repeat.count += 1
+        if now - repeat.told >= ERROR_RESTATE:
+            repeat.told = now
+            return False
+        return True
+
+    def note_provider_recoveries(self, snapshot):
+        """Close out any provider whose source failed and now reads again, once."""
+        for provider_name in list(self._provider_errors):
+            if provider_name not in snapshot.quota_errors:
+                repeat = self._provider_errors.pop(provider_name)
+                log.warning(
+                    f"[{provider_name}] quota source recovered after {repeat.count} "
+                    f"failed read(s): {repeat.message}"
+                )
+
+    def gate_groups(self, snapshot):
+        """The gates this tick decides over: each configured provider, plus the api-key
+        pseudo-provider when the `cap` policy has admitted any api-key task to it."""
+        groups = list(self.config.providers)
+        if API_KEY in snapshot.task_providers.values():
+            groups.append(API_KEY)
+        return groups
+
+    def verdict_for(self, provider_name, snapshot):
+        """One provider's quota verdict.
+
+        The api-key pseudo-provider has no window, so its gate is always open and only the
+        cap holds it. A provider whose source could not be read this tick is blind -- its
+        tasks are withheld, and the other providers are untouched (that is the whole point of
+        reading each source apart).
+        """
+        if provider_name == API_KEY:
+            return Verdict("open", 1.0, "")
+        if provider_name in snapshot.quota_errors:
+            return Verdict(
+                "blind",
+                1.0,
+                f"quota unreadable ({snapshot.quota_errors[provider_name]}) -> WITHHOLDING",
+            )
+        return quota_verdict(
+            snapshot.usage,
+            snapshot.windows.get(provider_name, []),
+            snapshot.now,
+            self.config,
+            provider=provider_name,
+        )
+
+    def running_of(self, provider_name, snapshot):
+        """Turns in flight for one provider, counted from the tasks attributed to it."""
+        return sum(
+            1
+            for task_id, sessions in snapshot.sessions.items()
+            if snapshot.task_providers.get(task_id) == provider_name
+            for session in sessions
+            if session.get("state") in RUNNING_STATES
+        )
+
+    def total_full(self, snapshot):
+        """Whether the shared PACER_CONCURRENCY_TOTAL is reached, counting this tick's spends."""
+        total = self.config.concurrency_total
+        return total is not None and snapshot.running + self._spent >= total
+
+    def next_action(self, provider_name, snapshot, queued):
+        """The one Candidate for this provider to spend a turn on, or None."""
         ordered = ordered_tasks(snapshot.tasks, snapshot.sidebar, self.board.step_ranks)
+        if len(self.config.providers) == 1 and provider_name != API_KEY:
+            # Single subscription: no provider filter, exactly as before providers went plural.
+            return select_action(
+                ordered,
+                snapshot.sessions,
+                queued,
+                self.board,
+                self.skip_keys(snapshot.now),
+            )
         return select_action(
-            ordered, snapshot.sessions, queued, self.board, self.skip_keys(snapshot.now)
+            ordered,
+            snapshot.sessions,
+            queued,
+            self.board,
+            self.skip_keys(snapshot.now),
+            allowed={provider_name},
+            provider_of=lambda task, session: snapshot.task_providers.get(task["id"]),
         )
 
     # --- 3. act ---
 
     def tick(self):
-        """Run one tick. Returns whether the gate was open, for the caller to report."""
+        """Run one tick. Returns whether any provider's gate was open, for the caller."""
         snapshot = self.read()
         self.booked = prune_booked(
             self.booked, snapshot.tasks, snapshot.sessions,
@@ -254,59 +455,139 @@ class Pacer:
         )
         self.failed = prune_failures(self.failed, snapshot.tasks, snapshot.sessions)
         self.stalled = prune_stalls(self.stalled, snapshot.tasks, snapshot.sessions)
-        records = window_records(snapshot.windows, snapshot.now, self.config.alpha)
+        self._spent = 0  # turns spent this tick, for the shared total cap
+
+        self.note_withheld(snapshot)
+        self.note_provider_recoveries(snapshot)
+        groups = self.gate_groups(snapshot)
+        verdicts = {group: self.verdict_for(group, snapshot) for group in groups}
+        # The loop paces itself on the *earliest* reopening: a two-hour Claude pause must not
+        # stop it noticing Codex work it could start now. Both are the min across providers.
+        self.interval = min(
+            (
+                poll_interval(verdict, snapshot.now, self.config)
+                for verdict in verdicts.values()
+            ),
+            default=self.config.interval,
+        )
+        resumes = [v.resumes_at for v in verdicts.values() if v.resumes_at is not None]
+        self.resumes_at = min(resumes) if resumes else None
+
+        # Queue counts cost a WebSocket round trip per idle session; fetch once, and only if
+        # some gate is open with room to act -- so a shut or full board reads none.
+        needs_queue = any(
+            verdicts[group].is_open
+            and self.running_of(group, snapshot) < self.config.concurrency
+            and not self.total_full(snapshot)
+            for group in groups
+        )
+        queued = queued_counts(snapshot.sessions) if needs_queue else {}
+
+        any_open = False
+        for group in groups:
+            any_open = (
+                self.run_provider(group, verdicts[group], snapshot, queued) or any_open
+            )
+        return any_open
+
+    def run_provider(self, provider_name, verdict, snapshot, queued):
+        """Decide and act for one provider. Writes its tick record; returns its gate state.
+
+        This is the pre-plural tick body scoped to a provider: its own verdict, its own
+        running count and cap, its own launchable set, and one launch at most. On a
+        single-provider run it is called once with everything attributed to that provider, so
+        it behaves exactly as the one tick body did before.
+        """
+        now = snapshot.now
+        # No provider tag on a single-subscription run, so its lines stay byte-identical to
+        # what they were; named once two are paced, since then the subject is ambiguous.
+        tag = (
+            ""
+            if len(self.config.providers) == 1 and provider_name != API_KEY
+            else f"[{_provider_label(provider_name)}] "
+        )
+        records = window_records(
+            snapshot.windows.get(provider_name, []), now, self.config.alpha
+        )
+        running = self.running_of(provider_name, snapshot)
         launchable = sum(
             1
             for task in snapshot.tasks
-            if is_launchable(
-                task, snapshot.sessions[task["id"]], self.board, self.skip_keys(snapshot.now)
+            if snapshot.task_providers.get(task["id"]) == provider_name
+            and is_launchable(
+                task, snapshot.sessions[task["id"]], self.board, self.skip_keys(now)
             )
         )
 
-        verdict = quota_verdict(
-            snapshot.usage, snapshot.windows, snapshot.now, self.config
-        )
-        self.interval = poll_interval(verdict, snapshot.now, self.config)
-        self.resumes_at = verdict.resumes_at
-
-        def report(gate, outcome, extra="", warn=False):
-            """The one way a tick ends: say what happened, record it, hand back the gate.
-
-            An open gate's lines all share the headroom opening, so it is written here
-            once; a closed gate's message already reads as a whole sentence.
-            """
-            line = f"{outcome.message}{extra}"
+        def report(gate, outcome, extra="", warn=False, quiet=False):
+            line = f"{tag}{outcome.message}{extra}"
             if gate == "open":
-                line = f"headroom={verdict.headroom:+.3f} open, {line}"
-            (log.warning if warn else log.info)(line)
-            self.log_event(tick_record(
-                snapshot.now, gate, outcome.action, records, snapshot.running, launchable,
-                self.config.concurrency, len(self.booked), outcome.launched,
-                round(self.interval, 1),
-            ))
+                line = f"{tag}headroom={verdict.headroom:+.3f} open, {outcome.message}{extra}"
+            if (
+                not quiet
+            ):  # a standing source outage is counted silently between restates
+                (log.warning if warn else log.info)(line)
+            self.log_event(
+                tick_record(
+                    now,
+                    gate,
+                    outcome.action,
+                    records,
+                    running,
+                    launchable,
+                    self.config.concurrency,
+                    len(self.booked),
+                    outcome.launched,
+                    round(self.interval, 1),
+                    provider=_provider_label(provider_name),
+                )
+            )
             return gate == "open"
 
         if not verdict.is_open:
-            running = f" ({snapshot.running} running)" if verdict.gate == "paused" else ""
-            eta = resume_note(verdict.resumes_at, snapshot.now)
-            # Said alongside the estimate, never on its own: the number only means
-            # anything next to the wait it was derived from, and a tick with no estimate
-            # is one whose interval never moved.
+            running_note = f" ({running} running)" if verdict.gate == "paused" else ""
+            eta = resume_note(verdict.resumes_at, now)
+            # Said alongside the estimate, never on its own: the number only means anything
+            # next to the wait it was derived from.
             soon = f", next tick in {self.interval:.0f}s" if eta else ""
-            return report(verdict.gate, Outcome("withheld", verdict.message),
-                          f"{running}{eta}{soon}")
+            # A source that could not be read is an outage, said once and restated slowly, not
+            # a fresh reason to print every tick; a burn-line pause or a misconfig is not.
+            quiet = provider_name in snapshot.quota_errors and self.source_outage_quiet(
+                provider_name, verdict.message, now
+            )
+            return report(
+                verdict.gate,
+                Outcome("withheld", verdict.message),
+                f"{running_note}{eta}{soon}",
+                quiet=quiet,
+            )
 
         cap = self.config.concurrency
-        if snapshot.running >= cap:
-            return report("open", Outcome("full", f"full ({snapshot.running}/{cap})"))
+        if running >= cap:
+            return report("open", Outcome("full", f"full ({running}/{cap})"))
+        if self.total_full(snapshot):
+            return report(
+                "open",
+                Outcome(
+                    "full",
+                    f"full (total {snapshot.running + self._spent}/"
+                    f"{self.config.concurrency_total})",
+                ),
+            )
 
-        queued = queued_counts(snapshot.sessions)
         for _ in range(MAX_ATTEMPTS):
-            candidate = self.next_action(snapshot, queued)
+            candidate = self.next_action(provider_name, snapshot, queued)
             if candidate is None:
-                held = f", {len(self.failed)} held after a failed launch" if self.failed else ""
-                return report("open", Outcome("nothing", "nothing to launch"),
-                              f" ({snapshot.running}/{cap} running{held})")
+                held = (
+                    f", {len(self.failed)} held after a failed launch"
+                    if self.failed
+                    else ""
+                )
+                return report(
+                    "open",
+                    Outcome("nothing", "nothing to launch"),
+                    f" ({running}/{cap} running{held})",
+                )
             # A drain books against the session that holds the queue, not the task's
             # newest -- a booking naming a session the board never lists is pruned next
             # tick, and the same prompt gets drained twice.
@@ -318,8 +599,12 @@ class Pacer:
             outcome = self.attempt(candidate, key, snapshot)
             if outcome is None:      # refused, no quota spent -- try the next candidate
                 continue
+            if outcome.launched:
+                self._spent += (
+                    1  # counts against the shared total cap for later providers
+                )
             # The occupancy count only means anything when a turn was actually spent.
-            spent = f" ({snapshot.running + 1}/{cap})" if outcome.launched else ""
+            spent = f" ({running + 1}/{cap})" if outcome.launched else ""
             return report("open", outcome, spent)
         return report(
             "open",
@@ -621,11 +906,23 @@ def report_startup(board):
         steps = board.steps[workflow_id]
         for warning in lint_workflow(steps):
             log.warning(f"lint: [{board.name_of(workflow_id)}] {warning}")
-    log.info(f"pacing {settings.url} every {settings.interval}s, "
-             f"{MIN_INTERVAL}-{MAX_INTERVAL}s while withheld "
-             f"(alpha={settings.alpha}, concurrency={settings.concurrency}, "
-             f"provider={settings.provider})"
-             f"\n  log={settings.log_path or '(disabled)'}")
+    providers = settings.providers
+    # `provider=x` for one, so the single-subscription line is unchanged; the plural form,
+    # with the shared cap and the api-key policy that only mean anything then, for more.
+    if len(providers) == 1:
+        gates = f"provider={providers[0]}"
+    else:
+        total = settings.concurrency_total
+        gates = (
+            f"providers={providers}, apikey_policy={settings.apikey_policy}"
+            f"{f', total_cap={total}' if total is not None else ''}"
+        )
+    log.info(
+        f"pacing {settings.url} every {settings.interval}s, "
+        f"{MIN_INTERVAL}-{MAX_INTERVAL}s while withheld "
+        f"(alpha={settings.alpha}, concurrency={settings.concurrency}, {gates})"
+        f"\n  log={settings.log_path or '(disabled)'}"
+    )
     for workflow_id in board.scope:
         steps = board.steps[workflow_id]
         works = sorted(board.name_of(step["id"]) for step in steps
@@ -670,10 +967,18 @@ def main():
         return 1
 
     report_startup(board)
-    pacer.log_event({
-        "t": round(time.time(), 3), "kind": "start", "url": settings.url,
-        "scope": list(board.scope), "interval": settings.interval,
-        "alpha": settings.alpha, "cap": settings.concurrency,
-        "backstop": settings.backstop, "provider": settings.provider,
-    })
+    pacer.log_event(
+        {
+            "t": round(time.time(), 3),
+            "kind": "start",
+            "url": settings.url,
+            "scope": list(board.scope),
+            "interval": settings.interval,
+            "alpha": settings.alpha,
+            "cap": settings.concurrency,
+            "total_cap": settings.concurrency_total,
+            "backstop": settings.backstop,
+            "providers": settings.providers,
+        }
+    )
     pacer.run()

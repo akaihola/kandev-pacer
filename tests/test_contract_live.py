@@ -45,6 +45,7 @@ from kandev_pacer.config import (
     RUNNING_STATES,
     TRANSITION_KINDS,
     WINDOW_DURATIONS,
+    agent_provider,
     settings,
 )
 from kandev_pacer.quota import parse_windows
@@ -253,6 +254,47 @@ def test_session_states_are_the_vocabulary_the_pacer_gates_on(sessions):
         )
 
 
+def test_agents_envelope(live):
+    """`GET /api/v1/agents`: the profile -> agent -> billing map two-subscription pacing reads.
+
+    New in the two-subscriptions change, and undocumented like the rest -- so it earns a
+    contract row. `billing_type` decides whether a task is paced at all, and the agent name is
+    what config.agent_provider maps to a usage provider, so a rename of either goes blind the
+    same quiet way a renamed session state does.
+    """
+    where = "GET /api/v1/agents"
+    response = client.get("/api/v1/agents") or {}
+    require(response, ["agents"], where)
+    named = set()
+    for agent in response["agents"]:
+        require(agent, ["name", "profiles"], f"{where} [agent]")
+        named.add(agent["name"])
+        for profile in agent.get("profiles") or []:
+            require(profile, ["id", "billing_type"], f"{where} [profile]")
+    subscription_agents = {
+        agent["name"]
+        for agent in response["agents"]
+        for profile in agent.get("profiles") or []
+        if profile.get("billing_type") == "subscription"
+    }
+    unmapped = {name for name in subscription_agents if agent_provider(name) is None}
+    assert not unmapped, (
+        f"{where}: subscription agents {sorted(unmapped)} map to no provider "
+        "(config.AGENT_PROVIDERS) -- their tasks would be withheld as unresolvable"
+    )
+
+
+def test_agents_maps_a_profile_to_its_billing(live):
+    """client.agents() reads the endpoint into the shape the resolver consumes."""
+    mapped = client.agents()
+    if not mapped:
+        pytest.skip("instance defines no agent profiles")
+    for info in mapped.values():
+        assert set(info) >= {"agent", "billing_type"}, (
+            f"client.agents: entry {info} is missing the keys task_provider reads"
+        )
+
+
 def test_user_settings_envelope(live):
     """The sidebar keys selection.py orders the board by.
 
@@ -299,6 +341,40 @@ def test_provider_usage_envelope():
             f"provider usage: {window['label']} utilization is {window['consumed_frac']} "
             "-- no longer a percentage?"
         )
+
+
+def test_codex_usage_envelope():
+    """The Codex (openai) usage read, the second quota source.
+
+    Read-only and quota-free, like the Anthropic one: it reports the windows, it does not
+    consume them. Skipped unless the machine has Codex credentials, since a machine that never
+    logged into Codex is not a contract break. The shape asserted is what `codex_windows`
+    depends on -- a `rate_limit` object whose windows carry `used_percent` and a duration.
+    """
+    if not Path(settings.codex_credentials_path).exists():
+        pytest.skip(f"no Codex credentials at {settings.codex_credentials_path}")
+    tokens = provider.read_codex_credentials(settings.codex_credentials_path)
+    payload = provider._codex_get(
+        provider.codex_access_token(tokens, time.time()), tokens.get("account_id")
+    )
+    require(payload, ["rate_limit"], "GET codex/usage")
+    rate = payload["rate_limit"]
+    windows = [
+        rate[slot] for slot in ("primary_window", "secondary_window") if rate.get(slot)
+    ]
+    if not windows:
+        pytest.skip("Codex account reports no rate-limit windows yet")
+    for window in windows:
+        require(
+            window, ["used_percent", "limit_window_seconds"], "codex/usage [window]"
+        )
+        assert 0 <= window["used_percent"] <= 150, (
+            f"codex/usage: used_percent is {window['used_percent']} -- no longer a percentage?"
+        )
+    parsed = parse_windows(
+        provider.codex_envelope(payload, time.time()), provider="openai"
+    )
+    assert parsed, "codex/usage: nothing parsed from a payload that carried a window"
 
 
 # --- WebSocket: are the action names still recognized ---

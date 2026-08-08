@@ -62,9 +62,16 @@ def one_session(sid, state):
     return [sess(sid, state)]
 
 
-def board_task(tid, step_id, title="T", created="1"):
-    """A task as the fake board serves it: titled, and owned by workflow "wf"."""
-    return {**task(tid, step_id, created=created), "title": title, "workflow_id": "wf"}
+def board_task(tid, step_id, title="T", created="1", profile=None):
+    """A task as the fake board serves it: titled, and owned by workflow "wf".
+
+    `profile` sets metadata.agent_profile_id, which is how a two-provider run attributes the
+    task to a subscription.
+    """
+    t = {**task(tid, step_id, created=created), "title": title, "workflow_id": "wf"}
+    if profile:
+        t["metadata"] = {"agent_profile_id": profile}
+    return t
 
 
 # --- workflow fixtures: the boards these tests run against ---
@@ -141,6 +148,15 @@ class FakeBoard:
         self.provider = "anthropic"
         self.usage_reads = []  # the `fresh` flag of every quota read, for counting them
         self.tasks_elsewhere = []   # tasks belonging to workflows outside the scope
+        # The Codex (openai) source, for two-subscription tests. Default: 5% against a
+        # half-elapsed 7-day window -> headroom positive, its gate open. Only read when a
+        # provider list includes "openai". `codex_error`, when set, makes its read fail.
+        self.codex_pct = 5
+        self.codex_reset_in = 302400  # half of 604800: e = 0.5
+        self.codex_error = None
+        self.codex_reads = []
+        # profile id -> {"agent", "billing_type"[, "model"]}, what GET /api/v1/agents answers.
+        self.agents_map = {}
 
     def load(self, tasks, sessions, queues):
         self.tasks, self.sessions, self.queues = tasks, dict(sessions), dict(queues)
@@ -154,6 +170,30 @@ class FakeBoard:
             {"label": "5-hour", "utilization_pct": self.usage_pct,
              "reset_at": _iso_in(9000)}]}}]}
 
+    def codex_usage(self, fresh=False, now=None):
+        """The second source, faked at provider.codex_usage the way `usage` fakes the first."""
+        self.codex_reads.append(fresh)
+        if self.codex_error is not None:
+            raise provider.QuotaUnavailable(self.codex_error)
+        return {
+            "agents": [
+                {
+                    "agent_id": "codex-acp",
+                    "usage": {
+                        "provider": "openai",
+                        "windows": [
+                            {
+                                "label": "7-day",
+                                "utilization_pct": self.codex_pct,
+                                "reset_at": _iso_in(self.codex_reset_in),
+                                "duration_s": 604800,
+                            }
+                        ],
+                    },
+                }
+            ]
+        }
+
     # --- REST ---
 
     def get(self, path):
@@ -166,6 +206,22 @@ class FakeBoard:
             return {"tasks": self.tasks}
         if path.endswith("/tasks"):        # any other workflow: the out-of-scope ones
             return {"tasks": self.tasks_elsewhere}
+        if path == "/api/v1/agents":
+            return {
+                "agents": [
+                    {
+                        "name": info["agent"],
+                        "profiles": [
+                            {
+                                "id": pid,
+                                "billing_type": info.get("billing_type"),
+                                "model": info.get("model"),
+                            }
+                        ],
+                    }
+                    for pid, info in self.agents_map.items()
+                ]
+            }
         if path == "/api/v1/user/settings":
             return {"settings": self.sidebar}
         if "/sessions" in path:
@@ -243,5 +299,6 @@ def board(monkeypatch):
     fake = FakeBoard()
     monkeypatch.setattr(client, "get", fake.get)
     monkeypatch.setattr(provider, "usage", fake.usage)
+    monkeypatch.setattr(provider, "codex_usage", fake.codex_usage)
     monkeypatch.setattr(websocket, "create_connection", fake.connect)
     return fake
