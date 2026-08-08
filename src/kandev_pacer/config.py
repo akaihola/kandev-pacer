@@ -5,7 +5,10 @@ sets per run. The constants below it are what kandev calls things -- not knobs, 
 changing one is a code change, not a configuration change.
 """
 
+import os
+import tomllib
 from pathlib import Path
+from typing import Any
 
 from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings
@@ -182,7 +185,29 @@ class Settings(BaseSettings):
         return value
 
 
-settings = Settings()
+CONFIG_FIELDS = {
+    field.alias: name for name, field in Settings.model_fields.items()
+}
+DEFAULT_CONFIG_PATH = Path.home() / ".config" / "kandev-pacer" / "config.toml"
+
+
+def load_settings(config_path=None, overrides: dict[str, Any] | None = None):
+    """Load TOML, environment and command-line values in increasing precedence."""
+    values = {}
+    path = Path(config_path) if config_path else DEFAULT_CONFIG_PATH
+    if path.is_file():
+        with path.open("rb") as file:
+            values.update({
+                Settings.model_fields[name].alias: value
+                for name, value in tomllib.load(file).get("kandev-pacer", {}).items()
+                if name in Settings.model_fields
+            })
+    values.update({key: value for key, value in os.environ.items() if key in CONFIG_FIELDS})
+    values.update(overrides or {})
+    return Settings(**values)  # ty: ignore[invalid-argument-type]
+
+
+settings = load_settings()
 """Read once, at import, so a bad value stops the pacer before it launches anything.
 
 Modules read attributes off this object rather than importing values, so a test can

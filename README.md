@@ -73,8 +73,13 @@ the workflows it is pacing and the ones it is not, with the reason, at startup a
 
 ## Configuration
 
-All configuration is environment variables, validated at startup — a bad value stops the
-pacer with the variable's name in the message rather than failing hours later.
+Configuration is read from `~/.config/kandev-pacer/config.toml`, environment variables,
+and command-line options, in that precedence order (later sources win). All values are
+validated at startup — a bad value stops the pacer with its name in the message.
+
+The TOML file uses a `[kandev-pacer]` table and field names such as `interval` and
+`concurrency`. `--config PATH` selects another file; every setting also has a matching
+long option such as `--interval` and `--concurrency`.
 
 | variable | default | what it does |
 | --- | --- | --- |
