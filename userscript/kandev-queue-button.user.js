@@ -3,8 +3,8 @@
 // @description  Adds a "Queue" button beside the composer's submit button. Parks the
 //               typed prompt on the session's message queue instead of starting a turn,
 //               so kandev-pacer decides when the quota gets spent.
-// @version      1.1
-// @match        *://*:38429/*
+// @version      1.1.1
+// @include      /^[^:]*?:\/\/[^\/]*?:38429\/.*?$/
 // @grant        none
 // @run-at       document-idle
 // ==/UserScript==
