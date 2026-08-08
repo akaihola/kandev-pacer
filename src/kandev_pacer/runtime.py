@@ -21,11 +21,13 @@ from . import client, progress, provider
 from .config import (
     API_KEY,
     BLOCKED_STATE,
+    CONFIG_FIELDS,
     DRAINABLE_STATES,
     MAX_ATTEMPTS,
     MAX_INTERVAL,
     MIN_INTERVAL,
     RUNNING_STATES,
+    load_settings,
     settings,
 )
 from .quota import (
@@ -938,14 +940,35 @@ def main():
     parser = argparse.ArgumentParser(
         prog="kandev-pacer",
         description="Pace kandev task launches against the subscription quota. "
-                    "Configured entirely through the environment; see the README.",
+                    "Configuration: TOML file, environment variables, or command line.",
     )
+    parser.add_argument(
+        "--config", type=Path, help="TOML configuration file (default: %(default)s)",
+        default=None,
+    )
+    for alias, name in CONFIG_FIELDS.items():
+        parser.add_argument(
+            f"--{name.replace('_', '-')}", dest=name, default=argparse.SUPPRESS,
+            help=f"override {alias}",
+        )
     parser.add_argument(
         "--dump-order",
         action="store_true",
         help="print the queue launches will work down, then exit (spends no quota)",
     )
     args = parser.parse_args()
+    aliases = {name: alias for alias, name in CONFIG_FIELDS.items()}
+    overrides = {
+        aliases.get(name, name): value
+        for name, value in vars(args).items()
+    }
+    config_path = overrides.pop("config")
+    overrides.pop("dump_order", None)
+    try:
+        loaded = load_settings(config_path, overrides)
+    except (OSError, ValueError, TypeError) as error:
+        parser.error(str(error))
+    settings.__dict__.update(loaded.__dict__)
     # No timestamps: the pacing lines are read live, and the JSONL log is what carries
     # time. `journalctl` stamps them anyway when this runs as a unit.
     logging.basicConfig(level=logging.INFO, format="%(message)s")
