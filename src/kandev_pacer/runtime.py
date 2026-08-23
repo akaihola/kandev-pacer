@@ -14,8 +14,9 @@ import argparse
 import json
 import logging
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
+from typing import NamedTuple
 
 from . import client, progress, provider
 from .config import (
@@ -32,9 +33,11 @@ from .config import (
 )
 from .quota import (
     Verdict,
+    class_windows,
     poll_interval,
     quota_verdict,
     resume_note,
+    scope_names,
     tick_record,
     window_records,
     windows_by_provider,
@@ -49,6 +52,7 @@ from .selection import (
     is_wip_admitted,
     launch_profile,
     launch_target,
+    matched_scopes,
     note_stall,
     ordered_tasks,
     pick_intent,
@@ -59,6 +63,7 @@ from .selection import (
     stalled_keys,
     stalled_out,
     task_agent_profile,
+    task_models,
     task_provider,
     uses_manual_order,
 )
@@ -90,6 +95,24 @@ class Snapshot:
     # provider -> the QuotaUnavailable of a source that could not be read this tick. A provider
     # in here has a shut gate; the others are unaffected. Empty when every source answered.
     quota_errors: dict
+    # task id -> the scope class the task's launch gates in: the scoped window names its
+    # models can spend (("Fable",)), or every scope of its provider when the model is
+    # unknown. Empty tuples throughout when no payload carries a scoped window.
+    task_scopes: dict = field(default_factory=dict)
+
+
+class GateGroup(NamedTuple):
+    """One gate this tick decides over: a provider, and the model scopes it gates on.
+
+    A provider whose payload carries a model-scoped window (the Fable weekly limit)
+    splits into scope classes: `scopes` holds every scoped name for the all-windows
+    class -- the only class when no model information says otherwise -- and is empty
+    for the class of the shared windows alone. With no scoped window in the payload
+    there is one group per provider with empty scopes: the pre-scope pacer, unchanged.
+    """
+
+    provider: str
+    scopes: tuple = ()
 
 
 def label(task):
@@ -99,6 +122,15 @@ def label(task):
 def _provider_label(provider_name):
     """A gate's name for the log and the paused line -- the provider, or "api-key"."""
     return "api-key" if provider_name == API_KEY else provider_name
+
+
+def _group_label(group, split):
+    """The gate's name for the log lines: the provider, with its scope class appended
+    only when the provider actually split into classes -- an unsplit run reads as before."""
+    name = _provider_label(group.provider)
+    if split and group.scopes:
+        return f"{name} ({'+'.join(group.scopes)})"
+    return name
 
 
 def queued_counts(task_sessions):
@@ -262,6 +294,7 @@ class Pacer:
         """
         now = time.time()
         usage, quota_errors = self.usage(now)
+        windows = windows_by_provider(usage)
         tasks = client.paced_tasks(self.board.scope)
         sessions = {task["id"]: client.sessions_of(task["id"]) for task in tasks}
         running = sum(
@@ -270,6 +303,7 @@ class Pacer:
             for session in sessions[task["id"]]
             if session.get("state") in RUNNING_STATES
         )
+        scoped = {name: scope_names(ws) for name, ws in windows.items()}
         # Attribution is only needed, and only paid for, when more than one subscription is
         # paced. With one, every task burns it -- exactly what the pacer assumed before.
         if len(self.config.providers) > 1:
@@ -278,15 +312,25 @@ class Pacer:
                 task["id"]: self.attribute(task, agents) for task in tasks
             }
         else:
-            agents = {}
+            # A model-scoped window makes the profile's model matter even with one
+            # subscription. agents() degrades to {} unreadable, which classes every
+            # task on all windows -- stricter, never looser.
+            agents = client.agents() if any(scoped.values()) else {}
             task_providers = {task["id"]: self.config.providers[0] for task in tasks}
+        task_scopes = {
+            task["id"]: matched_scopes(
+                task_models(task, self.board, agents),
+                scoped.get(task_providers[task["id"]]) or (),
+            )
+            for task in tasks
+        }
         # Read once per tick, not once per attempt: the drag order cannot change
         # mid-tick, and MAX_ATTEMPTS candidates would otherwise mean three fetches.
         sidebar = client.user_settings()
         return Snapshot(
             now,
             usage,
-            windows_by_provider(usage),
+            windows,
             tasks,
             sessions,
             running,
@@ -294,6 +338,7 @@ class Pacer:
             agents,
             task_providers,
             quota_errors,
+            task_scopes,
         )
 
     # --- 2. decide (the pure parts live in quota.py and workflow.py) ---
@@ -378,35 +423,49 @@ class Pacer:
                 )
 
     def gate_groups(self, snapshot):
-        """The gates this tick decides over: each configured provider, plus the api-key
-        pseudo-provider when the `cap` policy has admitted any api-key task to it."""
-        groups = list(self.config.providers)
+        """The gates this tick decides over.
+
+        Each configured provider, split into its scope classes when its payload carries a
+        model-scoped window: the all-windows class always exists (it is today's sole
+        class, and where every unknown lands), and each distinct class its tasks resolve
+        to joins it. Plus the api-key pseudo-provider when the `cap` policy has admitted
+        any api-key task to it."""
+        groups = []
+        for provider_name in self.config.providers:
+            all_scopes = scope_names(snapshot.windows.get(provider_name, []))
+            classes = {all_scopes} | {
+                scopes
+                for task_id, scopes in snapshot.task_scopes.items()
+                if snapshot.task_providers.get(task_id) == provider_name
+            }
+            groups += [GateGroup(provider_name, scopes) for scopes in sorted(classes)]
         if API_KEY in snapshot.task_providers.values():
-            groups.append(API_KEY)
+            groups.append(GateGroup(API_KEY))
         return groups
 
-    def verdict_for(self, provider_name, snapshot):
-        """One provider's quota verdict.
+    def verdict_for(self, group, snapshot):
+        """One gate group's quota verdict, over exactly the windows its class can spend.
 
         The api-key pseudo-provider has no window, so its gate is always open and only the
         cap holds it. A provider whose source could not be read this tick is blind -- its
         tasks are withheld, and the other providers are untouched (that is the whole point of
-        reading each source apart).
+        reading each source apart). The backstop applies per class for free: a breached
+        Fable window is only in the Fable class's subset, so it stops only Fable tasks.
         """
-        if provider_name == API_KEY:
+        if group.provider == API_KEY:
             return Verdict("open", 1.0, "")
-        if provider_name in snapshot.quota_errors:
+        if group.provider in snapshot.quota_errors:
             return Verdict(
                 "blind",
                 1.0,
-                f"quota unreadable ({snapshot.quota_errors[provider_name]}) -> WITHHOLDING",
+                f"quota unreadable ({snapshot.quota_errors[group.provider]}) -> WITHHOLDING",
             )
         return quota_verdict(
             snapshot.usage,
-            snapshot.windows.get(provider_name, []),
+            class_windows(snapshot.windows.get(group.provider, []), group.scopes),
             snapshot.now,
             self.config,
-            provider=provider_name,
+            provider=group.provider,
         )
 
     def running_of(self, provider_name, snapshot):
@@ -424,11 +483,15 @@ class Pacer:
         total = self.config.concurrency_total
         return total is not None and snapshot.running + self._spent >= total
 
-    def next_action(self, provider_name, snapshot, queued):
-        """The one Candidate for this provider to spend a turn on, or None."""
+    def next_action(self, snapshot, queued, allowed):
+        """The one Candidate for a provider to spend a turn on, or None.
+
+        `allowed` is the set of the provider's gate groups whose gate is open, so queue
+        order picks among every task whose class may run; None is the single-subscription,
+        single-class path with no filter, exactly as before providers went plural.
+        """
         ordered = ordered_tasks(snapshot.tasks, snapshot.sidebar, self.board.step_ranks)
-        if len(self.config.providers) == 1 and provider_name != API_KEY:
-            # Single subscription: no provider filter, exactly as before providers went plural.
+        if allowed is None:
             return select_action(
                 ordered,
                 snapshot.sessions,
@@ -442,14 +505,17 @@ class Pacer:
             queued,
             self.board,
             self.skip_keys(snapshot.now),
-            allowed={provider_name},
-            provider_of=lambda task, session: snapshot.task_providers.get(task["id"]),
+            allowed=allowed,
+            provider_of=lambda task, session: GateGroup(
+                snapshot.task_providers.get(task["id"]),
+                snapshot.task_scopes.get(task["id"], ()),
+            ),
         )
 
     # --- 3. act ---
 
     def tick(self):
-        """Run one tick. Returns whether any provider's gate was open, for the caller."""
+        """Run one tick. Returns whether any gate was open, for the caller."""
         snapshot = self.read()
         self.booked = prune_booked(
             self.booked, snapshot.tasks, snapshot.sessions,
@@ -464,7 +530,7 @@ class Pacer:
         groups = self.gate_groups(snapshot)
         verdicts = {group: self.verdict_for(group, snapshot) for group in groups}
         # The loop paces itself on the *earliest* reopening: a two-hour Claude pause must not
-        # stop it noticing Codex work it could start now. Both are the min across providers.
+        # stop it noticing Codex work it could start now. Both are the min across gates.
         self.interval = min(
             (
                 poll_interval(verdict, snapshot.now, self.config)
@@ -479,52 +545,72 @@ class Pacer:
         # some gate is open with room to act -- so a shut or full board reads none.
         needs_queue = any(
             verdicts[group].is_open
-            and self.running_of(group, snapshot) < self.config.concurrency
+            and self.running_of(group.provider, snapshot) < self.config.concurrency
             and not self.total_full(snapshot)
             for group in groups
         )
         queued = queued_counts(snapshot.sessions) if needs_queue else {}
 
         any_open = False
-        for group in groups:
+        for provider_name in dict.fromkeys(group.provider for group in groups):
+            class_verdicts = {
+                group: verdicts[group]
+                for group in groups
+                if group.provider == provider_name
+            }
             any_open = (
-                self.run_provider(group, verdicts[group], snapshot, queued) or any_open
+                self.run_provider(provider_name, class_verdicts, snapshot, queued)
+                or any_open
             )
         return any_open
 
-    def run_provider(self, provider_name, verdict, snapshot, queued):
-        """Decide and act for one provider. Writes its tick record; returns its gate state.
+    def run_provider(self, provider_name, verdicts, snapshot, queued):
+        """Decide and act for one provider. Writes one tick record per scope class,
+        spends one turn at most; returns whether any class's gate was open.
 
-        This is the pre-plural tick body scoped to a provider: its own verdict, its own
-        running count and cap, its own launchable set, and one launch at most. On a
-        single-provider run it is called once with everything attributed to that provider, so
-        it behaves exactly as the one tick body did before.
+        This is the pre-plural tick body scoped to a provider: its own running count and
+        cap, and one launch at most. On a run without a model-scoped window it is called
+        with one class holding every window, so it behaves exactly as before. With one,
+        each class gets its own verdict and its own record, but the classes still share
+        the provider's cap and its single turn per tick -- unlike two providers, they
+        spend the same subscription and the same machine, so the concurrency-sizing
+        argument for one launch per re-read still applies. Queue order picks among the
+        tasks of every open class.
         """
         now = snapshot.now
-        # No provider tag on a single-subscription run, so its lines stay byte-identical to
-        # what they were; named once two are paced, since then the subject is ambiguous.
-        tag = (
-            ""
-            if len(self.config.providers) == 1 and provider_name != API_KEY
-            else f"[{_provider_label(provider_name)}] "
-        )
-        records = window_records(
-            snapshot.windows.get(provider_name, []), now, self.config.alpha
-        )
-        running = self.running_of(provider_name, snapshot)
-        launchable = sum(
-            1
-            for task in snapshot.tasks
-            if snapshot.task_providers.get(task["id"]) == provider_name
-            and is_launchable(
-                task, snapshot.sessions[task["id"]], self.board, self.skip_keys(now)
-            )
+        # No tag on a single-subscription, single-class run, so its lines stay
+        # byte-identical to what they were; named once the subject is ambiguous.
+        split = len(verdicts) > 1
+        plain = (
+            len(self.config.providers) == 1
+            and provider_name != API_KEY
+            and not split
         )
 
-        def report(gate, outcome, extra="", warn=False, quiet=False):
-            line = f"{tag}{outcome.message}{extra}"
+        def tag_of(group):
+            return "" if plain else f"[{_group_label(group, split)}] "
+
+        running = self.running_of(provider_name, snapshot)
+
+        def launchable_of(group):
+            return sum(
+                1
+                for task in snapshot.tasks
+                if snapshot.task_providers.get(task["id"]) == provider_name
+                and snapshot.task_scopes.get(task["id"], ()) == group.scopes
+                and is_launchable(
+                    task, snapshot.sessions[task["id"]], self.board, self.skip_keys(now)
+                )
+            )
+
+        def report(group, gate, outcome, extra="", warn=False, quiet=False):
+            verdict = verdicts[group]
+            line = f"{tag_of(group)}{outcome.message}{extra}"
             if gate == "open":
-                line = f"{tag}headroom={verdict.headroom:+.3f} open, {outcome.message}{extra}"
+                line = (
+                    f"{tag_of(group)}headroom={verdict.headroom:+.3f} open, "
+                    f"{outcome.message}{extra}"
+                )
             if (
                 not quiet
             ):  # a standing source outage is counted silently between restates
@@ -534,19 +620,30 @@ class Pacer:
                     now,
                     gate,
                     outcome.action,
-                    records,
+                    window_records(
+                        class_windows(
+                            snapshot.windows.get(provider_name, []), group.scopes
+                        ),
+                        now,
+                        self.config.alpha,
+                    ),
                     running,
-                    launchable,
+                    launchable_of(group),
                     self.config.concurrency,
                     len(self.booked),
                     outcome.launched,
                     round(self.interval, 1),
                     provider=_provider_label(provider_name),
+                    scope="+".join(group.scopes) or None,
                 )
             )
             return gate == "open"
 
-        if not verdict.is_open:
+        open_groups = []
+        for group, verdict in verdicts.items():
+            if verdict.is_open:
+                open_groups.append(group)
+                continue
             running_note = f" ({running} running)" if verdict.gate == "paused" else ""
             eta = resume_note(verdict.resumes_at, now)
             # Said alongside the estimate, never on its own: the number only means anything
@@ -557,39 +654,51 @@ class Pacer:
             quiet = provider_name in snapshot.quota_errors and self.source_outage_quiet(
                 provider_name, verdict.message, now
             )
-            return report(
+            report(
+                group,
                 verdict.gate,
                 Outcome("withheld", verdict.message),
                 f"{running_note}{eta}{soon}",
                 quiet=quiet,
             )
+        if not open_groups:
+            return False
 
         cap = self.config.concurrency
         if running >= cap:
-            return report("open", Outcome("full", f"full ({running}/{cap})"))
+            for group in open_groups:
+                report(group, "open", Outcome("full", f"full ({running}/{cap})"))
+            return True
         if self.total_full(snapshot):
-            return report(
-                "open",
-                Outcome(
-                    "full",
-                    f"full (total {snapshot.running + self._spent}/"
-                    f"{self.config.concurrency_total})",
-                ),
-            )
+            for group in open_groups:
+                report(
+                    group,
+                    "open",
+                    Outcome(
+                        "full",
+                        f"full (total {snapshot.running + self._spent}/"
+                        f"{self.config.concurrency_total})",
+                    ),
+                )
+            return True
 
+        allowed = None if plain else set(open_groups)
         for _ in range(MAX_ATTEMPTS):
-            candidate = self.next_action(provider_name, snapshot, queued)
+            candidate = self.next_action(snapshot, queued, allowed)
             if candidate is None:
                 held = (
                     f", {len(self.failed)} held after a failed launch"
                     if self.failed
                     else ""
                 )
-                return report(
-                    "open",
-                    Outcome("nothing", "nothing to launch"),
-                    f" ({running}/{cap} running{held})",
-                )
+                for group in open_groups:
+                    report(
+                        group,
+                        "open",
+                        Outcome("nothing", "nothing to launch"),
+                        f" ({running}/{cap} running{held})",
+                    )
+                return True
             # A drain books against the session that holds the queue, not the task's
             # newest -- a booking naming a session the board never lists is pruned next
             # tick, and the same prompt gets drained twice.
@@ -605,15 +714,43 @@ class Pacer:
                 self._spent += (
                     1  # counts against the shared total cap for later providers
                 )
+            # The outcome belongs to the class of the task it acted on; the other open
+            # classes had their shot at the shared turn and queue order gave it away, and
+            # their records say so -- "yielded", so the gate=open, action=nothing,
+            # launchable>0 filter stays free of false positives.
+            acted = next(
+                (
+                    group
+                    for group in open_groups
+                    if group.scopes
+                    == snapshot.task_scopes.get(candidate.task["id"], ())
+                ),
+                open_groups[0],
+            )
             # The occupancy count only means anything when a turn was actually spent.
             spent = f" ({running + 1}/{cap})" if outcome.launched else ""
-            return report("open", outcome, spent)
-        return report(
-            "open",
-            Outcome("exhausted",
-                    f"{MAX_ATTEMPTS} candidates rejected this tick -> waiting for the next one"),
-            warn=True,
-        )
+            report(acted, "open", outcome, spent)
+            for group in open_groups:
+                if group != acted:
+                    report(
+                        group,
+                        "open",
+                        Outcome(
+                            "yielded",
+                            f"this tick's turn went to {label(candidate.task)!r}",
+                        ),
+                    )
+            return True
+        for group in open_groups:
+            report(
+                group,
+                "open",
+                Outcome("exhausted",
+                        f"{MAX_ATTEMPTS} candidates rejected this tick "
+                        "-> waiting for the next one"),
+                warn=True,
+            )
+        return True
 
     def attempt(self, candidate, key, snapshot):
         """Try one action. Returns the Outcome for the caller to report, or None.

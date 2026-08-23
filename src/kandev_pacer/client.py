@@ -63,8 +63,9 @@ def agents():
 
     The one call that says which subscription a task will burn: a task carries an
     `agent_profile_id`, and this maps it to the agent that runs it and how that agent is
-    billed. Only fetched when more than one provider is being paced -- with one, every task
-    burns it and no attribution is needed.
+    billed. Fetched when more than one provider is paced, and when a model-scoped window
+    (the Fable weekly limit) makes the profile's model matter even with one -- otherwise
+    every task burns the one subscription and no attribution is needed.
 
     Unreadable answers `{}`, which the resolver reads as "cannot say", so a hiccup here
     withholds the tasks it cannot attribute rather than stopping the tick.
@@ -81,6 +82,8 @@ def agents():
             "agent": agent.get("name"),
             "billing_type": profile.get("billing_type"),
             "model": profile.get("model"),
+            "fallback_model": profile.get("fallback_model"),
+            "auto_fallback": profile.get("auto_fallback"),
         }
         for agent in response.get("agents") or []
         for profile in agent.get("profiles") or []

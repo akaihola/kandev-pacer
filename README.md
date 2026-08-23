@@ -219,10 +219,14 @@ byte-identical to before. The full derivation, and why one process rather than t
 The Claude subscription carries a third window besides the 5-hour and 7-day pair: a weekly
 quota that only the Fable 5 model spends, capped at half the weekly budget. The pacer
 already reads it — any `weekly_scoped` limit in the usage payload becomes a `7-day (Fable)`
-window — and today it gates **every** Anthropic task on the worst window, so a tight Fable
-window withholds work on models that cannot spend it. [`docs/fable-window.md`] documents
-the verified quota rules and plans the fix: gate each task only on the windows its launch
-can spend. Not implemented yet.
+window — and it gates each task on exactly the windows its launch can spend. A task whose
+agent profile's model (or enabled fallback) contains the scoped window's model name —
+`claude-fable-5[1m]` contains `fable` — gates on all three windows; any other Claude task
+gates on the shared pair alone, so a tight Fable window no longer withholds work on models
+that cannot spend it. A task whose model the pacer cannot see gates on all windows:
+stricter, never looser. The two classes still share the provider's concurrency cap and its
+one launch per tick, and queue order picks among the tasks whose class is open.
+[`docs/fable-window.md`] documents the verified quota rules and the design.
 
 ## Multiple kandev instances
 
