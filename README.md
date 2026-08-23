@@ -214,6 +214,16 @@ A single provider (the default) takes none of this path: every task burns it, on
 byte-identical to before. The full derivation, and why one process rather than two, is in
 [`docs/two-subscriptions.md`].
 
+## The Fable weekly window
+
+The Claude subscription carries a third window besides the 5-hour and 7-day pair: a weekly
+quota that only the Fable 5 model spends, capped at half the weekly budget. The pacer
+already reads it — any `weekly_scoped` limit in the usage payload becomes a `7-day (Fable)`
+window — and today it gates **every** Anthropic task on the worst window, so a tight Fable
+window withholds work on models that cannot spend it. [`docs/fable-window.md`] documents
+the verified quota rules and plans the fix: gate each task only on the windows its launch
+can spend. Not implemented yet.
+
 ## Multiple kandev instances
 
 The pacer drives one kandev instance. Splitting sensitive projects across several instances —
@@ -313,5 +323,6 @@ at 0.84.1, which leaves that branch of the startup lint unverifiable from outsid
 [`userscript/kandev-queue-button.user.js`]: userscript/kandev-queue-button.user.js
 [`docs/queueing-user-prompts.md`]: docs/queueing-user-prompts.md
 [`docs/two-subscriptions.md`]: docs/two-subscriptions.md
+[`docs/fable-window.md`]: docs/fable-window.md
 [`docs/isolation-and-federation.md`]: docs/isolation-and-federation.md
 [kdlbs/kandev#1669]: https://github.com/kdlbs/kandev/issues/1669
