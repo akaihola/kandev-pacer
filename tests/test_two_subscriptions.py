@@ -90,6 +90,8 @@ def test_agents_maps_profiles_to_their_agent_and_billing(board):
         "agent": "claude-acp",
         "billing_type": "subscription",
         "model": "opus",
+        "fallback_model": None,
+        "auto_fallback": None,
     }
     assert mapped["p-hermes"]["billing_type"] == "api_key"
 

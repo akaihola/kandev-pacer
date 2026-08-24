@@ -1,10 +1,10 @@
 # Pacing the Fable 5 weekly window
 
-> **Status: investigation and plan.** Investigated 2026-08-23. Nothing in this document is
-> implemented yet. Today the pacer gates every Anthropic task on the *worst* window,
-> and that includes the Fable window. This document shows why that loses value, and it
-> plans the change that fixes it. Evidence sources are in the
-> [appendix](#appendix-how-this-was-checked).
+> **Status: implemented.** Investigated 2026-08-23; the design below shipped 2026-08-24
+> (see `tests/test_fable_window.py` for the acceptance cases). Before the change the pacer
+> gated every Anthropic task on the *worst* window, and that included the Fable window.
+> This document shows why that lost value, and it plans the change — now in place — that
+> fixes it. Evidence sources are in the [appendix](#appendix-how-this-was-checked).
 
 ## Background for new readers
 

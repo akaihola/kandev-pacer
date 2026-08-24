@@ -32,6 +32,25 @@ def worst_headroom(windows, now, alpha=1.0):
     )
 
 
+def scope_names(windows):
+    """The model scopes among these windows, e.g. `("Fable",)`; empty when none is scoped."""
+    return tuple(sorted({window["scope"] for window in windows if window.get("scope")}))
+
+
+def class_windows(windows, scopes):
+    """The window subset one scope class gates on.
+
+    Every shared window -- each model spends those -- plus the scoped windows whose model
+    the class can run. A scoped window whose model name the payload leaves out reads as
+    shared, so every class gates on it: over-strict, which is the safe direction.
+    """
+    return [
+        window
+        for window in windows
+        if not window.get("scope") or window["scope"] in scopes
+    ]
+
+
 def window_resume_at(window, now, alpha=1.0):
     """When this window's headroom reaches 0, assuming nothing more is consumed.
 
@@ -190,6 +209,7 @@ def tick_record(
     launched=None,
     interval=None,
     provider=None,
+    scope=None,
 ):
     return {
         "t": round(now, 3),
@@ -198,6 +218,10 @@ def tick_record(
         # question the record answers -- gate=open, action=nothing, launchable>0 -- has only
         # one subject; named once two are paced, so the same one-line filter still answers it.
         "provider": provider,
+        # Which of the provider's scope classes this record is about: the scoped window
+        # names the class gates on ("Fable"), or None for the class of every shared window
+        # -- which is the whole provider whenever the payload has no scoped window.
+        "scope": scope,
         "gate": gate,
         "action": action,
         "wh": min((window["h"] for window in window_recs), default=1.0),
@@ -234,6 +258,7 @@ def _internal_window(window):
         return None
     return {
         "label": window.get("label"),
+        "scope": window.get("scope"),
         "consumed_frac": window["utilization_pct"] / 100.0,
         "resets_at": _epoch(reset_at),
         "duration_s": duration,

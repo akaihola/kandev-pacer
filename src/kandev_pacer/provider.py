@@ -112,6 +112,9 @@ def claude_windows(payload, now):
     windows = [
         {
             "label": limit_label(limit),
+            # The scope's model name ("Fable"), kept so the gate can class tasks by it;
+            # None on the shared windows every model spends.
+            "scope": ((limit.get("scope") or {}).get("model") or {}).get("display_name"),
             "utilization_pct": limit.get("percent"),
             "reset_at": limit.get("resets_at"),
         }

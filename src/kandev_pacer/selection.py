@@ -134,10 +134,10 @@ def select_action(
     Drains come first, in full: launching a task that has a prompt queued spends the
     turn on the step prompt and lets the queued entry leak out un-paced afterwards.
 
-    `allowed` restricts candidates to a set of providers -- one provider's shut gate must not
-    hide another's work behind it in the order, so the runtime calls this once per open
-    provider with the others held out. `provider_of(task, session)` maps a candidate to its
-    provider (`session` is the drain's session dict, or None for a launch); it is required
+    `allowed` restricts candidates to a set of gate groups -- one group's shut gate must not
+    hide another's work behind it in the order, so the runtime passes the groups whose gate
+    is open with the others held out. `provider_of(task, session)` maps a candidate to its
+    group (`session` is the drain's session dict, or None for a launch); it is required
     when `allowed` is given and ignored otherwise. `allowed=None` is the single-subscription
     path: every candidate is eligible, exactly as before providers went plural.
     """
@@ -223,6 +223,42 @@ def task_provider(task, board, agents):
     keeps attribution consistent with the running-count and launchable-count that also read it.
     """
     return profile_provider(launch_profile(task, board), agents)
+
+
+def task_models(task, board, agents):
+    """The model strings a launch of this task can run, or None when unknown.
+
+    None is the fail-closed answer: an unknown model gates on every window -- the
+    all-windows class, which is exactly what the pacer assumed before scopes existed, so
+    a wrong guess makes pacing stricter, never looser. A profile with `auto_fallback` can
+    run its fallback model too, so both count; a blank model anywhere means the agent
+    default, which the pacer cannot see, so the whole answer is unknown.
+    """
+    profile = agents.get(launch_profile(task, board) or "")
+    if profile is None:
+        return None
+    models = [profile.get("model")]
+    if profile.get("auto_fallback"):
+        models.append(profile.get("fallback_model"))
+    if not all(models):
+        return None
+    return models
+
+
+def matched_scopes(models, scopes):
+    """The model-scoped windows these models can spend, as a sorted tuple.
+
+    A scoped window names its model (`scope.model.display_name: "Fable"`); a model string
+    that contains that name, case-insensitively, spends that window
+    (`claude-fable-5[1m]` contains `fable`). Unknown models (None) match every scope --
+    the all-windows class; see `task_models`.
+    """
+    if models is None:
+        return tuple(sorted(scopes))
+    return tuple(sorted(
+        scope for scope in scopes
+        if any(scope.lower() in model.lower() for model in models)
+    ))
 
 
 def pick_intent(sessions):

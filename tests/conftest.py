@@ -146,6 +146,9 @@ class FakeBoard:
         # it shut moves these instead of reaching into the pacer.
         self.usage_pct = USAGE_PCT
         self.provider = "anthropic"
+        # When set, the exact windows `usage` answers -- for tests that need more than
+        # the default single 5-hour window, e.g. a model-scoped Fable window.
+        self.usage_windows = None
         self.usage_reads = []  # the `fresh` flag of every quota read, for counting them
         self.tasks_elsewhere = []   # tasks belonging to workflows outside the scope
         # The Codex (openai) source, for two-subscription tests. Default: 5% against a
@@ -166,9 +169,10 @@ class FakeBoard:
     def usage(self, fresh=False, now=None):
         # A reset 2.5h out on a 5h window: half elapsed, 10% consumed.
         self.usage_reads.append(fresh)
-        return {"agents": [{"usage": {"provider": self.provider, "windows": [
+        windows = self.usage_windows or [
             {"label": "5-hour", "utilization_pct": self.usage_pct,
-             "reset_at": _iso_in(9000)}]}}]}
+             "reset_at": _iso_in(9000)}]
+        return {"agents": [{"usage": {"provider": self.provider, "windows": windows}}]}
 
     def codex_usage(self, fresh=False, now=None):
         """The second source, faked at provider.codex_usage the way `usage` fakes the first."""
@@ -216,6 +220,8 @@ class FakeBoard:
                                 "id": pid,
                                 "billing_type": info.get("billing_type"),
                                 "model": info.get("model"),
+                                "fallback_model": info.get("fallback_model"),
+                                "auto_fallback": info.get("auto_fallback"),
                             }
                         ],
                     }
