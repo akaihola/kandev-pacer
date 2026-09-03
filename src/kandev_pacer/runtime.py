@@ -85,12 +85,13 @@ class Snapshot:
         int  # every turn in flight right now, for the shared PACER_CONCURRENCY_TOTAL
     )
     sidebar: dict | None  # the user's sidebar settings, or None if not consulted
-    # profile id -> {agent, billing_type, model}; empty on a single-provider run, which needs
-    # no attribution.
+    # profile id -> {agent, billing_type, model}; empty on a single-provider run with no
+    # profile-naming task and no scoped window, which needs neither attribution nor models.
     agents: dict
     # task id -> the provider a launch of it burns, or None to withhold it (unresolvable, an
-    # unconfigured provider, or an api-key task under the withhold policy). On a single-provider
-    # run every task maps to that one provider, so nothing is attributed and nothing withheld.
+    # unconfigured provider, or an api-key task under the withhold policy). On a
+    # single-provider run every subscription task maps to that one provider; only api-key
+    # tasks divert to the cap-gated pseudo-provider.
     task_providers: dict
     # provider -> the QuotaUnavailable of a source that could not be read this tick. A provider
     # in here has a shut gate; the others are unaffected. Empty when every source answered.
@@ -285,6 +286,18 @@ class Pacer:
             return API_KEY if self.config.apikey_policy == "cap" else None
         return provider_name if provider_name in self.config.providers else None
 
+    def attribute_single(self, task, agents):
+        """Which gate a launch of this task runs under on a single-subscription run.
+
+        Everything burns the one provider -- except an api-key task, which has no
+        subscription window and so joins the cap-gated pseudo-provider (or is withheld
+        under the `withhold` policy). Pacing it against the subscription gate instead
+        withholds work behind a window it never touches.
+        """
+        if task_provider(task, self.board, agents) == API_KEY:
+            return API_KEY if self.config.apikey_policy == "cap" else None
+        return self.config.providers[0]
+
     def read(self):
         """Everything a tick needs before it can decide anything.
 
@@ -305,7 +318,10 @@ class Pacer:
         )
         scoped = {name: scope_names(ws) for name, ws in windows.items()}
         # Attribution is only needed, and only paid for, when more than one subscription is
-        # paced. With one, every task burns it -- exactly what the pacer assumed before.
+        # paced. With one, every subscription task burns it -- exactly what the pacer assumed
+        # before. The one exception is an api-key task: it has no window, so it is
+        # attributed (and the agents lookup paid for) whenever a task names a profile that
+        # could resolve to one -- otherwise it would be paced against a gate it never spends.
         if len(self.config.providers) > 1:
             agents = client.agents()
             task_providers = {
@@ -315,8 +331,15 @@ class Pacer:
             # A model-scoped window makes the profile's model matter even with one
             # subscription. agents() degrades to {} unreadable, which classes every
             # task on all windows -- stricter, never looser.
-            agents = client.agents() if any(scoped.values()) else {}
-            task_providers = {task["id"]: self.config.providers[0] for task in tasks}
+            names_profile = any(
+                task_agent_profile(task)
+                or self.board.step_profiles.get(task.get("workflow_step_id", ""))
+                for task in tasks
+            )
+            agents = client.agents() if (names_profile or any(scoped.values())) else {}
+            task_providers = {
+                task["id"]: self.attribute_single(task, agents) for task in tasks
+            }
         task_scopes = {
             task["id"]: matched_scopes(
                 task_models(task, self.board, agents),
@@ -380,8 +403,6 @@ class Pacer:
         or an api-key task under the `withhold` policy. Silence would leave an operator asking
         why a card never runs, so it is named the first time it is seen and not again, and
         forgotten once it leaves the board so a real recurrence is named afresh."""
-        if len(self.config.providers) == 1:
-            return  # single subscription attributes everything; nothing is ever withheld here
         withheld = {
             tid for tid, provider in snapshot.task_providers.items() if provider is None
         }
@@ -1047,9 +1068,10 @@ def report_startup(board):
             log.warning(f"lint: [{board.name_of(workflow_id)}] {warning}")
     providers = settings.providers
     # `provider=x` for one, so the single-subscription line is unchanged; the plural form,
-    # with the shared cap and the api-key policy that only mean anything then, for more.
+    # with the shared cap, for more. The api-key policy is named in both: it decides what
+    # happens to tasks no subscription window covers.
     if len(providers) == 1:
-        gates = f"provider={providers[0]}"
+        gates = f"provider={providers[0]}, apikey_policy={settings.apikey_policy}"
     else:
         total = settings.concurrency_total
         gates = (
