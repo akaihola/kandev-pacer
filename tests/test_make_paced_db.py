@@ -171,3 +171,29 @@ def test_cli_tags_a_named_step_for_review(tmp_path, capsys):
     _make_db(db)
     _run(db, "Paced Kanban", "--review", "Backlog", "--apply")
     assert _stages(db) == {"Backlog": "review", "In Progress": "work", "Review": "review"}
+
+
+def test_cli_appends_signal_instruction_to_gated_prompt(tmp_path, capsys):
+    """A signal-gated work step whose prompt never names the tool gets the instruction.
+
+    This is the retrofit path too: the step is gated in kandev's own settings, so an
+    already-enrolled board picks up the instruction on the next --apply.
+    """
+    db = tmp_path / "kandev.db"
+    _make_db(db)
+    seed = sqlite3.connect(db)
+    seed.execute("UPDATE workflow_steps SET auto_advance_requires_signal=1,"
+                 " prompt='Do the work.' WHERE id='ip'")
+    seed.commit()
+    seed.close()
+
+    _run(db, "Paced Kanban", "--apply")
+    out = capsys.readouterr().out
+    assert "append the step_complete_kandev instruction to the prompt" in out
+    ip = next(s for s in _steps(db) if s["id"] == "ip")
+    assert ip["prompt"].startswith("Do the work.")
+    assert "step_complete_kandev" in ip["prompt"]
+
+    # Idempotent: the stored prompt now mentions the tool, so nothing is re-appended.
+    _run(db, "Paced Kanban", "--apply")
+    assert "already paced; nothing to do" in capsys.readouterr().out

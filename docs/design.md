@@ -226,10 +226,12 @@ a person.
 On startup, and in `--dump-order`, the pacer prints the workflows it is pacing **and the ones it
 is not, with the reason** — a workflow silently out of scope is how a task dragged to the top of
 your sidebar goes missing with no explanation. It also lints each scoped workflow for
-bypass/ambiguity: leftover `auto_start_agent`, profile-switch + prompt, signal-gated routing,
-work-shaped-but-untagged steps (the "why is this never paced" case), `stage_type`/routing
-disagreement, and a **start step that is itself pace-eligible** — which leaves the design no
-holding area at all, so the backlog executes instead of queueing.
+bypass/ambiguity: leftover `auto_start_agent`, profile-switch + prompt, a signal-gated step
+whose prompt never tells the agent to call `step_complete_kandev` (the agent then never
+signals, and the step relaunches until the stall detector parks the card — `make-paced`
+appends the instruction), work-shaped-but-untagged steps (the "why is this never paced" case),
+`stage_type`/routing disagreement, and a **start step that is itself pace-eligible** — which
+leaves the design no holding area at all, so the backlog executes instead of queueing.
 
 ## Which task goes next
 

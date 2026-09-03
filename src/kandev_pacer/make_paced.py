@@ -1,6 +1,6 @@
 """Adapt an existing Kandev workflow for pacing (Design 13) via its SQLite DB.
 
-Kandev has no supported surface for one of the two edits pacing needs
+Kandev has no supported surface for the central edit pacing needs
 (`stage_type` is display-only in the UI, absent from the step APIs and the
 import format -- see docs/history/pacing-designs.md, Design 13), so this script edits
 the database directly. Per step it:
@@ -12,7 +12,14 @@ the database directly. Per step it:
   for parked steps named in --review/--approval (default: any step named
   "Review" is 'review'). A parked step that already carries a valid tag
   ('review', 'approval', 'custom') keeps it; only a missing tag or a wrong
-  'work' tag on a parked step falls back to 'custom'.
+  'work' tag on a parked step falls back to 'custom';
+- appends a signal instruction to the prompt of any signal-gated work step
+  (`auto_advance_requires_signal`) whose prompt never names `step_complete_kandev`.
+  kandev routes such a step onward only when the agent calls that tool, so a
+  prompt that omits it leaves the agent ending turns without signalling -- the
+  task reads idle, the pacer relaunches the same prompt, and after enough
+  no-change turns the stall detector parks the card for a person who, on an
+  unattended board, never comes.
 
 Dry run by default (opens the DB read-only); pass --apply to write. The kandev
 server can stay up: the DB runs in WAL mode and steps are re-read on every use,
@@ -33,7 +40,7 @@ from contextlib import closing
 from pathlib import Path
 
 from .config import settings
-from .workflow import is_work_step, lint_workflow
+from .workflow import SIGNAL_TOOL, is_work_step, lint_workflow, prompt_mentions_signal
 
 # --- pure planning (unit-tested in tests/test_make_paced.py) ---
 
@@ -57,6 +64,30 @@ def strip_auto_start(events):
 # already tagged one of these by hand is a hint we keep, not clobber (Design
 # 13: treat a hand-set stage_type as a corroborating hint, never destroy it).
 PARKED_STAGES = frozenset({"custom", "review", "approval"})
+
+# What gets appended to a silent signal-gated prompt. Generic on purpose: it has to
+# read sensibly at the end of any step prompt, in any workflow.
+SIGNAL_INSTRUCTION = (
+    f"Call the {SIGNAL_TOOL} tool once this step's work is complete, then stop. "
+    "The workflow does not advance without that signal."
+)
+
+
+def ensure_signal_instruction(step, stage):
+    """The prompt this step needs, and whether that means appending the instruction.
+
+    Only a signal-gated step headed for 'work' is touched: a parked step never routes,
+    an ungated one advances on turn completion alone, and a prompt that already names
+    the tool needs nothing. Everything else keeps its prompt byte-for-byte (including
+    NULL), so re-running the tool never rewrites what a person wrote.
+    """
+    prompt = step.get("prompt")
+    if (stage != "work" or not step.get("auto_advance_requires_signal")
+            or prompt_mentions_signal(step)):
+        return prompt, False
+    if not (prompt or "").strip():
+        return SIGNAL_INSTRUCTION, True
+    return f"{prompt.rstrip()}\n\n{SIGNAL_INSTRUCTION}", True
 
 
 def target_stage(step, review_names, approval_names=frozenset()):
@@ -90,10 +121,12 @@ def plan_changes(steps, review_names=frozenset({"review"}), approval_names=froze
     for step in steps:
         events, removed = strip_auto_start(step.get("events"))
         stage = target_stage({**step, "events": events}, review_names, approval_names)
-        if removed or stage != step.get("stage_type"):
+        prompt, signal_added = ensure_signal_instruction(step, stage)
+        if removed or stage != step.get("stage_type") or signal_added:
             changes.append({"id": step["id"], "name": step.get("name", ""),
                             "events": events, "removed": removed,
-                            "stage_from": step.get("stage_type"), "stage_to": stage})
+                            "stage_from": step.get("stage_type"), "stage_to": stage,
+                            "prompt": prompt, "signal_added": signal_added})
     return changes
 
 
@@ -114,6 +147,11 @@ def plan_unpace(steps):
             "removed": 0,
             "stage_from": step.get("stage_type"),
             "stage_to": "custom",
+            # The appended signal instruction is not peeled back out either: the
+            # prompt may have been edited around it since, and on a manual board a
+            # stale "call step_complete_kandev" line is harmless.
+            "prompt": step.get("prompt"),
+            "signal_added": False,
         }
         for step in steps
         if (step.get("stage_type") or "").lower() == "work"
@@ -124,7 +162,8 @@ def planned_steps(steps, changes):
     """The steps as they will look after the plan is applied (for linting)."""
     by_id = {change["id"]: change for change in changes}
     return [
-        {**step, "events": change["events"], "stage_type": change["stage_to"]}
+        {**step, "events": change["events"], "stage_type": change["stage_to"],
+         "prompt": change["prompt"]}
         if (change := by_id.get(step["id"]))
         else step
         for step in steps
@@ -178,10 +217,10 @@ def apply_changes(connection, changes):
     with connection:  # one transaction; the server's WAL readers see it atomically
         for change in changes:
             connection.execute(
-                "UPDATE workflow_steps SET events = ?, stage_type = ?,"
+                "UPDATE workflow_steps SET events = ?, stage_type = ?, prompt = ?,"
                 " updated_at = CURRENT_TIMESTAMP WHERE id = ?",
                 (json.dumps(change["events"], separators=(",", ":")),
-                 change["stage_to"], change["id"]))
+                 change["stage_to"], change["prompt"], change["id"]))
 
 
 # --- cli ---
@@ -196,6 +235,8 @@ def describe(step, change):
         edits.append(f"remove {change['removed']} auto_start_agent action(s)")
     if change["stage_to"] != change["stage_from"]:
         edits.append(f"stage_type {change['stage_from']} -> {change['stage_to']}")
+    if change["signal_added"]:
+        edits.append(f"append the {SIGNAL_TOOL} instruction to the prompt")
     return f"  {step['name']}: " + "; ".join(edits)
 
 

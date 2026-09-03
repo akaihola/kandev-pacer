@@ -8,6 +8,17 @@ from dataclasses import dataclass, field
 
 from .config import TRANSITION_KINDS
 
+# The MCP tool a signal-gated step waits for. When a step has
+# `auto_advance_requires_signal`, kandev routes it onward only if the agent called this
+# tool during the turn -- so the step's prompt has to tell the agent to call it. A prompt
+# that never names the tool strands the card: the turn ends, the task reads idle, and the
+# pacer relaunches the same prompt until the stall detector gives up on it.
+SIGNAL_TOOL = "step_complete_kandev"
+
+
+def prompt_mentions_signal(step):
+    return SIGNAL_TOOL in (step.get("prompt") or "")
+
 
 def is_work_step(step):
     events = step.get("events") or {}
@@ -179,8 +190,13 @@ def _classification_warning(step, name, is_paced):
     stage = (step.get("stage_type") or "").lower()
     routes = is_work_step(step)
     if is_paced:
-        if step.get("auto_advance_requires_signal"):
-            return f"work step {name!r} gates routing on the agent step_complete signal"
+        if step.get("auto_advance_requires_signal") and not prompt_mentions_signal(step):
+            return (
+                f"work step {name!r} routes only on the {SIGNAL_TOOL} signal, but its "
+                "prompt never mentions that tool -- the agent will not know to signal, "
+                "so the step relaunches until the stall detector parks the task "
+                "(make-paced --apply appends the instruction)"
+            )
         return None
     if routes and stage in ("review", "approval"):
         return (

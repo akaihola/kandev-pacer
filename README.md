@@ -60,8 +60,11 @@ uv run kandev-pacer                       # start the pacing loop (lints on star
 ```
 
 A workflow has to be **enrolled** before it is paced, which is what `make-paced` does: it
-strips the `auto_start_agent` action that would bypass the gate, and tags each step that
-routes away on turn completion `stage_type=work`. Both edits go straight to
+strips the `auto_start_agent` action that would bypass the gate, tags each step that
+routes away on turn completion `stage_type=work`, and appends a `step_complete_kandev`
+instruction to the prompt of any signal-gated work step that never names that tool —
+kandev only advances such a step when the agent calls it, so a silent prompt leaves the
+task idling and relaunching until the stall detector parks it. The edits go straight to
 `~/.kandev/data/kandev.db`, because `stage_type` has no API, UI or import surface. A
 workflow re-import silently resets it — re-run `make-paced` after one.
 

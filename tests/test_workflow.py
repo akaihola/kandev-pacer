@@ -106,9 +106,14 @@ def test_lint_workflow():
     # routes on complete but tagged review -> mismatch.
     assert any("tagged stage_type" in w for w in lint_workflow(
         [_step("x", "X", otc=["move_to_step"], stage="review")]))
-    # signal-gated work step -> flagged.
+    # signal-gated work step whose prompt never names the tool -> flagged: the agent
+    # is never told to signal, so the step relaunches until the stall detector parks it.
     assert any("step_complete" in w for w in lint_workflow(
         [_step("x", "X", otc=["move_to_step"], stage="work", signal=True)]))
+    # ...but a prompt that does name it is the healthy shape make-paced produces: silent.
+    assert not any("step_complete" in w for w in lint_workflow(
+        [_step("x", "X", otc=["move_to_step"], stage="work", signal=True,
+               prompt="Do it, then call step_complete_kandev.")]))
     # Work-shaped but untagged -> NOT paced. This is the warning that explains a task sitting
     # on such a step forever; it names the fix rather than just reporting the state.
     untagged = lint_workflow([_step("x", "X", otc=["move_to_step"])])
