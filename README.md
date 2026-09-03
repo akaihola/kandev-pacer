@@ -92,7 +92,7 @@ long option such as `--interval` and `--concurrency`.
 | `PACER_PROVIDERS` | `$PACER_PROVIDER` | the subscriptions to pace, comma- or space-separated (e.g. `anthropic,openai`). Naming more than one turns on per-provider gating; see [Two subscriptions](#two-subscriptions) |
 | `PACER_CONCURRENCY` | `1` | how many paced turns may run at once **per provider** |
 | `PACER_CONCURRENCY_TOTAL` | unset | ceiling on the sum across providers — the machine running the worktrees. Unset means each provider is bound only by its own cap |
-| `PACER_APIKEY_POLICY` | `withhold` | what to do with an api-key task (no subscription window): `withhold` never launches it, `cap` launches it gated on the concurrency cap alone. Only consulted with two-plus providers |
+| `PACER_APIKEY_POLICY` | `cap` | what to do with an api-key task (no subscription window, so nothing to pace it against): `cap` launches it gated on the concurrency cap alone, `withhold` never launches it (opt in when metered spend must stay off) |
 | `PACER_AGENT_PROVIDERS` | unset | override which subscription an agent burns, when kandev's `billing_type` is wrong for pacing. `agent=provider` pairs, e.g. `hermes-acp=openai`. Wins over `billing_type`, so an agent kandev labels `api_key` but which really spends a subscription is paced against it — see [Two subscriptions](#two-subscriptions) |
 | `PACER_CODEX_CREDENTIALS` | `~/.codex/auth.json` | the ChatGPT token the Codex quota is read with. **Read, never written** — same rule as the Claude credential |
 | `PACER_ALPHA` | `1.0` | target burn line. Below 1 aims under steady, finishing each window with quota spare |
@@ -197,7 +197,8 @@ Which subscription a task burns is read from its agent profile — `GET /api/v1/
 profile to its agent (`claude-acp` → `anthropic`, `codex-acp` → `openai`) and its billing type.
 Mapping is **by agent, not by model**: an agent running an OpenAI model on an API key has no
 subscription window, and `PACER_APIKEY_POLICY` — not a gate — decides its fate (default
-`withhold`, so an upgrade never quietly starts spending metered money). A task the pacer cannot
+`cap`: launched on the concurrency cap alone, since the pacer never withholds work it does
+not pace; `withhold` opts back into fail-closed for metered spend). A task the pacer cannot
 attribute is withheld, never paced against a guess.
 
 Reads degrade per provider: an unreachable Codex endpoint blinds *its* gate and leaves Claude's
@@ -213,9 +214,10 @@ over `billing_type`, so Hermes is paced on the Codex window it really burns. The
 infer this from the model string (an agent *can* run an OpenAI model on a real API key); only the
 operator knows, so it is stated, not guessed.
 
-A single provider (the default) takes none of this path: every task burns it, one `tick` record,
-byte-identical to before. The full derivation, and why one process rather than two, is in
-[`docs/two-subscriptions.md`].
+A single provider (the default) paces every subscription task on its window; api-key tasks
+still bypass it onto the concurrency cap alone, so a metered-or-free model is never held
+behind a subscription window it never touches. The full derivation, and why one process rather
+than two, is in [`docs/two-subscriptions.md`].
 
 ## The Fable weekly window
 

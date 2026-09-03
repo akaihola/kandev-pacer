@@ -557,6 +557,40 @@ def test_an_unknown_provider_withholds_rather_than_pacing_blind(pacer, board, mo
     assert (written[0]["gate"], written[0]["action"]) == ("blind", "withheld")
 
 
+def test_a_single_provider_run_launches_an_api_key_task_while_paused(
+    pacer, board, monkeypatch
+):
+    """An api-key task has no subscription window: a shut single gate must not hold it."""
+    board.agents_map = {
+        "p-spark": {"agent": "opencode-acp", "billing_type": "api_key",
+                    "model": "muse-spark-1.3"},
+    }
+    board.usage_pct = 99                      # past PACER_BACKSTOP: the gate is shut
+    task = _task("t", "ip", "ApiKey", profile="p-spark")
+    assert tick(pacer, board, [task],
+                {"t": _sess("s", "WAITING_FOR_INPUT")}, {}) is True
+    assert [p["task_id"] for a, p in board.ws_log if a == "session.launch"] == ["t"]
+
+
+def test_a_shut_single_gate_withholds_subscription_work_but_not_api_key_work(
+    pacer, board, monkeypatch
+):
+    """Queue order still applies, but the paused subscription task must not hide the
+    api-key one behind it."""
+    board.agents_map = {
+        "p-claude": {"agent": "claude-acp", "billing_type": "subscription"},
+        "p-spark": {"agent": "opencode-acp", "billing_type": "api_key",
+                    "model": "muse-spark-1.3"},
+    }
+    board.usage_pct = 99                      # past PACER_BACKSTOP: the gate is shut
+    sub = _task("s", "ip", "Sub", profile="p-claude")
+    key = _task("k", "ip", "Key", profile="p-spark")
+    tick(pacer, board, [sub, key],
+         {"s": _sess("ss", "WAITING_FOR_INPUT"),
+          "k": _sess("sk", "WAITING_FOR_INPUT")}, {})
+    assert [p["task_id"] for a, p in board.ws_log if a == "session.launch"] == ["k"]
+
+
 def test_an_expired_credential_shuts_the_gate_and_says_what_to_do(
     pacer, board, tmp_path, monkeypatch, caplog
 ):

@@ -45,11 +45,11 @@ class Settings(BaseSettings):
     # launch it ungated -- and it burns the very Codex window the openai gate is pacing.
     agent_providers_raw: str = Field("", alias="PACER_AGENT_PROVIDERS")
     # What to do with a task whose agent is billed per token (billing_type=api_key): it has no
-    # subscription window to pace against. `withhold` never launches it (fail-closed, so an
-    # upgrade does not quietly start spending metered money); `cap` launches it gated on the
-    # concurrency cap alone. Only consulted when more than one provider is configured -- a
-    # single-provider run paces every task against that one, as it always did.
-    apikey_policy: str = Field("withhold", alias="PACER_APIKEY_POLICY")
+    # subscription window to pace against, so it is launched gated on the concurrency cap
+    # alone (`cap`) -- the pacer never withholds work it does not pace. `withhold` never
+    # launches it (fail-closed, so an upgrade does not quietly start spending metered money);
+    # opt into that when metered spend must stay off unless asked for.
+    apikey_policy: str = Field("cap", alias="PACER_APIKEY_POLICY")
 
     # How many turns may be in flight at once, per provider. `concurrency_total` caps the sum
     # across providers -- the machine running the worktrees is the one genuinely shared thing.

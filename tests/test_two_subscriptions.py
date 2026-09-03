@@ -499,11 +499,21 @@ def test_a_withheld_task_is_named_once(duo, board, caplog):
     assert len(named) == 1 and "'No profile'" in named[0]
 
 
-def test_an_api_key_task_is_withheld_by_default(duo, board, caplog):
-    """billing_type=api_key has no subscription window; the default policy will not spend on it.
+def test_an_api_key_task_launches_by_default(duo, board):
+    """billing_type=api_key has no subscription window; the pacer launches it gated on
+    the concurrency cap alone rather than withholding work it never paces."""
+    task = _task("t", "ip", "Hermes", profile="p-hermes")
+    was_open = run(duo, board, [task], {"t": _sess("s", "WAITING_FOR_INPUT")}, {})
+    assert launches(board) == ["t"]
+    assert was_open is True
 
-    And the withheld line names the specific case -- an api-key profile, with the knob that
-    changes it -- rather than the ambiguous "unresolvable or api-key" it used to."""
+
+def test_an_api_key_task_is_withheld_under_the_withhold_policy(
+    duo, board, monkeypatch, caplog
+):
+    """`withhold` opts back into fail-closed: no launch, and the line names the specific
+    case -- an api-key profile, with the knob that changes it."""
+    monkeypatch.setattr(settings, "apikey_policy", "withhold")
     task = _task("t", "ip", "Hermes", profile="p-hermes")
     with caplog.at_level("WARNING", logger="kandev-pacer"):
         run(duo, board, [task], {"t": _sess("s", "WAITING_FOR_INPUT")}, {})

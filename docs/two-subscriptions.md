@@ -5,10 +5,12 @@
 > README for the operator's view. What landed follows the plan here, with these choices made at
 > implementation time:
 >
-> - **Backward-compatible by construction.** A single provider (the default) takes none of the
->   plural path: every task burns it, no `GET /api/v1/agents` call, one `tick` record per tick,
->   byte-identical output. The per-provider machinery engages only once `PACER_PROVIDERS` names
->   more than one — which is why the existing suite stayed green unchanged.
+> - **Backward-compatible by construction.** A single provider (the default) paces every
+>   subscription task on its window exactly as before; the per-provider machinery engages
+>   only once `PACER_PROVIDERS` names more than one — which is why the existing suite stayed
+>   green unchanged. The one exception, single or plural, is an api-key task: it has no
+>   window, so it bypasses the gate onto the concurrency cap alone (or is withheld under
+>   `PACER_APIKEY_POLICY=withhold`).
 > - `parse_windows(usage, provider=…)` still returns a flat list for one provider (the old
 >   callers are untouched); the new `windows_by_provider(usage)` returns the `{provider: […]}`
 >   grouping. `quota_verdict(…, provider=…)` and `tick_record(…, provider=…)` gained the same
@@ -19,8 +21,9 @@
 >   fails — so one provider reproduces today's whole-gate-shut behaviour exactly.
 > - Codex is reported under the provider name **`openai`** (the string a `codex-acp` agent's
 >   burn already appeared under), so the operator sets `PACER_PROVIDERS=anthropic,openai`.
-> - `PACER_APIKEY_POLICY` defaults to **`withhold`** — recommendation (3) defaulting to (2)
->   below — so the upgrade never quietly starts spending metered money.
+> - `PACER_APIKEY_POLICY` defaults to **`cap`** — recommendation (3) defaulting to (1)
+>   below — so the pacer never withholds work it does not pace; `withhold` remains for
+>   operators whose metered spend must stay off unless asked for.
 > - Drains are attributed by the task's own provider rather than the draining session's, to keep
 >   attribution consistent with the running- and launchable-counts that also read it. The
 >   session-level override matters only for a profile-switch mid-workflow.
@@ -212,9 +215,8 @@ not this one.
 ## The one open question: API-key profiles
 
 `hermes-acp` and `pi-acp` are `billing_type: api_key`. They have no subscription window, so
-there is nothing to pace them against — and today they are paced against the Claude gate,
-which is simply wrong: an API-key task is withheld because a Claude window it never touches is
-full.
+there is nothing to pace them against — pacing one against the Claude gate withholds it
+behind a window it never touches.
 
 Three defensible answers, and this is a spend decision rather than a technical one:
 
@@ -224,8 +226,10 @@ Three defensible answers, and this is a spend decision rather than a technical o
    whatever is on the board under those profiles.
 3. **A knob**, defaulting to (2), so the change is opt-in.
 
-Recommendation: (3) defaulting to (2), because the pacer's whole posture is fail-closed and
-"the upgrade quietly started spending money" is the worse surprise. Worth a decision before
+Recommendation: (3) defaulting to (1), because the pacer should never withhold work it does
+not pace — gating an api-key task on a subscription window it never touches strands
+whatever is on the board under those profiles. `withhold` stays for the operator whose
+metered spend must stay off unless asked for. Worth a decision before
 implementation rather than during it.
 
 ## What it costs
