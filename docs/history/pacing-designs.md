@@ -462,6 +462,9 @@ because they all insert waiting time between turns.
 > Claude Code on a Claude subscription requests the **1-hour** TTL automatically,
 > which changes both the numbers and the advice. Rewritten below; the derivation
 > and its verification are in [`claude-code-hook-feasibility.md`].
+>
+> **Measured 2026-09-06.** How often the pacer's waits actually crossed the TTL, what
+> it cost, and the cache-aware release designed from it: [`cache-aware-pacing.md`].
 
 Anthropic caches the unchanged beginning of a conversation (the "prefix"). A
 request that reuses a cached prefix pays about 0.1× the normal token price for
@@ -523,4 +526,5 @@ Practical consequences, in order of importance:
   TTL was actually in force.
 
 [`claude-code-hook-feasibility.md`]: claude-code-hook-feasibility.md
+[`cache-aware-pacing.md`]: ../cache-aware-pacing.md
 [`isolation-and-federation.md`]: ../isolation-and-federation.md

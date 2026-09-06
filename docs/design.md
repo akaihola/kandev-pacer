@@ -71,6 +71,11 @@ arithmetic predicts its release anyway), and the CEILING that binds while `h` is
 back above the line, which waits out its window at the configured rate. Only the CEILING
 still below the line adapts, on the later of the two instants above.
 
+The release instant knows nothing about the prompt cache: a wait that crosses the cache
+TTL makes the released turn re-read its whole context at the write rate.
+[`cache-aware-pacing.md`] measures how often that happened and designs the release rule
+that would avoid it; it is not implemented.
+
 ## Enforcement: hold in place, launch on release (Design 13)
 
 Don't kill running turns — gate what's allowed to *start*. The unit is a **turn** (a prompt
@@ -480,4 +485,5 @@ under "the quota endpoint you need for the pacer" and "the cron pacer has two vi
 [userscript/kandev-queue-button.user.js]: ../userscript/kandev-queue-button.user.js
 [queueing-user-prompts.md]: queueing-user-prompts.md
 [concurrency-sizing.md]: concurrency-sizing.md
+[`cache-aware-pacing.md`]: cache-aware-pacing.md
 [kandev-plugin-feasibility.md]: history/kandev-plugin-feasibility.md

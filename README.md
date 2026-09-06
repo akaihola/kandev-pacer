@@ -233,6 +233,14 @@ stricter, never looser. The two classes still share the provider's concurrency c
 one launch per tick, and queue order picks among the tasks whose class is open.
 [`docs/fable-window.md`] documents the verified quota rules and the design.
 
+## Pausing and the prompt cache
+
+A paused task's prompt cache expires while it waits — after an hour on a Claude
+subscription, after about five minutes on Codex — and the turn that finally runs re-reads
+its whole context at the cache-write rate instead of the cache-read rate. The pacer's own
+log shows how often its waits crossed that line and what it cost; [`docs/cache-aware-pacing.md`]
+measures it and designs a cache-aware release the pacer does not have yet.
+
 ## Multiple kandev instances
 
 The pacer drives one kandev instance. Splitting sensitive projects across several instances —
@@ -268,6 +276,7 @@ src/kandev_pacer/
 tests/          one file per module, over conftest.py's fake kandev and builders
 docs/           how the system works today, and the investigations behind it
   history/      designs that were considered and rejected — background, not current
+scripts/        read-only log analyses behind the docs (`cache_waste.py`)
 ```
 
 The three pure modules import nothing but `config`, so everything worth arguing about can
@@ -333,5 +342,6 @@ at 0.84.1, which leaves that branch of the startup lint unverifiable from outsid
 [`docs/queueing-user-prompts.md`]: docs/queueing-user-prompts.md
 [`docs/two-subscriptions.md`]: docs/two-subscriptions.md
 [`docs/fable-window.md`]: docs/fable-window.md
+[`docs/cache-aware-pacing.md`]: docs/cache-aware-pacing.md
 [`docs/isolation-and-federation.md`]: docs/isolation-and-federation.md
 [kdlbs/kandev#1669]: https://github.com/kdlbs/kandev/issues/1669
