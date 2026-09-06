@@ -343,7 +343,10 @@ Sources and the join between them:
   gives each turn's `completed_at`; `task_sessions.workspace_path` the join to both logs;
   `agent_profile_snapshot.model` whether the session ran Fable.
 
-Sanity checks that held: the raw Claude counts before the dedup were 8,210 assistant
+Sanity checks that held: all 94 matched stale launches continued the *same* Claude session
+file as the turn before the wait, so a prefix existed to lose, and 73 of their next requests
+read fewer than 5 k tokens from cache — a cold rewrite, not a fresh session's first
+request; the raw Claude counts before the dedup were 8,210 assistant
 records over the first forty files against 4,011 distinct requests; the total weighted
 Claude spend in the log span (463 M input-equivalents over 5.87 weeks) divided by the total
 rise of the 7-day window (504 %) gives 919 k per percent, within 1 % of the step-wise fit;
