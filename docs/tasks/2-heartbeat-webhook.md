@@ -1,0 +1,80 @@
+---
+depends_on: []
+---
+
+# Call the Heartbeat webhook when a provider runs out of work
+
+## Problem
+
+The `[Auto] Heartbeat` automation in kandev refills the paced boards from each
+repository's `TASKS.md`. Until 2026-09-07 it ran on a 15-minute cron. Over 48 hours that
+was 52 runs, 6.4 M context tokens on the Codex subscription (a quarter of all Codex token
+volume in the window), and most runs ended with "no tasks created". Meanwhile the same
+subscription hit 96 % of its week and 12 Luna tasks waited a day.
+
+The automation now has a **webhook** trigger and no schedule. Something has to call it,
+and the pacer is the one process that knows when the board is running dry.
+
+## How kandev's webhook works
+
+```
+POST /api/v1/automations/webhook/<automation id>
+X-Webhook-Secret: <secret>
+Content-Type: application/json
+
+{"source": "kandev-pacer", "provider": "openai", "launchable": 1}
+```
+
+Source: `apps/backend/internal/automation/webhook.go`. The secret is compared in constant
+time from the header only; a wrong one is `401`, a disabled automation `409`. The body
+becomes the run's trigger data, so the prompt can read `{{webhook.provider}}`. The
+automation's `max_concurrent_runs` is 1, so a call while a run is active is refused by
+kandev, not queued.
+
+## Change
+
+Configuration, all three layers (TOML, env, CLI) like every other setting:
+
+| setting | env | default | meaning |
+| --- | --- | --- | --- |
+| `heartbeat_webhook_url` | `PACER_HEARTBEAT_WEBHOOK_URL` | empty (off) | the full webhook URL |
+| `heartbeat_webhook_secret` | `PACER_HEARTBEAT_WEBHOOK_SECRET` | empty | sent as `X-Webhook-Secret` |
+| `heartbeat_min_launchable` | `PACER_HEARTBEAT_MIN_LAUNCHABLE` | `2` | call when a provider's launchable count is below this |
+| `heartbeat_min_interval` | `PACER_HEARTBEAT_MIN_INTERVAL` | `1800` | seconds between calls, whatever the board does |
+
+An empty URL disables the feature; a URL with an empty secret fails validation at startup
+with both names in the message. The secret is a secret: on `agent@gogo` the URL goes into
+the nix-generated `config.toml` and the secret into `~/.config/secrets/kandev-pacer.env`
+loaded as `PACER_HEARTBEAT_WEBHOOK_SECRET`, following the `pebble-quota.env` convention.
+Never log it, never put it in the JSONL.
+
+Rule, evaluated once per tick after the providers have been reported:
+
+1. For a provider whose gate is `open` and whose `launchable` is below
+   `heartbeat_min_launchable`: the board is about to idle while quota is available.
+2. Not more often than `heartbeat_min_interval` since the last call, counted from the
+   last *attempt* so a `409` does not retry every tick.
+3. Skip while any task titled `[Auto] Heartbeat` has a `RUNNING` session: a run is
+   already looking.
+4. POST with a 10-second timeout. Log one record `{"kind": "heartbeat", "provider": ...,
+   "launchable": ..., "status": <http status or error>}`. A failure is a tick warning,
+   not a pacer error: the board still paces without it.
+
+The paused case is deliberately excluded. A closed gate with no work needs no new work.
+
+## Where it goes
+
+- `config.py`: the four fields plus the validator.
+- `client.py`: `post_webhook(url, secret, body)`, the pacer's first non-GET HTTP call,
+  so the docstring on `get` that says GET is the only verb is updated.
+- `runtime.py`: `Pacer.maybe_heartbeat(verdicts, snapshot)` called at the end of
+  `tick`, with `_last_heartbeat_at` on the Pacer.
+- `tests/test_runtime.py`: below threshold calls, at threshold does not, interval holds,
+  running heartbeat skips, 409 counts as an attempt, disabled when URL empty.
+- `README.md`: a "Refilling the board" section, and the configuration table rows.
+
+## Done when
+
+On `agent@gogo`, kandev's `automation_runs` table shows heartbeat runs only after
+`heartbeat` records in `pacer.jsonl`, and the Codex share spent by `[Auto] Heartbeat`
+tasks in `task_usage_events` falls below 5 % of the provider's weekly volume.
