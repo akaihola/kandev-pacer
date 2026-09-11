@@ -58,12 +58,12 @@ Rules for TASKS.md usage are at the bottom of the file.
 
 ## In progress
 
+## Completed
+
 - [*] Enrol workflows through kandev's step update endpoint instead of writing
   `~/.kandev/data/kandev.db`. `PUT /api/v1/workflow/steps/{id}` takes every step field,
   `stage_type` included, and needs no login, so `make-paced` drops sqlite, `--db` and
   `KANDEV_DB`; the README's "no API" claim goes with them.
-
-## Completed
 
 [1]: docs/tasks/1-quota-from-pebble-collector.md
 [2]: docs/tasks/2-heartbeat-webhook.md
