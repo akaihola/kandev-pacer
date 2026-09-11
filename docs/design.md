@@ -200,9 +200,9 @@ that has at least one:
 1. **`stage_type: "work"` — the enrollment marker.** Kandev defaults this column to `custom`,
    its UI only displays it and its import format leaves it out, so in practice the only thing
    that ever writes `work` is `make-paced` — through the step update endpoint, in the same
-   request that strips the `auto_start_agent` that would bypass the gate. "Tagged work" therefore means "deliberately prepared for pacing",
-   which is exactly the signal needed to decide, unattended, whether a workflow the pacer merely
-   *discovered* is fair game. (`make-paced` is the enroll action; a workflow re-import resets
+   request that strips the `auto_start_agent` that would bypass the gate. "Tagged work"
+   therefore means "deliberately prepared for pacing", which is exactly the signal needed to
+   decide, unattended, whether a workflow the pacer merely *discovered* is fair game. (`make-paced` is the enroll action; a workflow re-import resets
    `stage_type`, so re-run it after one.)
 2. **An `on_turn_complete` transition (`move_to_next` | `move_to_previous` | `move_to_step`) —
    the safety property**, and not optional. It buys the guarantee that a task *still sitting* on

@@ -1,4 +1,4 @@
-"""Pure planning tests for make_paced.py (no database)."""
+"""Pure planning tests for make_paced.py (no kandev)."""
 
 from kandev_pacer.make_paced import (
     SIGNAL_INSTRUCTION,
