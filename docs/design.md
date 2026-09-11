@@ -197,10 +197,10 @@ behind it.
 A step is **pace-eligible** when it satisfies *both* halves, and the pacer paces every workflow
 that has at least one:
 
-1. **`stage_type: "work"` — the enrollment marker.** Kandev defaults this column to `custom` and
-   exposes no API/UI/import surface for it, so the only thing that ever writes `work` is
-   `make-paced`'s direct SQLite write — which is also what strips the `auto_start_agent` that
-   would bypass the gate. "Tagged work" therefore means "deliberately prepared for pacing",
+1. **`stage_type: "work"` — the enrollment marker.** Kandev defaults this column to `custom`,
+   its UI only displays it and its import format leaves it out, so in practice the only thing
+   that ever writes `work` is `make-paced` — through the step update endpoint, in the same
+   request that strips the `auto_start_agent` that would bypass the gate. "Tagged work" therefore means "deliberately prepared for pacing",
    which is exactly the signal needed to decide, unattended, whether a workflow the pacer merely
    *discovered* is fair game. (`make-paced` is the enroll action; a workflow re-import resets
    `stage_type`, so re-run it after one.)
