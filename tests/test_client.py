@@ -144,3 +144,45 @@ def test_a_launch_can_carry_the_tasks_agent_profile(board):
     assert payload["agent_profile_id"] == "prof-1"
     client.ws_launch("t", "workflow_step", "s", "ip")
     assert "agent_profile_id" not in board.ws_log[-1][1], "only start carries it"
+
+
+def test_put_sends_json_and_decodes_the_answer(monkeypatch):
+    """The one HTTP write: make-paced's step update. Method, header and body all matter."""
+    seen = []
+
+    class _Response:
+        def read(self):
+            return b'{"step": {"id": "ip"}}'
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_):
+            return False
+
+    def fake_urlopen(request, timeout=None):
+        seen.append(request)
+        return _Response()
+
+    monkeypatch.setattr(client.urllib.request, "urlopen", fake_urlopen)
+    assert client.put("/api/v1/workflow/steps/ip", {"stage_type": "work"}) == {
+        "step": {"id": "ip"}
+    }
+    [request] = seen
+    assert request.get_method() == "PUT"
+    assert request.full_url == f"{settings.url}/api/v1/workflow/steps/ip"
+    assert request.get_header("Content-type") == "application/json"
+    assert request.data == b'{"stage_type": "work"}'
+
+
+def test_a_failed_put_names_the_path_it_failed_on(monkeypatch):
+    def fake_urlopen(request, timeout=None):
+        raise urllib.error.HTTPError(request.full_url, 409, "Conflict", Message(), None)
+
+    monkeypatch.setattr(client.urllib.request, "urlopen", fake_urlopen)
+    try:
+        client.put("/api/v1/workflow/steps/ip", {})
+    except client.WriteFailed as error:
+        assert "/api/v1/workflow/steps/ip" in str(error) and "409" in str(error)
+    else:
+        raise AssertionError("a refused PUT must raise")

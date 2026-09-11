@@ -50,9 +50,9 @@ slower than the configured tick there, and faster than it at the 120 s default.
 ```bash
 uv sync                                   # create the environment, install the commands
 
-uv run make-paced                         # list workflows in the kandev SQLite DB
+uv run make-paced                         # list the workflows kandev has
 uv run make-paced 'Paced Kanban'          # dry run: show the edits pacing needs
-uv run make-paced 'Paced Kanban' --apply  # write them (the server can stay up; WAL)
+uv run make-paced 'Paced Kanban' --apply  # write them through kandev's step API
 uv run make-paced 'Paced Kanban' --unpace --apply   # stop pacing that board
 
 uv run kandev-pacer --dump-order          # the queue launches will follow, spending nothing
@@ -64,9 +64,11 @@ strips the `auto_start_agent` action that would bypass the gate, tags each step 
 routes away on turn completion `stage_type=work`, and appends a `step_complete_kandev`
 instruction to the prompt of any signal-gated work step that never names that tool —
 kandev only advances such a step when the agent calls it, so a silent prompt leaves the
-task idling and relaunching until the stall detector parks it. The edits go straight to
-`~/.kandev/data/kandev.db`, because `stage_type` has no API, UI or import surface. A
-workflow re-import silently resets it — re-run `make-paced` after one.
+task idling and relaunching until the stall detector parks it. The edits go through
+kandev's step update endpoint, `PUT /api/v1/workflow/steps/{id}`, which takes every step
+field including `stage_type` and needs no login — so kandev has to be running (`KANDEV_URL`).
+`stage_type` still has no UI or import surface: a workflow re-import silently resets it,
+so re-run `make-paced` after one.
 
 Enrollment is the *only* opt-in: the pacer paces every enrolled workflow and nothing else.
 `--unpace` is how a board stops being paced — it clears the `work` tag, leaving the board
@@ -104,7 +106,6 @@ long option such as `--interval` and `--concurrency`.
 | `PACER_BLOCK_AFTER` | `2` | consecutive failures before the card is flagged `BLOCKED`. `0` keeps the pacer read-only |
 | `PACER_CREDENTIALS` | `~/.claude/.credentials.json` | the subscription token the quota is read with. **Read, never written** — Claude Code owns this file, and a second refresher racing it would rotate the token out from under the user's login |
 | `PACER_LOG` | `~/.local/state/kandev-pacer/pacer.jsonl` | JSONL event log. Empty disables it |
-| `KANDEV_DB` | `~/.kandev/data/kandev.db` | the database `make-paced` edits |
 
 ## Which task goes next
 
