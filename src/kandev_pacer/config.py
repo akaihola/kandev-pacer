@@ -88,12 +88,6 @@ class Settings(BaseSettings):
     # the check and restores that behaviour. See progress.py for what "untouched" reads.
     stall_after: int = Field(5, alias="PACER_STALL_AFTER", ge=0)
 
-    # The database make-paced edits. kandev has no API for stage_type, so enrolling a
-    # workflow is a direct write -- see make_paced.py.
-    db_path: str = Field(
-        str(Path.home() / ".kandev" / "data" / "kandev.db"), alias="KANDEV_DB"
-    )
-
     # Where Claude Code keeps the subscription token the quota is read with. Read, never
     # written -- see provider.py on why the pacer refuses to refresh it.
     credentials_path: str = Field(

@@ -1,9 +1,11 @@
-"""Adapt an existing Kandev workflow for pacing (Design 13) via its SQLite DB.
+"""Adapt an existing Kandev workflow for pacing (Design 13) through its step API.
 
-Kandev has no supported surface for the central edit pacing needs
-(`stage_type` is display-only in the UI, absent from the step APIs and the
-import format -- see docs/history/pacing-designs.md, Design 13), so this script edits
-the database directly. Per step it:
+`stage_type` is display-only in kandev's UI and absent from the import format
+(see docs/history/pacing-designs.md, Design 13), but the step update endpoint,
+`PUT /api/v1/workflow/steps/{id}`, takes every step field, needs no
+authentication, and changes only the fields the body names. This script reads
+the steps over the same REST calls the pacer makes and writes through that
+endpoint. Per step it:
 
 - strips every `auto_start_agent` action from the step's events, so a finished
   turn parks the task WAITING_FOR_INPUT instead of self-starting past the gate;
@@ -21,10 +23,11 @@ the database directly. Per step it:
   no-change turns the stall detector parks the card for a person who, on an
   unattended board, never comes.
 
-Dry run by default (opens the DB read-only); pass --apply to write. The kandev
-server can stay up: the DB runs in WAL mode and steps are re-read on every use,
-so the change is visible immediately. A workflow re-import resets stage_type
-to 'custom' -- rerun this script after any import.
+Dry run by default (only reads); pass --apply to write. Kandev must be running
+(KANDEV_URL says where). Each changed step is one request, so a failure part
+way leaves the board partly enrolled -- rerunning finishes the job, because
+already-paced steps are skipped. A workflow re-import resets stage_type to
+'custom' -- rerun this script after any import.
 
 Usage:
     uv run make-paced                              # list workflows
@@ -33,13 +36,9 @@ Usage:
     uv run make-paced 'Paced Kanban' --unpace --apply   # stop pacing it
 """
 import argparse
-import json
-import sqlite3
 import sys
-from contextlib import closing
-from pathlib import Path
 
-from .config import settings
+from . import client
 from .workflow import SIGNAL_TOOL, is_work_step, lint_workflow, prompt_mentions_signal
 
 # --- pure planning (unit-tested in tests/test_make_paced.py) ---
@@ -170,57 +169,36 @@ def planned_steps(steps, changes):
     ]
 
 
-# --- sqlite glue ---
+# --- kandev API glue (tested in tests/test_make_paced_cli.py) ---
 
 
-def connect(db_path, writable):
-    """Open the kandev database. A dry run opens it read-only, so it cannot write."""
-    if not Path(db_path).exists():
-        sys.exit(f"error: database not found: {db_path}")
-    target = str(db_path) if writable else f"file:{db_path}?mode=ro"
-    connection = sqlite3.connect(target, uri=not writable, timeout=15)
-    connection.row_factory = sqlite3.Row
-    return connection
-
-
-def resolve_workflow(connection, needle):
-    """Workflow row for an exact id or a case-insensitive name; exits on miss/ambiguity."""
-    rows = connection.execute("SELECT id, name FROM workflows").fetchall()
-    matches = ([row for row in rows if row["id"] == needle]
-               or [row for row in rows if row["name"].lower() == needle.lower()])
+def resolve_workflow(workflows, needle):
+    """Workflow dict for an exact id or a case-insensitive name; exits on miss/ambiguity."""
+    matches = ([row for row in workflows if row["id"] == needle]
+               or [row for row in workflows if row["name"].lower() == needle.lower()])
     if len(matches) == 1:
         return matches[0]
-    listing = "\n".join(f"  {row['id']}  {row['name']}" for row in rows)
+    listing = "\n".join(f"  {row['id']}  {row['name']}" for row in workflows)
     sys.exit(f"error: {'ambiguous' if matches else 'no'} workflow {needle!r}; have:\n{listing}")
 
 
-def load_steps(connection, workflow_id):
-    rows = connection.execute(
-        "SELECT id, name, position, events, is_start_step, stage_type,"
-        " agent_profile_id, prompt, auto_advance_requires_signal"
-        " FROM workflow_steps WHERE workflow_id = ? ORDER BY position",
-        (workflow_id,)).fetchall()
-    steps = []
-    for row in rows:
-        try:
-            events = json.loads(row["events"] or "{}")
-        except json.JSONDecodeError as error:
-            # kandev normally writes valid JSON here; a bad cell means the row
-            # is corrupt. Name the step instead of dumping a raw traceback.
-            sys.exit(f"error: step {row['name']!r} ({row['id']}) "
-                     f"has invalid events JSON: {error}")
-        steps.append({**dict(row), "events": events})
-    return steps
+def step_update(change, unpace):
+    """The request body for one change: only the fields that move.
+
+    Kandev leaves out every field the body does not name, so a minimal body keeps the
+    rest of the step byte-identical -- including a prompt a person edited since.
+    """
+    if unpace:
+        return {"stage_type": change["stage_to"]}
+    body = {"events": change["events"], "stage_type": change["stage_to"]}
+    if change["signal_added"]:
+        body["prompt"] = change["prompt"]
+    return body
 
 
-def apply_changes(connection, changes):
-    with connection:  # one transaction; the server's WAL readers see it atomically
-        for change in changes:
-            connection.execute(
-                "UPDATE workflow_steps SET events = ?, stage_type = ?, prompt = ?,"
-                " updated_at = CURRENT_TIMESTAMP WHERE id = ?",
-                (json.dumps(change["events"], separators=(",", ":")),
-                 change["stage_to"], change["prompt"], change["id"]))
+def apply_changes(changes, unpace=False):
+    for change in changes:
+        client.put(f"/api/v1/workflow/steps/{change['id']}", step_update(change, unpace))
 
 
 # --- cli ---
@@ -248,12 +226,6 @@ def build_parser():
     )
     parser.add_argument(
         "workflow", nargs="?", help="workflow id or name (omit to list workflows)"
-    )
-    parser.add_argument(
-        "--db",
-        default=settings.db_path,
-        metavar="PATH",
-        help=f"kandev SQLite database (default: {settings.db_path})",
     )
     parser.add_argument(
         "--review",
@@ -286,20 +258,24 @@ def build_parser():
 
 def main():
     args = build_parser().parse_args()
+    try:
+        report(args)
+    except client.ReadFailed as error:
+        sys.exit(f"error: {error}\nIs kandev running? Set KANDEV_URL if it listens elsewhere.")
+    except client.WriteFailed as error:
+        sys.exit(f"error: {error}\nSome steps may already be updated; rerunning is safe.")
 
-    with closing(connect(args.db, writable=args.apply)) as connection:
-        report(connection, args)
 
-
-def report(connection, args):
+def report(args):
     """List the workflows, or plan and optionally apply the change to one."""
+    workflows = (client.get("/api/v1/workflows") or {}).get("workflows") or []
     if not args.workflow:
-        for row in connection.execute("SELECT id, name FROM workflows ORDER BY name"):
+        for row in sorted(workflows, key=lambda row: row["name"]):
             print(f"{row['id']}  {row['name']}")
         return
 
-    workflow = resolve_workflow(connection, args.workflow)
-    steps = load_steps(connection, workflow["id"])
+    workflow = resolve_workflow(workflows, args.workflow)
+    steps = sorted(client.steps_of(workflow["id"]), key=lambda step: step["position"])
     if args.unpace:
         changes = plan_unpace(steps)
     else:
@@ -326,7 +302,7 @@ def report(connection, args):
             else "already paced; nothing to do"
         )
     elif args.apply:
-        apply_changes(connection, changes)
+        apply_changes(changes, args.unpace)
         print(f"applied {len(changes)} step update(s)")
         print(
             "no longer paced"
