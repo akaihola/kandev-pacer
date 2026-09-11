@@ -23,10 +23,11 @@ class ReadFailed(RuntimeError):
 
 
 def get(path):
-    """Read one `/api/v1` endpoint. GET is the only HTTP verb the pacer uses.
+    """Read one `/api/v1` endpoint.
 
-    Everything that changes kandev -- launching, draining, flagging -- goes over the
-    WebSocket instead, so there is no body to send and no other method to pick.
+    The pacer's loop only ever reads over HTTP: everything that changes kandev while
+    pacing -- launching, draining, flagging -- goes over the WebSocket. The one HTTP write
+    is `put`, which `make-paced` uses to enrol a workflow.
     """
     try:
         with urllib.request.urlopen(settings.url + path, timeout=15) as response:
@@ -36,17 +37,34 @@ def get(path):
         raise ReadFailed(f"GET {path}: {error}") from error
 
 
+class WriteFailed(RuntimeError):
+    """A PUT kandev refused or never answered, named by its path. See ReadFailed."""
+
+
+def put(path, body):
+    """Send `body` as JSON to one `/api/v1` endpoint and decode the answer."""
+    request = urllib.request.Request(
+        settings.url + path,
+        data=json.dumps(body).encode(),
+        headers={"Content-Type": "application/json"},
+        method="PUT",
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=15) as response:
+            raw = response.read()
+            return json.loads(raw) if raw else None
+    except Exception as error:
+        raise WriteFailed(f"PUT {path}: {error}") from error
+
+
+def steps_of(workflow_id):
+    return (get(f"/api/v1/workflows/{workflow_id}/workflow/steps") or {}).get("steps", [])
+
+
 def workflow_entries():
     """Every workflow kandev knows, each paired with its steps. The startup scan's input."""
     workflows = (get("/api/v1/workflows") or {}).get("workflows") or []
-    return [
-        (
-            workflow,
-            (get(f"/api/v1/workflows/{workflow['id']}/workflow/steps")
-             or {}).get("steps", []),
-        )
-        for workflow in workflows
-    ]
+    return [(workflow, steps_of(workflow["id"])) for workflow in workflows]
 
 
 def tasks_of(workflow_id):
