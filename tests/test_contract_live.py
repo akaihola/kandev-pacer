@@ -20,7 +20,9 @@ is the same read the gate already makes every five minutes; and of the four WebS
 actions the pacer sends, only the two that cannot act are sent -- `message.queue.get`,
 which is a read, and `task.state` with a payload kandev rejects before touching the
 task. `session.launch` and `message.queue.drain` are deliberately never sent, which
-leaves their names the one part of the contract this module cannot check.
+leaves their names the one part of the contract this module cannot check. The one HTTP
+write, make-paced's step update, is probed against a step id that does not exist, so
+kandev refuses it before it can change anything.
 
 Keys come in two tiers, because Go's `omitempty` decides which is which. A field
 declared without it is in every response, so its absence is a contract break and is
@@ -35,6 +37,8 @@ import json
 import os
 import time
 import urllib.error
+import urllib.request
+import uuid
 from pathlib import Path
 
 import pytest
@@ -155,6 +159,36 @@ def test_workflow_steps_envelope(entries):
         for step in workflow_steps:
             require(step, ["id", "workflow_id", "name", "position", "is_start_step",
                            "auto_advance_requires_signal"], f"{where} [step]")
+
+
+def test_steps_carry_the_enrollment_marker(steps):
+    """`stage_type` is how make-paced marks a workflow paced and how the pacer finds it."""
+    for step in steps:
+        require(step, ["stage_type"], "GET /api/v1/workflows/{id}/workflow/steps [step]")
+
+
+def test_step_update_route_exists_without_writing(live):
+    """make-paced's write: PUT /api/v1/workflow/steps/{id}, the field it sets included.
+
+    A made-up id is refused as "not found" once the route has bound the body, which is
+    proof the route and the field are still there without touching any real step. A
+    gone route answers 404 too, so the body of the answer is what tells them apart.
+    """
+    request = urllib.request.Request(
+        f"{settings.url}/api/v1/workflow/steps/{uuid.uuid4()}",
+        data=json.dumps({"stage_type": "work"}).encode(),
+        headers={"Content-Type": "application/json"},
+        method="PUT",
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=15):
+            pytest.fail("PUT on a step that does not exist was accepted")
+    except urllib.error.HTTPError as error:
+        body = error.read().decode()
+        assert error.code == 404 and "Step not found" in body, (
+            f"PUT /api/v1/workflow/steps/{{id}}: expected kandev's own 'Step not found', "
+            f"got {error.code} {body!r} -- the route make-paced writes through may be gone"
+        )
 
 
 def test_step_events_vocabulary(steps):
