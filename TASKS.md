@@ -46,6 +46,14 @@ Rules for TASKS.md usage are at the bottom of the file.
   `agent@gogo` go into the layered config. Replaces the 15-minute cron that spent a
   quarter of the Codex token volume on runs that created nothing.
 
+- [3] Advance a finished-but-unsignalled task instead of flagging it BLOCKED. The stall
+  detector gives up after `PACER_STALL_AFTER` launches that left the worktree untouched,
+  which is right for a wedged card and wrong for a primary session that finished its work
+  and never called `step_complete_kandev`. Add `PACER_STALL_ACTION` (`block`, the default,
+  or `signal`), and on `signal` send kandev's `mcp.step_complete` on the agent's behalf
+  when the stalled session is the task's primary session, is waiting for input, and its
+  step requires the signal. Falls back to `block` when the step does not move.
+
 ## Scheduled
 
 ## In progress
@@ -54,6 +62,7 @@ Rules for TASKS.md usage are at the bottom of the file.
 
 [1]: docs/tasks/1-quota-from-pebble-collector.md
 [2]: docs/tasks/2-heartbeat-webhook.md
+[3]: docs/tasks/3-stall-detector-signal.md
 [*]: TASKS.md
 
 ---
