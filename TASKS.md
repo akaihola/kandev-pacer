@@ -62,6 +62,8 @@ Rules for TASKS.md usage are at the bottom of the file.
 
 ## In progress
 
+- [4] Collect archived session observations without model calls.
+
 ## Completed
 
 - [*] Enrol workflows through kandev's step update endpoint instead of writing
@@ -72,6 +74,7 @@ Rules for TASKS.md usage are at the bottom of the file.
 [1]: docs/tasks/1-quota-from-pebble-collector.md
 [2]: docs/tasks/2-heartbeat-webhook.md
 [3]: docs/tasks/3-stall-detector-signal.md
+[4]: docs/tasks/4-session-observations.md
 [*]: TASKS.md
 
 ---
