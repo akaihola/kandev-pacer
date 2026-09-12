@@ -62,9 +62,9 @@ Rules for TASKS.md usage are at the bottom of the file.
 
 ## In progress
 
-- [4] Collect archived session observations without model calls.
-
 ## Completed
+
+- [4] Collect archived session observations without model calls.
 
 - [*] Enrol workflows through kandev's step update endpoint instead of writing
   `~/.kandev/data/kandev.db`. `PUT /api/v1/workflow/steps/{id}` takes every step field,

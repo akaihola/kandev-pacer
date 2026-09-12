@@ -126,3 +126,53 @@ required verbatim Codex signal quoted above. The other two records have none of 
 listed words. No collector-authored judgment was added. The verbatim/word-exclusion
 conflict remains a confirmed acceptance blocker; it cannot truthfully be reported
 as a passed whole-record check.
+
+
+## Deployment
+
+Merged the collector into main with `--no-ff` (`2a71693`) and the timer into
+nixos-config master with `--no-ff` (`5f22982`). The collector's development-tree
+uv environment was refreshed by running its installed entry point. All 36 focused
+tests pass from `~/prg/kandev-pacer`; help, dry sweep and digest also run there.
+The dry sweep still lists no tasks and does not initialize production state.
+
+No installed user service directly runs kandev-pacer or kandev-learn, so no restart
+applies. No known vempai.men deployment exists for this collector. The Nix timer
+is merged but is not activated; Antti performs rebuild and activation.
+
+Unrelated main-worktree edits were preserved in named stashes to leave both main
+worktrees clean. Neither stash was applied or dropped:
+
+- kandev-pacer: `08a0d0a829fa91d42b8fda023ef571ffcbb4c486`, containing AGENTS.md
+  and docs/patching-task-metadata.md.
+- nixos-config: `b997327e4fb2d45440bbf1afe0648427d4e7b4c3`, containing
+  home-manager/dotfiles/.config/coding-agents/sandbox.md.
+
+Both have the message `pre-kandev-learn-merge: preserve unrelated work`.
+Recover a stash with `git stash apply <hash>` in its repository when ready to
+resume that work. Stashes remain local.
+
+### End-user checks
+
+From `~/prg/kandev-pacer`:
+
+```bash
+uv run --frozen kandev-learn sweep --dry-run
+uv run --frozen kandev-learn 051b4ce1-51d6-4b48-89ee-71ec36f09860
+uv run --frozen kandev-learn digest --since 2026-09-01
+```
+
+These show pending archive identities, return the existing Claude evidence record
+without replacing it, and print the aggregate table. See the implementation-review
+section above for the immutable records' known limitations.
+
+After Antti activates the Nix configuration, verify the scheduled collector with:
+
+```bash
+systemctl --user list-timers kandev-learn.timer
+systemctl --user status kandev-learn.timer
+journalctl --user -u kandev-learn.service -n 30 --no-pager
+```
+
+The timer lists a 15-minute schedule. Its first sweep establishes the archive
+boundary; subsequently archiving a task produces a new record on a later sweep.
