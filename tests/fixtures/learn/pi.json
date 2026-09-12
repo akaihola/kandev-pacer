@@ -1,0 +1,56 @@
+[
+  {
+    "type": "message",
+    "timestamp": "2026-09-01T00:00:00Z",
+    "message": {
+      "role": "assistant",
+      "content": [
+        {
+          "type": "toolCall",
+          "id": "one",
+          "name": "Bash",
+          "arguments": {
+            "command": "pwd"
+          }
+        }
+      ]
+    }
+  },
+  {
+    "type": "message",
+    "timestamp": "2026-09-01T00:00:00Z",
+    "message": {
+      "role": "toolResult",
+      "toolCallId": "one",
+      "isError": false,
+      "content": "ok"
+    }
+  },
+  {
+    "type": "message",
+    "timestamp": "2026-09-01T00:00:02Z",
+    "message": {
+      "role": "assistant",
+      "content": [
+        {
+          "type": "toolCall",
+          "id": "two",
+          "name": "Bash",
+          "arguments": {
+            "command": "pwd"
+          }
+        }
+      ]
+    }
+  },
+  {
+    "type": "message",
+    "timestamp": "2026-09-01T00:00:02Z",
+    "message": {
+      "role": "toolResult",
+      "toolCallId": "two",
+      "isError": true,
+      "content": "éééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééé"
+    }
+  }
+]

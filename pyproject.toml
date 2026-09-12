@@ -16,6 +16,7 @@ dependencies = [
 [project.scripts]
 kandev-pacer = "kandev_pacer.runtime:main"
 make-paced = "kandev_pacer.make_paced:main"
+kandev-learn = "kandev_pacer.learn:main"
 
 [dependency-groups]
 dev = [

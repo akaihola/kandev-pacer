@@ -1,0 +1,48 @@
+{
+  "messages": [
+    {
+      "info": {
+        "modelID": "fixture",
+        "time": {
+          "created": 1788220800000
+        }
+      },
+      "parts": [
+        {
+          "type": "tool",
+          "callID": "one",
+          "tool": "Bash",
+          "state": {
+            "status": "completed",
+            "input": {
+              "command": "pwd"
+            },
+            "output": "ok"
+          }
+        }
+      ]
+    },
+    {
+      "info": {
+        "modelID": "fixture",
+        "time": {
+          "created": 1788220802000
+        }
+      },
+      "parts": [
+        {
+          "type": "tool",
+          "callID": "two",
+          "tool": "Bash",
+          "state": {
+            "status": "error",
+            "input": {
+              "command": "pwd"
+            },
+            "output": "éééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééé"
+          }
+        }
+      ]
+    }
+  ]
+}

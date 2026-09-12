@@ -1,0 +1,40 @@
+[
+  {
+    "type": "response_item",
+    "timestamp": "2026-09-01T00:00:00Z",
+    "payload": {
+      "type": "function_call",
+      "call_id": "one",
+      "name": "Bash",
+      "arguments": "{\"command\": \"pwd\"}"
+    }
+  },
+  {
+    "type": "response_item",
+    "timestamp": "2026-09-01T00:00:00Z",
+    "payload": {
+      "type": "function_call_output",
+      "call_id": "one",
+      "output": "ok"
+    }
+  },
+  {
+    "type": "response_item",
+    "timestamp": "2026-09-01T00:00:02Z",
+    "payload": {
+      "type": "function_call",
+      "call_id": "two",
+      "name": "Bash",
+      "arguments": "{\"command\": \"pwd\"}"
+    }
+  },
+  {
+    "type": "response_item",
+    "timestamp": "2026-09-01T00:00:02Z",
+    "payload": {
+      "type": "function_call_output",
+      "call_id": "two",
+      "output": "Process exited with code 1\nxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+    }
+  }
+]
