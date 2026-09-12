@@ -80,3 +80,49 @@ Its piped stdout stopped at 65,536 bytes; capturing to a regular temporary file
 preserved the complete JSON export.
 
 Antti performs rebuild and activation after integration.
+
+## Implementation review
+
+The review repaired these collection cases:
+
+- Cache gaps now retain transcript identity and never bridge separate transcripts.
+- Unattributed usage sums unassigned usage events from the same source. It no longer
+  subtracts Kandev step totals from ccusage totals or produces floating-point
+  subtraction residue for cost.
+- Hermes costs and call counts accumulate across fully bounded matching sessions.
+  A missing export retains metadata and other available exports; an unfinished
+  session's lifetime totals are excluded from the archive window.
+- Codex exit status comes from the output envelope, excluding quoted status lines
+  after its `Output:` delimiter. Non-string command arguments cannot break the
+  repeated-command table.
+- A turn at a step boundary is counted once. Sweep validates an existing record's
+  archive identity before committing it or advancing its watermark.
+
+The focused suite now passes 36 tests. The full review run before adding the final
+boundary regression reported 41 failures, 263 passes and 19 skips. The 41 failing
+node IDs exactly match the unchanged baseline after normalizing checkout paths.
+Repository formatting, lint and type checks pass. The Nix module parses.
+
+All ten tracker issues occur under exactly one heading. Issue 4 occurs only under
+`In progress`; removing its entry and link makes TASKS.md byte-identical to main.
+The timer branch remains separate and has no activation or rebuild changes.
+
+The same three real tasks were collected again into `/tmp/learn-review-final/`,
+using the normal CLI with an alternate vault and state directory. Their complete
+records are under `pages/PKB/Kandev Session Observations/2026-09/` with the filenames
+listed above. Calls and actual costs remain unchanged. All available unattributed
+usage values are zero; Codex actual cost remains unknown. Claude has two cache-gap
+rows, Codex six, and OpenCode none. These are elapsed-gap observations, not inferred
+cache misses.
+
+The original vault records remain byte-identical and were not overwritten. Their
+`unattributed_usage` fields predate the repair: Codex and OpenCode contain differences
+between ccusage and Kandev totals, and Claude cost contains floating-point residue.
+Use the review reruns for those fields. This limitation is recorded here because the
+immutable-record requirement prevents replacing those published files.
+
+The wording scan of the reruns still finds only the two copies of `should` in the
+required verbatim Codex signal quoted above. The other two records have none of the
+listed words. No collector-authored judgment was added. The verbatim/word-exclusion
+conflict remains a confirmed acceptance blocker; it cannot truthfully be reported
+as a passed whole-record check.
