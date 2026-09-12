@@ -138,7 +138,7 @@ def ccusage_totals(raw, start=None, end=None):
     }
 
 
-def session_steps(raw, start, end, events, turns, waits):
+def session_steps(raw, start, end, events, turns, waits, assigned=None):
     steps = []
     prior = start
     name = raw[0].get("from_step_id") if raw else None
@@ -154,7 +154,7 @@ def session_steps(raw, start, end, events, turns, waits):
                 for t in turns
                 if t.get("started_at")
                 and t.get("completed_at")
-                and timestamp(prior) <= timestamp(t["started_at"])
+                and timestamp(prior) <= timestamp(t["started_at"]) < stop
                 and timestamp(t["completed_at"]) <= stop
             ]
             ids = {t["id"] for t in matched_turns}
@@ -167,6 +167,8 @@ def session_steps(raw, start, end, events, turns, waits):
                     and timestamp(prior) <= timestamp(e["occurred_at"]) < stop
                 )
             ]
+            if assigned is not None:
+                assigned.update(id(e) for e in observed)
             steps.append(
                 {
                     "step": name,
@@ -378,12 +380,14 @@ def collect_task(db_path, task_id, home, timeout=45):
         session["totals"] = totals
         session["tool_calls"] = measure(
             evidence.get("hermes", {}).get("tool_call_count")
-            if agent == "hermes" and not evidence["ids"]
+            if agent == "hermes"
+            and evidence.get("hermes", {}).get("tool_call_count") is not None
             else sum(bool(t.get("called")) for t in evidence["tools"])
             if evidence["ids"] or evidence.get("hermes")
             else None,
             "hermes.sessions.tool_call_count"
-            if agent == "hermes" and not evidence["ids"]
+            if agent == "hermes"
+            and evidence.get("hermes", {}).get("tool_call_count") is not None
             else "transcript.call_id",
         )
         session["waits"], session["gaps"] = [], []
@@ -403,24 +407,30 @@ def collect_task(db_path, task_id, home, timeout=45):
             if not (home / ".local/state/kandev-pacer/pacer.jsonl").exists():
                 session["notes"].append("no data for pacer")
             session["waits"], session["gaps"] = pacer_observations(
-                home, session, completed, evidence["requests"], min(timeout, remaining)
+                home,
+                session,
+                completed,
+                evidence["requests"] or {},
+                min(timeout, remaining),
             )
         except (OSError, ValueError, TimeoutError) as exc:
             session["notes"].append(f"no data for pacer: {type(exc).__name__}")
+        assigned = set()
         session["steps"] = session_steps(
-            source["history"], start, end, events, turns, session["waits"]
+            source["history"], start, end, events, turns, session["waits"], assigned
         )
         if agent == "pi":
             for step in session["steps"]:
                 for key in METRICS:
                     step["totals"][key]["source"] = "pi.message.usage"
+        event_totals = usage_totals(events)
+        unassigned_totals = usage_totals([e for e in events if id(e) not in assigned])
         session["unattributed_usage"] = {
             key: measure(
-                totals[key]["value"]
-                - sum(step["totals"][key]["value"] or 0 for step in session["steps"])
-                if totals[key]["value"] is not None and events
+                unassigned_totals[key]["value"] or 0
+                if event_totals[key]["value"] is not None and events
                 else None,
-                totals[key]["source"],
+                "pi.message.usage" if agent == "pi" else event_totals[key]["source"],
             )
             for key in METRICS
         }
@@ -452,10 +462,12 @@ def collect_task(db_path, task_id, home, timeout=45):
                 )
         record["sessions"].append(session)
     commands = Counter(
-        t.get("input", {}).get("command", t.get("input", {}).get("cmd"))
+        cmd
         for session in record["sessions"]
         for t in session["tools"]
         if isinstance(t.get("input"), dict) and t.get("called")
+        for cmd in [t["input"].get("command", t["input"].get("cmd"))]
+        if isinstance(cmd, str)
     )
     for session in record["sessions"]:
         for tool in session["tools"]:
@@ -838,7 +850,11 @@ def sweep(args):
     paths = []
     for task_id, at in selected:
         path = record_path(args.vault, task_id, at)
-        if not path.exists():
+        if path.exists():
+            record = read_record(path)
+            if (record.get("task"), record.get("archived_at")) != (task_id, at):
+                raise ValueError("observation identity conflict")
+        else:
             path = write_task(args, task_id, at)
         if path:
             paths.append(path)

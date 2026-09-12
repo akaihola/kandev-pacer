@@ -125,15 +125,25 @@ def tool_events(agent, entries):
             elif kind in ("function_call_output", "custom_tool_call_output"):
                 output = payload.get("output", "")
                 # Codex records command exit status in a structured output envelope.
-                match = re.search(
-                    r"Process exited with code (\d+)", content_text(output)
+                envelope = output
+                if isinstance(envelope, str):
+                    with contextlib.suppress(ValueError):
+                        envelope = json.loads(envelope)
+                status = (
+                    envelope.get("exit_code") if isinstance(envelope, dict) else None
                 )
+                if isinstance(envelope, str):
+                    header = envelope.split("\nOutput:", 1)[0]
+                    match = re.search(
+                        r"(?m)^Process (?:exited with|exit) code:? (\d+)$", header
+                    )
+                    status = int(match[1]) if match else None
                 blocks = [
                     {
                         "type": "tool_result",
                         "tool_use_id": payload.get("call_id"),
                         "content": output,
-                        "is_error": bool(match and int(match[1])),
+                        "is_error": bool(status),
                     }
                 ]
             else:
@@ -355,7 +365,7 @@ def collect_transcripts(home, session, timeout=45):
         "ids": [],
         "models": [],
         "notes": [],
-        "requests": [],
+        "requests": {},
         "pi_usage": [],
         "aggregate_ids": [],
     }
@@ -384,7 +394,22 @@ def collect_transcripts(home, session, timeout=45):
                     if expected and expected not in file.stem:
                         continue
                     loader = pi_session if agent == "pi" else claude_session
-                    entries = loader._load_entries(file)
+                    entries = [
+                        e for e in loader._load_entries(file) if isinstance(e, dict)
+                    ]
+                    identity = file.stem
+                    if agent == "codex":
+                        identity = (
+                            next(
+                                (
+                                    e.get("payload", {}).get("id")
+                                    for e in entries
+                                    if e.get("type") == "session_meta"
+                                ),
+                                None,
+                            )
+                            or identity
+                        )
                     full_window = all(
                         start <= timestamp(e["timestamp"]) <= end
                         for e in entries
@@ -408,19 +433,6 @@ def collect_transcripts(home, session, timeout=45):
                         and start <= timestamp(e["timestamp"]) <= end
                     ]
                     if entries:
-                        identity = file.stem
-                        if agent == "codex":
-                            identity = (
-                                next(
-                                    (
-                                        e.get("payload", {}).get("id")
-                                        for e in loader._load_entries(file)
-                                        if e.get("type") == "session_meta"
-                                    ),
-                                    None,
-                                )
-                                or identity
-                            )
                         candidates.append((identity, entries, file))
                         if full_window or agent == "claude":
                             result["aggregate_ids"].append(identity)
@@ -462,11 +474,26 @@ def collect_transcripts(home, session, timeout=45):
                         continue
                     full_window = begin >= start and finish <= end
                     if agent == "hermes":
-                        result["hermes"] = {
-                            k: row.get(k) if full_window else None
-                            for k in ("actual_cost_usd", "tool_call_count", "model")
-                        }
-                    exported = export_session(home, agent, row["id"], path, timeout)
+                        full_window = full_window and row.get("ended_at") is not None
+                        if not full_window:
+                            result["notes"].append(
+                                "no transcript: session is not bounded by time window"
+                            )
+                            continue
+                        metadata = result.setdefault("hermes", {})
+                        for key in ("actual_cost_usd", "tool_call_count"):
+                            value = row.get(key)
+                            if value is not None:
+                                metadata[key] = metadata.get(key, 0) + value
+                        if row.get("model"):
+                            result["models"].append(row["model"])
+                    try:
+                        exported = export_session(home, agent, row["id"], path, timeout)
+                    except (OSError, RuntimeError, subprocess.TimeoutExpired) as exc:
+                        result["notes"].append(
+                            f"no data for {agent}: {type(exc).__name__}"
+                        )
+                        continue
                     if agent == "opencode":
                         exported_data = json.loads(exported)
                         message_times = [
@@ -531,8 +558,9 @@ def collect_transcripts(home, session, timeout=45):
                         if agent == "claude"
                         else cache_waste.codex_session(file)[1]
                     )
-                    result["requests"].extend(
-                        r for r in requests if start <= r[0] <= end
+                    result["requests"][identity] = sorted(
+                        (r for r in requests if start <= r[0] <= end),
+                        key=lambda r: r[0],
                     )
     except (
         OSError,
@@ -569,7 +597,6 @@ def collect_transcripts(home, session, timeout=45):
                 result["models"].extend(models.keys())
             elif isinstance(models, list):
                 result["models"].extend(m for m in models if isinstance(m, str))
-    result["requests"] = sorted(result["requests"], key=lambda r: r[0])
     result["models"] = sorted(set(result["models"]))
     result["analyzer_sha256"] = hashlib.sha256(
         Path((pi_session if agent == "pi" else claude_session).__file__).read_bytes()
@@ -594,9 +621,11 @@ def pacer_observations(home, session, turns, requests, timeout):
             and timestamp(session["start"]) <= r[0] <= timestamp(session["end"])
         ]
         claude = (
-            {cache_waste.slug(path): [requests]} if session["agent"] == "claude" else {}
+            {cache_waste.slug(path): list(requests.values())}
+            if session["agent"] == "claude"
+            else {}
         )
-        codex = {path: [requests]} if session["agent"] == "codex" else {}
+        codex = {path: list(requests.values())} if session["agent"] == "codex" else {}
         rows = cache_waste.attribute(
             launches,
             withheld,
@@ -610,27 +639,29 @@ def pacer_observations(home, session, turns, requests, timeout):
         )
         waits = [{k: r[k] for k in ("t", "wait", "held", "matched")} for r in rows]
         gaps = []
-        for previous, current in zip(requests, requests[1:], strict=False):
-            ttl = (
-                cache_waste.claude_ttl(current[1])
-                if session["agent"] == "claude"
-                else cache_waste.TTL_CODEX
-            )
-            if current[0] - previous[0] > ttl:
-                gaps.append(
-                    {
-                        "start": previous[0],
-                        "end": current[0],
-                        "seconds": current[0] - previous[0],
-                        "ttl": ttl,
-                        "ttl_source": "cache_waste",
-                        "usage_after": current[1],
-                        "pacer_withheld": None
-                        if not log_available
-                        else any(
-                            r["held"] and previous[0] < r["t"] <= current[0]
-                            for r in waits
-                        ),
-                    }
+        for identity, group in requests.items():
+            for previous, current in zip(group, group[1:], strict=False):
+                ttl = (
+                    cache_waste.claude_ttl(current[1])
+                    if session["agent"] == "claude"
+                    else cache_waste.TTL_CODEX
                 )
+                if current[0] - previous[0] > ttl:
+                    gaps.append(
+                        {
+                            "transcript_id": identity,
+                            "start": previous[0],
+                            "end": current[0],
+                            "seconds": current[0] - previous[0],
+                            "ttl": ttl,
+                            "ttl_source": "cache_waste",
+                            "usage_after": current[1],
+                            "pacer_withheld": None
+                            if not log_available
+                            else any(
+                                r["held"] and previous[0] < r["t"] <= current[0]
+                                for r in waits
+                            ),
+                        }
+                    )
         return waits, gaps

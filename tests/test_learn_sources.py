@@ -149,7 +149,7 @@ def test_cache_import_and_pacer_attribution(tmp_path, monkeypatch):
         (base + 410, {"input_tokens": 20, "cached_input_tokens": 0}),
     ]
     waits, gaps = sources.pacer_observations(
-        tmp_path, session, [(base, base + 10)], requests, 1
+        tmp_path, session, [(base, base + 10)], {"one": requests}, 1
     )
     assert waits[0]["wait"] == 390
     assert gaps[0]["pacer_withheld"] is True
@@ -167,7 +167,7 @@ def test_gap_survives_missing_pacer_log(tmp_path):
         "end": "2026-09-02",
     }
     waits, gaps = sources.pacer_observations(
-        tmp_path, session, [], [(base, {}), (base + 500, {})], 1
+        tmp_path, session, [], {"one": [(base, {}), (base + 500, {})]}, 1
     )
     assert waits == []
     assert gaps[0]["seconds"] == 500
@@ -190,3 +190,88 @@ def test_sqlite_source_deadline(tmp_path):
             "WHERE x<1000000000) SELECT sum(x) FROM n"
         ).fetchone()
     assert time.monotonic() - began < 1
+
+
+def test_cache_gaps_do_not_cross_transcripts(tmp_path):
+    base = sources.timestamp("2026-09-01")
+    session = {
+        "id": "one",
+        "agent": "codex",
+        "workspace_path": "/gone",
+        "models": [],
+        "start": "2026-09-01",
+        "end": "2026-09-02",
+    }
+    _, gaps = sources.pacer_observations(
+        tmp_path,
+        session,
+        [],
+        {"a": [(base, {})], "b": [(base + 500, {})]},
+        1,
+    )
+    assert gaps == []
+
+
+@pytest.mark.parametrize(
+    "output,error",
+    [
+        ('{"exit_code": 1, "output": "failure"}', True),
+        ("Process exit code: 0\nOutput:\nProcess exited with code 1", False),
+        ("Process exited with code 2\nOutput:\nfailed", True),
+    ],
+)
+def test_codex_exit_envelope(output, error):
+    entries = [
+        {
+            "type": "response_item",
+            "payload": {
+                "type": "function_call_output",
+                "call_id": "one",
+                "output": output,
+            },
+        }
+    ]
+    assert sources.tool_events("codex", entries)[0]["error"] is error
+
+
+def test_multiple_hermes_sessions_with_missing_export(tmp_path, monkeypatch):
+    import sqlite3
+
+    path = tmp_path / ".hermes/profiles/tyko/state.db"
+    path.parent.mkdir(parents=True)
+    with sqlite3.connect(path) as db:
+        db.execute(
+            "CREATE TABLE sessions (id, cwd, started_at, ended_at, actual_cost_usd, "
+            "tool_call_count, model)"
+        )
+        db.executemany(
+            "INSERT INTO sessions VALUES (?, '/gone', 1788220801, ?, 0.5, 3, 'fixture')",
+            [
+                ("one", 1788220802),
+                ("two", 1788220803),
+                ("open", None),
+            ],
+        )
+
+    def export(_home, _agent, identity, *_):
+        if identity == "two":
+            raise FileNotFoundError()
+        return "\n".join(
+            json.dumps(e) for e in json.loads((FIXTURES / "hermes.json").read_text())
+        )
+
+    monkeypatch.setattr(sources, "export_session", export)
+    monkeypatch.setattr(sources, "ccusage", lambda *_: [])
+    result = sources.collect_transcripts(
+        tmp_path,
+        {
+            "agent": "hermes",
+            "workspace_path": "/gone",
+            "start": "2026-09-01",
+            "end": "2026-09-02",
+        },
+    )
+    assert result["hermes"]["actual_cost_usd"] == 1
+    assert result["hermes"]["tool_call_count"] == 6
+    assert result["ids"] == ["one"]
+    assert len(result["tools"]) == 2

@@ -320,3 +320,93 @@ def test_retry_after_concurrent_head_change(sweep_args, monkeypatch):
     ).decode()
     assert "concurrent" in history
     assert history.count("record archived") == 1
+
+
+def test_sweep_rejects_existing_identity_conflict(sweep_args):
+    args = sweep_args
+    learn.sweep(args)
+    add(args, "task", "2026-09-02")
+    path = learn.record_path(args.vault, "task", "2026-09-02")
+    learn.publish(path, '---\n{"task":"other","archived_at":"2026-09-02"}\n---\n')
+    with pytest.raises(ValueError, match="identity conflict"):
+        learn.sweep(args)
+    assert state(args)["watermark"] == ""
+    assert subprocess.check_output(["git", "-C", str(args.vault), "ls-files"]) == b""
+
+
+def test_collect_preserves_usage_sources_and_command_types(tmp_path, monkeypatch):
+    db_path = tmp_path / "kandev.db"
+    with sqlite3.connect(db_path) as db:
+        for schema in [
+            "tasks (id, title, workflow_id, archived_at, archived_by_cascade_id, metadata)",
+            "workflows (id, name)",
+            "agents (id, name)",
+            "agent_profiles (id, agent_id, model)",
+            "task_sessions (id, task_id, agent_profile_id, started_at, completed_at, "
+            "workspace_path, metadata, agent_profile_snapshot)",
+            "session_step_history (id, session_id, created_at, from_step_id, to_step_id, metadata)",
+            "task_usage_events (id, session_id, usage_event_id, occurred_at, "
+            "turn_id, tokens_in, tokens_out, tokens_cached_read, "
+            "tokens_cached_write, tokens_thought, estimated, cost_source, cost_subcents)",
+            "task_session_turns (id, task_session_id, started_at, completed_at)",
+            "task_session_commits (session_id)",
+        ]:
+            db.execute("CREATE TABLE " + schema)
+        db.execute(
+            "INSERT INTO tasks VALUES ('task', 'fixture', NULL, '2026-09-02', NULL, '{}')"
+        )
+        db.execute("INSERT INTO agents VALUES ('agent', 'claude-acp')")
+        db.execute("INSERT INTO agent_profiles VALUES ('profile', 'agent', 'fixture')")
+        db.execute(
+            "INSERT INTO task_sessions VALUES ('s', 'task', 'profile', '2026-09-01', "
+            "'2026-09-02', '/gone', '{}', '{}')"
+        )
+        db.execute(
+            "INSERT INTO task_usage_events VALUES ('e', 's', 'e', "
+            "'2026-09-01T01:00:00Z', NULL, 10, 0, 0, 0, 0, 0, 'provider_reported', 500)"
+        )
+    monkeypatch.setattr(
+        learn,
+        "collect_transcripts",
+        lambda *_: {
+            "models": [],
+            "ids": ["one"],
+            "notes": [],
+            "requests": {},
+            "tools": [{"id": "one", "called": True, "input": {"command": ["pwd"]}}],
+            "ccusage": [{"inputTokens": 100}],
+        },
+    )
+    record = learn.collect_task(db_path, "task", tmp_path)
+    session = record["sessions"][0]
+    assert session["totals"]["input"]["value"] == 100
+    assert session["steps"][0]["totals"]["input"]["value"] == 10
+    assert session["unattributed_usage"]["input"]["value"] == 0
+    assert session["unattributed_usage"]["input"]["source"].startswith(
+        "task_usage_events"
+    )
+    assert "command" not in session["tools"][0]
+
+
+def test_boundary_turn_is_counted_once():
+    steps = learn.session_steps(
+        [
+            {
+                "created_at": "2026-09-01T01:00:00Z",
+                "from_step_id": "one",
+                "to_step_id": "two",
+            }
+        ],
+        "2026-09-01",
+        "2026-09-02",
+        [],
+        [
+            {
+                "id": "turn",
+                "started_at": "2026-09-01T01:00:00Z",
+                "completed_at": "2026-09-01T01:00:00Z",
+            }
+        ],
+        [],
+    )
+    assert [step["turns"] for step in steps] == [0, 1]
