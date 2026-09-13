@@ -658,7 +658,8 @@ class Pacer:
         except Exception as error:
             status = str(error)
         line = f"heartbeat: {provider_name} has {launchable} launchable -> webhook {status}"
-        (log.info if status == 200 else log.warning)(line)
+        accepted = isinstance(status, int) and 200 <= status < 300
+        (log.info if accepted else log.warning)(line)
         self.log_event({
             "t": round(now, 3), "kind": "heartbeat", "provider": provider_name,
             "launchable": launchable, "status": status,
