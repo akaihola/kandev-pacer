@@ -6,6 +6,7 @@ Origin header /ws insists on, and error frames. No real kandev, no agent turn, n
 import urllib.error
 from email.message import Message
 
+import pytest
 import websocket
 
 from kandev_pacer import client
@@ -186,3 +187,42 @@ def test_a_failed_put_names_the_path_it_failed_on(monkeypatch):
         assert "/api/v1/workflow/steps/ip" in str(error) and "409" in str(error)
     else:
         raise AssertionError("a refused PUT must raise")
+
+
+def test_post_webhook_sends_the_secret_as_a_header(monkeypatch):
+    seen = []
+
+    class _Response:
+        status = 200
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_):
+            return False
+
+    def fake_urlopen(request, timeout=None):
+        seen.append((request, timeout))
+        return _Response()
+
+    monkeypatch.setattr(client.urllib.request, "urlopen", fake_urlopen)
+    assert client.post_webhook("http://kandev/hook", "s3cret", {"provider": "openai"}) == 200
+    [(request, timeout)] = seen
+    assert (request.get_method(), request.full_url, timeout) == ("POST", "http://kandev/hook", 10)
+    assert request.get_header("X-webhook-secret") == "s3cret"
+    assert request.data == b'{"provider": "openai"}'
+
+
+def test_post_webhook_returns_an_http_error_status_and_raises_on_no_answer(monkeypatch):
+    def refused(request, timeout=None):
+        raise urllib.error.HTTPError(request.full_url, 409, "Conflict", Message(), None)
+
+    monkeypatch.setattr(client.urllib.request, "urlopen", refused)
+    assert client.post_webhook("http://kandev/hook", "s", {}) == 409
+
+    def down(request, timeout=None):
+        raise OSError("connection refused")
+
+    monkeypatch.setattr(client.urllib.request, "urlopen", down)
+    with pytest.raises(client.WriteFailed, match="POST http://kandev/hook"):
+        client.post_webhook("http://kandev/hook", "s3cret", {})

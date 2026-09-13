@@ -10,7 +10,7 @@ import tomllib
 from pathlib import Path
 from typing import Any
 
-from pydantic import Field, field_validator
+from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings
 
 # What PACER_APIKEY_POLICY may be. Defined here so the field validator can see it before
@@ -106,6 +106,17 @@ class Settings(BaseSettings):
         alias="PACER_LOG",
     )
 
+    # The kandev automation that refills the board from each repository's TASKS.md has a
+    # webhook trigger and no schedule; the pacer calls it when a provider is about to run
+    # dry. Empty URL turns the feature off. The secret goes in the X-Webhook-Secret
+    # header and never into a log line or the JSONL.
+    heartbeat_webhook_url: str = Field("", alias="PACER_HEARTBEAT_WEBHOOK_URL")
+    heartbeat_webhook_secret: str = Field("", alias="PACER_HEARTBEAT_WEBHOOK_SECRET")
+    # Call when a provider's gate is open and its launchable count is below this.
+    heartbeat_min_launchable: int = Field(2, alias="PACER_HEARTBEAT_MIN_LAUNCHABLE", ge=0)
+    # Seconds between calls, counted from the last attempt, whatever the board does.
+    heartbeat_min_interval: int = Field(1800, alias="PACER_HEARTBEAT_MIN_INTERVAL", ge=0)
+
     # --- values derived from the ones above ---
     #
     # Properties, not fields a validator fills in: a derived value that is settable is
@@ -177,6 +188,16 @@ class Settings(BaseSettings):
                 f"PACER_APIKEY_POLICY must be one of {sorted(APIKEY_POLICIES)}, not {value!r}"
             )
         return value
+
+    @model_validator(mode="after")
+    def _heartbeat_needs_a_secret(self):
+        # A URL without a secret would be refused with 401 every half hour, forever.
+        if self.heartbeat_webhook_url and not self.heartbeat_webhook_secret:
+            raise ValueError(
+                "PACER_HEARTBEAT_WEBHOOK_URL is set but PACER_HEARTBEAT_WEBHOOK_SECRET "
+                "is empty: the webhook needs both"
+            )
+        return self
 
 
 CONFIG_FIELDS = {
