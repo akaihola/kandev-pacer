@@ -183,6 +183,15 @@ to be argued from. The record kinds, append-only, ~300 KB/day at the default tic
 enrolled, or its steps are tagged but do not route on turn completion. `--dump-order` names
 what is out of scope and why; `make-paced '<workflow>'` shows what enrollment would change.
 
+When the board is empty, heartbeat handling follows the provider's `nothing to launch`
+report. A configured webhook is called when an open provider has fewer than 2 launchable
+tasks by default, counted across all its model classes. Setting
+`PACER_HEARTBEAT_MIN_LAUNCHABLE=0` prevents triggering. If refill is due but skipped,
+the next heartbeat line explains why: the webhook is disabled, the default 1800-second
+cooldown has not elapsed, or a heartbeat is already running. Enable it with
+`PACER_HEARTBEAT_WEBHOOK_URL` and `PACER_HEARTBEAT_WEBHOOK_SECRET`; see the
+[deployment instructions](docs/tasks/2-heartbeat-webhook.md#deploy-on-gogo).
+
 **A prompt you queued never runs.** Check it is on a session the pacer can see: it reads
 every *idle* session, so a prompt parked on a `RUNNING` one waits for that turn to finish.
 
