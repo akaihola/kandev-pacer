@@ -79,6 +79,15 @@ Rules for TASKS.md usage are at the bottom of the file.
   logged as `fallback` in the tick record. Deprioritized 2026-09-11: with Max 20x and
   ChatGPT Pro, exhaustion is no longer the common case. Keep it for a provider that is
   down rather than spent.
+- [*] Read secrets from an env file the pacer opens itself. Add `secrets_file`
+  (`PACER_SECRETS_FILE`, default empty) as a layer between the TOML file and the
+  process environment: `KEY=VALUE` lines, only keys in `CONFIG_FIELDS`, real
+  environment still wins. Refuse to start if the file is group- or world-readable,
+  and never log its contents. On `agent@gogo` the nix-generated `config.toml` points
+  it at `~/.config/secrets/kandev-pacer.env`, so starting the pacer no longer needs a
+  `source` first and a forgotten one cannot leave `heartbeat_webhook_url` without its
+  secret. Do not hardcode that path; it is a nixos-config convention.
+
 
 ## Scheduled
 
