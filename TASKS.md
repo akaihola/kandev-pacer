@@ -91,6 +91,9 @@ Rules for TASKS.md usage are at the bottom of the file.
 
 ## Scheduled
 
+- [*] Show Fable in scoped gate logs even when it is the only class, and diagnose
+  why waiting Fable tasks are not launchable.
+
 ## In progress
 
 ## Completed
