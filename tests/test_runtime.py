@@ -983,6 +983,8 @@ def test_a_heartbeat_url_without_a_secret_fails_at_startup():
 def test_heartbeat_empty_board_calls_once_for_two_providers(
     pacer, board, heartbeat, monkeypatch, caplog
 ):
+    now = runtime.time.time()
+    monkeypatch.setattr(runtime.time, "time", lambda: now)
     monkeypatch.setattr(settings, "providers_raw", "anthropic openai")
     written = records_of(pacer, monkeypatch)
     with caplog.at_level(logging.INFO, logger="kandev-pacer"):
@@ -1004,6 +1006,10 @@ def test_heartbeat_empty_board_calls_once_for_two_providers(
         tick(pacer, board, [], {}, {})
     assert len(heartbeat) == 1
     assert "heartbeat: cooldown, retry in 1800s" in caplog.text
+    assert pacer._last_heartbeat_at == now
+    assert len([r for r in written if r["kind"] == "heartbeat"]) == 1
+    assert "http://kandev/hook" not in caplog.text
+    assert "s3cret" not in caplog.text
 
 
 @pytest.mark.parametrize("reason", ["disabled", "already running"])
