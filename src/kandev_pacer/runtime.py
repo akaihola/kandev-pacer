@@ -125,11 +125,10 @@ def _provider_label(provider_name):
     return "api-key" if provider_name == API_KEY else provider_name
 
 
-def _group_label(group, split):
-    """The gate's name for the log lines: the provider, with its scope class appended
-    only when the provider actually split into classes -- an unsplit run reads as before."""
+def _group_label(group):
+    """Name the provider and any model scopes, even when there is only one class."""
     name = _provider_label(group.provider)
-    if split and group.scopes:
+    if group.scopes:
         return f"{name} ({'+'.join(group.scopes)})"
     return name
 
@@ -684,8 +683,7 @@ class Pacer:
         tasks of every open class.
         """
         now = snapshot.now
-        # No tag on a single-subscription, single-class run, so its lines stay
-        # byte-identical to what they were; named once the subject is ambiguous.
+        # Keep the single-subscription, single-class selection path unchanged.
         split = len(verdicts) > 1
         plain = (
             len(self.config.providers) == 1
@@ -694,7 +692,7 @@ class Pacer:
         )
 
         def tag_of(group):
-            return "" if plain else f"[{_group_label(group, split)}] "
+            return "" if plain and not group.scopes else f"[{_group_label(group)}] "
 
         running = self.running_of(provider_name, snapshot)
 

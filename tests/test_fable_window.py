@@ -155,6 +155,40 @@ def _ready(tid, profile):
     )
 
 
+@pytest.mark.parametrize("providers", ["anthropic", "anthropic openai"])
+@pytest.mark.parametrize(
+    "fable_pct, outcome", [(10, "open, nothing to launch"), (83, "PAUSED")]
+)
+def test_a_sole_fable_class_is_named_in_text_logs(
+    solo, board, monkeypatch, caplog, providers, fable_pct, outcome
+):
+    monkeypatch.setattr(settings, "providers_raw", providers)
+    _fable_board(board, fable_pct=fable_pct)
+    with caplog.at_level("INFO", logger="kandev-pacer"):
+        run(solo, board, [], {}, {})
+    assert any(
+        message.startswith("[anthropic (Fable)] headroom=") and outcome in message
+        for message in caplog.messages
+    )
+    if "openai" in providers:
+        assert any(
+            message.startswith("[openai] headroom=") for message in caplog.messages
+        )
+    assert launches(board) == []
+
+
+def test_a_sole_open_fable_class_launches(solo, board, caplog):
+    _fable_board(board, fable_pct=10)
+    task, (_, sessions) = _ready("tf", "p-fable")
+    with caplog.at_level("INFO", logger="kandev-pacer"):
+        run(solo, board, [task], {"tf": sessions}, {})
+    assert launches(board) == ["tf"]
+    assert any(
+        message.startswith("[anthropic (Fable)] headroom=")
+        for message in caplog.messages
+    )
+
+
 def test_a_bound_fable_window_does_not_withhold_general_work(solo, board):
     """The 08-14 regression: Fable bound, general open -> a non-Fable task must launch."""
     _fable_board(board)
@@ -242,15 +276,17 @@ def test_the_agents_call_is_made_only_when_a_scoped_window_appears(solo, board):
     assert board.paths.count("/api/v1/agents") == 1
 
 
-def test_without_a_scoped_window_nothing_splits(solo, board, monkeypatch):
+def test_without_a_scoped_window_nothing_splits(solo, board, monkeypatch, caplog):
     """Backward compatibility falls out: no scoped window -> one class, today's path."""
     written = []
     monkeypatch.setattr(solo, "log_event", written.append)
     t, (_, s) = _ready("t", "p-opus")
-    run(solo, board, [t], {"t": s}, {})
+    with caplog.at_level("INFO", logger="kandev-pacer"):
+        run(solo, board, [t], {"t": s}, {})
     ticks = [r for r in written if r["kind"] == "tick"]
     assert len(ticks) == 1 and ticks[0]["scope"] is None
     assert launches(board) == ["t"]
+    assert any(message.startswith("headroom=") for message in caplog.messages)
 
 
 def test_scope_classes_compose_with_a_second_provider(board, monkeypatch):

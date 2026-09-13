@@ -265,6 +265,10 @@ gates on the shared pair alone, so a tight Fable window no longer withholds work
 that cannot spend it. A task whose model the pacer cannot see gates on all windows:
 stricter, never looser. The two classes still share the provider's concurrency cap and its
 one launch per tick, and queue order picks among the tasks whose class is open.
+Text logs name the scoped gate `[anthropic (Fable)]`, even when it is the only class.
+`open, nothing to launch` means quota allows work but no task is eligible to launch or
+drain a queued prompt. Check `kandev-pacer --dump-order` for workflow enrollment and WIP
+exclusions, then the task's step, session state and withheld/failed/stalled log records.
 [`docs/fable-window.md`] documents the verified quota rules and the design.
 
 ## Pausing and the prompt cache
