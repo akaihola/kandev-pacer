@@ -4,6 +4,10 @@ Rules for TASKS.md usage are at the bottom of the file.
 
 ## Ordered backlog
 
+- [5] Decide what consumes the `kandev-learn` session observation records. A wayfinder
+  map with decision tickets (audience, home, output, cadence, write boundary); grilling
+  tickets need Antti. Ends at a plan handoff, not an implementation.
+
 - [*] In session observation files from `kandev-learn`, truncate long values for
   brevity when full precision is not needed. For example, use millisecond
   precision for durations, 1/1000 dollars for cost, and milliseconds without
@@ -99,6 +103,7 @@ Rules for TASKS.md usage are at the bottom of the file.
 [2]: docs/tasks/2-heartbeat-webhook.md
 [3]: docs/tasks/3-stall-detector-signal.md
 [4]: docs/tasks/4-session-observations.md
+[5]: docs/tasks/5-observation-consumer.md
 [*]: TASKS.md
 
 ---
