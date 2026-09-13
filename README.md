@@ -106,6 +106,10 @@ long option such as `--interval` and `--concurrency`.
 | `PACER_BLOCK_AFTER` | `2` | consecutive failures before the card is flagged `BLOCKED`. `0` keeps the pacer read-only |
 | `PACER_CREDENTIALS` | `~/.claude/.credentials.json` | the subscription token the quota is read with. **Read, never written** — Claude Code owns this file, and a second refresher racing it would rotate the token out from under the user's login |
 | `PACER_LOG` | `~/.local/state/kandev-pacer/pacer.jsonl` | JSONL event log. Empty disables it |
+| `PACER_HEARTBEAT_WEBHOOK_URL` | unset | the kandev automation webhook to call when a provider runs out of work. Empty turns the feature off — see [Refilling the board](#refilling-the-board) |
+| `PACER_HEARTBEAT_WEBHOOK_SECRET` | unset | sent as `X-Webhook-Secret`. Required when the URL is set; keep it out of the TOML and the nix store, load it from an env file |
+| `PACER_HEARTBEAT_MIN_LAUNCHABLE` | `2` | call the webhook when an open provider's launchable count is below this |
+| `PACER_HEARTBEAT_MIN_INTERVAL` | `1800` | seconds between calls, counted from the last attempt whatever it answered |
 
 ## Which task goes next
 
@@ -137,11 +141,29 @@ pacer releases it when the gate opens. Releases outrank launches, and a task wit
 prompt is drained at *any* step, including parked ones like Review where a launch never
 applies. See [`docs/queueing-user-prompts.md`].
 
+## Refilling the board
+
+The `[Auto] Heartbeat` automation in kandev refills the paced boards from each repository's
+`TASKS.md`. On a 15-minute cron it spent a quarter of the Codex subscription finding nothing
+to do, so it now has a webhook trigger and no schedule, and the pacer calls it — the one
+process that knows when the board is running dry. Set `PACER_HEARTBEAT_WEBHOOK_URL` and
+`PACER_HEARTBEAT_WEBHOOK_SECRET` to turn this on; a URL without a secret fails at startup.
+
+Once per tick, after the providers have been paced, the pacer POSTs
+`{"source": "kandev-pacer", "provider": ..., "launchable": ...}` when a provider's gate is
+**open** and fewer than `PACER_HEARTBEAT_MIN_LAUNCHABLE` of its tasks could be launched:
+quota is available and the board is about to idle. A paused gate with no work needs no new
+work, so it never calls. It waits `PACER_HEARTBEAT_MIN_INTERVAL` between *attempts* — a
+`409` (a run is already active on kandev's side) does not retry every tick — and skips
+while a task titled `[Auto] Heartbeat` on a paced board has a session running. Each attempt
+writes one `heartbeat` record to the log with the HTTP status or the error; a failed call
+is a warning, and the board keeps pacing without it.
+
 ## Logging
 
 The stdout lines say what the pacer is doing now. The JSONL log at `PACER_LOG` says what it
 did over the last week, which is what any change to `PACER_CONCURRENCY` or `PACER_ALPHA` has
-to be argued from. Three record kinds, append-only, ~300 KB/day at the default tick:
+to be argued from. The record kinds, append-only, ~300 KB/day at the default tick:
 
 - **`tick`** — one per tick, in every branch. Carries `gate` (`open`/`paused`/`ceiling`/`blind`)
   and `action` (`launched`/`drained`/`full`/`nothing`/`skipped`/`empty`/`exhausted`/`withheld`)
@@ -152,6 +174,8 @@ to be argued from. Three record kinds, append-only, ~300 KB/day at the default t
 - **`failure`** — a launch or drain kandev refused, with the reason and the consecutive count.
 - **`start` / `error`** — run configuration, so analysis can segment by cap/alpha/order, and
   loop failures.
+- **`heartbeat`** — one per webhook attempt, with the provider, its launchable count and the
+  HTTP status or error. See [Refilling the board](#refilling-the-board).
 
 ## Troubleshooting
 

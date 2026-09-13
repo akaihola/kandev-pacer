@@ -3,6 +3,7 @@
 import json
 import logging
 import time
+import urllib.error
 import urllib.request
 
 import websocket
@@ -25,9 +26,9 @@ class ReadFailed(RuntimeError):
 def get(path):
     """Read one `/api/v1` endpoint.
 
-    The pacer's loop only ever reads over HTTP: everything that changes kandev while
-    pacing -- launching, draining, flagging -- goes over the WebSocket. The one HTTP write
-    is `put`, which `make-paced` uses to enrol a workflow.
+    Everything that changes kandev while pacing -- launching, draining, flagging -- goes
+    over the WebSocket. The HTTP writes are `put`, which `make-paced` uses to enrol a
+    workflow, and `post_webhook`, which fires the Heartbeat automation.
     """
     try:
         with urllib.request.urlopen(settings.url + path, timeout=15) as response:
@@ -55,6 +56,29 @@ def put(path, body):
             return json.loads(raw) if raw else None
     except Exception as error:
         raise WriteFailed(f"PUT {path}: {error}") from error
+
+
+def post_webhook(url, secret, body):
+    """POST `body` as JSON to a kandev automation webhook; returns the HTTP status.
+
+    Kandev answers 401 to a wrong secret and 409 while a run is already active, and
+    both are answers worth logging as such, so an HTTP error status is returned rather
+    than raised. Anything that never got a status -- refused connection, timeout -- is
+    raised as WriteFailed naming the URL, never the secret.
+    """
+    request = urllib.request.Request(
+        url,
+        data=json.dumps(body).encode(),
+        headers={"Content-Type": "application/json", "X-Webhook-Secret": secret},
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=10) as response:
+            return response.status
+    except urllib.error.HTTPError as error:
+        return error.code
+    except Exception as error:
+        raise WriteFailed(f"POST {url}: {error}") from error
 
 
 def steps_of(workflow_id):

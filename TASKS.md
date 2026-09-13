@@ -4,12 +4,6 @@ Rules for TASKS.md usage are at the bottom of the file.
 
 ## Ordered backlog
 
-- [2] Call the Heartbeat automation's webhook when a provider is running out of work.
-  The webhook address and secret are configuration; the values from kandev on
-  `agent@gogo` go into the layered config. The automation's schedule has been removed in
-  favour of that webhook, and nothing calls it yet, so the board refills only when the
-  automation is fired by hand.
-
 - [*] In session observation files from `kandev-learn`, truncate long values for
   brevity when full precision is not needed. For example, use millisecond
   precision for durations, 1/1000 dollars for cost, and milliseconds without
@@ -87,6 +81,12 @@ Rules for TASKS.md usage are at the bottom of the file.
 ## In progress
 
 ## Completed
+
+- [2] Call the Heartbeat automation's webhook when a provider is running out of work.
+  The webhook address and secret are configuration; the values from kandev on
+  `agent@gogo` go into the layered config. The automation's schedule has been removed in
+  favour of that webhook, and nothing calls it yet, so the board refills only when the
+  automation is fired by hand.
 
 - [4] Collect archived session observations without model calls.
 

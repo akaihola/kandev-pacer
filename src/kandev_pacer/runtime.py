@@ -198,6 +198,11 @@ class Outcome:
     launched: dict | None = None   # the launch detail, when a turn was actually spent
 
 
+# The task the Heartbeat automation runs as. One with a turn in flight is already looking
+# for work, so the webhook is not called again behind it.
+HEARTBEAT_TITLE = "[Auto] Heartbeat"
+
+
 class Pacer:
     """The loop's mutable state: what it has spent a turn on, and what it has given up on.
 
@@ -229,6 +234,9 @@ class Pacer:
         # provider -> the TickError for a source outage being repeated, so a standing outage
         # on one provider is said once and restated slowly, not printed every tick.
         self._provider_errors = {}
+        # When the Heartbeat webhook was last *attempted*, so a refused call (409 while a
+        # run is active) waits out heartbeat_min_interval like a successful one.
+        self._last_heartbeat_at: float | None = None
 
     # --- the event log ---
 
@@ -583,7 +591,79 @@ class Pacer:
                 self.run_provider(provider_name, class_verdicts, snapshot, queued)
                 or any_open
             )
+        self.maybe_heartbeat(verdicts, snapshot)
         return any_open
+
+    def launchable_of(self, provider_name, snapshot):
+        """How many of a provider's tasks a launch could go to right now, all classes."""
+        skip = self.skip_keys(snapshot.now)
+        return sum(
+            1
+            for task in snapshot.tasks
+            if snapshot.task_providers.get(task["id"]) == provider_name
+            and is_launchable(task, snapshot.sessions[task["id"]], self.board, skip)
+        )
+
+    def maybe_heartbeat(self, verdicts, snapshot):
+        """Ask the Heartbeat automation for work when a provider is about to run dry.
+
+        Fires for the first provider whose gate is open and whose launchable count is
+        under heartbeat_min_launchable: quota is available and the board is about to
+        idle. A closed gate with no work needs no new work. Not more often than
+        heartbeat_min_interval since the last attempt, and not while a `[Auto] Heartbeat`
+        task already has a turn running -- that run is the one looking. A failed call is
+        a warning, not a tick error: the board paces without it.
+        """
+        config = self.config
+        if not config.heartbeat_webhook_url:
+            return
+        now = snapshot.now
+        if (
+            self._last_heartbeat_at is not None
+            and now - self._last_heartbeat_at < config.heartbeat_min_interval
+        ):
+            return
+        open_providers = dict.fromkeys(
+            group.provider for group, verdict in verdicts.items() if verdict.is_open
+        )
+        dry = next(
+            (
+                (name, launchable)
+                for name in open_providers
+                if (launchable := self.launchable_of(name, snapshot))
+                < config.heartbeat_min_launchable
+            ),
+            None,
+        )
+        if dry is None:
+            return
+        if any(
+            task.get("title") == HEARTBEAT_TITLE
+            and any(
+                session.get("state") in RUNNING_STATES
+                for session in snapshot.sessions.get(task["id"], [])
+            )
+            for task in snapshot.tasks
+        ):
+            return
+        provider_name, launchable = dry
+        self._last_heartbeat_at = now
+        try:
+            status = client.post_webhook(
+                config.heartbeat_webhook_url,
+                config.heartbeat_webhook_secret,
+                {"source": "kandev-pacer", "provider": provider_name,
+                 "launchable": launchable},
+            )
+        except Exception as error:
+            status = str(error)
+        line = f"heartbeat: {provider_name} has {launchable} launchable -> webhook {status}"
+        accepted = isinstance(status, int) and 200 <= status < 300
+        (log.info if accepted else log.warning)(line)
+        self.log_event({
+            "t": round(now, 3), "kind": "heartbeat", "provider": provider_name,
+            "launchable": launchable, "status": status,
+        })
 
     def run_provider(self, provider_name, verdicts, snapshot, queued):
         """Decide and act for one provider. Writes one tick record per scope class,

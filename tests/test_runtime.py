@@ -859,3 +859,122 @@ def test_moving_the_card_makes_it_launchable_again(pacer, board):
     # Same task, same session, different step: a different key, so the stall does not follow.
     board.load([_task("done", "bk", "Finished")], {"done": _sess("s", "WAITING_FOR_INPUT")}, {})
     assert _relaunch(pacer, board, 1) == 1
+
+
+# --- the Heartbeat webhook: refilling the board ---
+
+@pytest.fixture
+def heartbeat(monkeypatch):
+    """The webhook configured and faked; returns the bodies posted, most recent last."""
+    monkeypatch.setattr(settings, "heartbeat_webhook_url", "http://kandev/hook")
+    monkeypatch.setattr(settings, "heartbeat_webhook_secret", "s3cret")
+    monkeypatch.setattr(settings, "heartbeat_min_launchable", 2)
+    monkeypatch.setattr(settings, "heartbeat_min_interval", 1800)
+    class Posted(list):
+        status = 200          # what the fake webhook answers; a test moves it
+
+    posted = Posted()
+
+    def fake_post(url, secret, body):
+        posted.append((url, secret, body))
+        return posted.status
+
+    monkeypatch.setattr(client, "post_webhook", fake_post)
+    return posted
+
+
+def _ready(n):
+    """n launchable tasks, all on the work step, each with its own idle session."""
+    tasks = [_task(f"t{i}", "ip", f"Work {i}", created=str(i)) for i in range(n)]
+    sessions = {f"t{i}": _sess(f"s{i}", "WAITING_FOR_INPUT") for i in range(n)}
+    return tasks, sessions
+
+
+def test_heartbeat_fires_when_launchable_falls_below_the_threshold(
+    pacer, board, heartbeat, monkeypatch
+):
+    """Two ready, one launched this tick: one left, under the threshold of two."""
+    written = records_of(pacer, monkeypatch)
+    tasks, sessions = _ready(2)
+    tick(pacer, board, tasks, sessions, {})
+    assert actions(board) == ["session.launch"]
+    [(url, secret, body)] = heartbeat
+    assert (url, secret) == ("http://kandev/hook", "s3cret")
+    assert body == {"source": "kandev-pacer", "provider": "anthropic", "launchable": 1}
+    [record] = [r for r in written if r["kind"] == "heartbeat"]
+    assert (record["provider"], record["launchable"], record["status"]) == ("anthropic", 1, 200)
+    assert "s3cret" not in json.dumps(record)
+
+
+def test_heartbeat_stays_quiet_at_the_threshold(pacer, board, heartbeat):
+    """Three ready, one launched: two left, which is the threshold, not under it."""
+    tasks, sessions = _ready(3)
+    tick(pacer, board, tasks, sessions, {})
+    assert actions(board) == ["session.launch"]
+    assert heartbeat == []
+
+
+def test_heartbeat_stays_quiet_while_the_gate_is_closed(pacer, board, heartbeat):
+    """A closed gate with no work needs no new work: the paused case is excluded."""
+    board.usage_pct = 80
+    tick(pacer, board, [], {}, {})
+    assert heartbeat == []
+
+
+def test_heartbeat_holds_for_the_minimum_interval(pacer, board, heartbeat, monkeypatch):
+    tick(pacer, board, [], {}, {})
+    tick(pacer, board, [], {}, {})
+    assert len(heartbeat) == 1
+    monkeypatch.setattr(pacer, "_last_heartbeat_at", pacer._last_heartbeat_at - 1800)
+    tick(pacer, board, [], {}, {})
+    assert len(heartbeat) == 2
+
+
+def test_heartbeat_skips_while_a_heartbeat_run_is_looking(pacer, board, heartbeat):
+    tick(pacer, board, [_task("hb", "ip", "[Auto] Heartbeat")], {"hb": _sess("sh", "RUNNING")}, {})
+    assert heartbeat == []
+    # Once that run is over the board is dry again, and the call goes out.
+    tick(pacer, board, [_task("hb", "dn", "[Auto] Heartbeat")],
+         {"hb": _sess("sh", "WAITING_FOR_INPUT")}, {})
+    assert len(heartbeat) == 1
+
+
+def test_a_refused_heartbeat_counts_as_an_attempt(pacer, board, heartbeat, monkeypatch, caplog):
+    """409 means a run is active on kandev's side: wait the interval out, no retry per tick."""
+    written = records_of(pacer, monkeypatch)
+    heartbeat.status = 409
+    with caplog.at_level(logging.WARNING, logger="kandev-pacer"):
+        tick(pacer, board, [], {}, {})
+        tick(pacer, board, [], {}, {})
+    assert len(heartbeat) == 1
+    assert [r["status"] for r in written if r["kind"] == "heartbeat"] == [409]
+    assert any("409" in r.message for r in caplog.records)
+
+
+def test_a_failed_heartbeat_is_a_warning_not_a_tick_error(pacer, board, heartbeat, monkeypatch):
+    written = records_of(pacer, monkeypatch)
+    monkeypatch.setattr(client, "post_webhook",
+                        lambda *_: (_ for _ in ()).throw(client.WriteFailed("POST x: refused")))
+    assert tick(pacer, board, [], {}, {}) is True
+    [record] = [r for r in written if r["kind"] == "heartbeat"]
+    assert record["status"] == "POST x: refused"
+    assert pacer._last_heartbeat_at is not None
+
+
+def test_heartbeat_is_off_without_a_url(pacer, board, heartbeat, monkeypatch):
+    monkeypatch.setattr(settings, "heartbeat_webhook_url", "")
+    tick(pacer, board, [], {}, {})
+    assert heartbeat == [] and pacer._last_heartbeat_at is None
+
+
+def test_a_heartbeat_url_without_a_secret_fails_at_startup():
+    from kandev_pacer.config import Settings
+
+    assert Settings(PACER_HEARTBEAT_WEBHOOK_URL="").heartbeat_webhook_url == ""
+    with pytest.raises(
+        ValueError, match="PACER_HEARTBEAT_WEBHOOK_URL.*PACER_HEARTBEAT_WEBHOOK_SECRET"
+    ):
+        Settings(
+            PACER_HEARTBEAT_WEBHOOK_URL="http://kandev/hook",
+            PACER_HEARTBEAT_WEBHOOK_SECRET="",
+        )
