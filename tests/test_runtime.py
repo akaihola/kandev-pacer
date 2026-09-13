@@ -978,3 +978,79 @@ def test_a_heartbeat_url_without_a_secret_fails_at_startup():
             PACER_HEARTBEAT_WEBHOOK_URL="http://kandev/hook",
             PACER_HEARTBEAT_WEBHOOK_SECRET="",
         )
+
+
+def test_heartbeat_empty_board_calls_once_for_two_providers(
+    pacer, board, heartbeat, monkeypatch, caplog
+):
+    now = runtime.time.time()
+    monkeypatch.setattr(runtime.time, "time", lambda: now)
+    monkeypatch.setattr(settings, "providers_raw", "anthropic openai")
+    written = records_of(pacer, monkeypatch)
+    with caplog.at_level(logging.INFO, logger="kandev-pacer"):
+        tick(pacer, board, [], {}, {})
+    idle = [r.message for r in caplog.records if "nothing to launch" in r.message]
+    assert len(idle) == 2
+    assert idle[0].startswith("[anthropic]")
+    assert idle[1].startswith("[openai]")
+    assert len(heartbeat) == 1
+    assert heartbeat[0][2] == {
+        "source": "kandev-pacer",
+        "provider": "anthropic",
+        "launchable": 0,
+    }
+    assert len([r for r in written if r["kind"] == "heartbeat"]) == 1
+    assert "webhook 200" in caplog.text
+    caplog.clear()
+    with caplog.at_level(logging.INFO, logger="kandev-pacer"):
+        tick(pacer, board, [], {}, {})
+    assert len(heartbeat) == 1
+    assert "heartbeat: cooldown, retry in 1800s" in caplog.text
+    assert pacer._last_heartbeat_at == now
+    assert len([r for r in written if r["kind"] == "heartbeat"]) == 1
+    assert "http://kandev/hook" not in caplog.text
+    assert "s3cret" not in caplog.text
+
+
+@pytest.mark.parametrize("reason", ["disabled", "already running"])
+def test_heartbeat_skip_explains_without_recording_attempt(
+    pacer, board, heartbeat, monkeypatch, caplog, reason
+):
+    monkeypatch.setattr(settings, "providers_raw", "anthropic openai")
+    written = records_of(pacer, monkeypatch)
+    tasks, sessions = [], {}
+    if reason == "disabled":
+        monkeypatch.setattr(settings, "heartbeat_webhook_url", "")
+    else:
+        tasks = [_task("hb", "ip", "[Auto] Heartbeat")]
+        sessions = {"hb": _sess("sh", "RUNNING")}
+    with caplog.at_level(logging.INFO, logger="kandev-pacer"):
+        tick(pacer, board, tasks, sessions, {})
+    messages = [r.message for r in caplog.records if r.message.startswith("heartbeat:")]
+    assert len(messages) == 1
+    assert reason in messages[0]
+    if reason == "disabled":
+        assert "PACER_HEARTBEAT_WEBHOOK_URL" in messages[0]
+        assert "PACER_HEARTBEAT_WEBHOOK_SECRET" in messages[0]
+    assert "http://kandev/hook" not in messages[0]
+    assert "s3cret" not in messages[0]
+    assert heartbeat == []
+    assert pacer._last_heartbeat_at is None
+    assert not any(r["kind"] == "heartbeat" for r in written)
+
+
+@pytest.mark.parametrize("condition", ["closed", "threshold", "zero"])
+def test_heartbeat_no_refill_opportunity_stays_quiet(
+    pacer, board, heartbeat, monkeypatch, caplog, condition
+):
+    tasks, sessions = [], {}
+    if condition == "closed":
+        board.usage_pct = 80
+    elif condition == "threshold":
+        tasks, sessions = _ready(3)
+    else:
+        monkeypatch.setattr(settings, "heartbeat_min_launchable", 0)
+    with caplog.at_level(logging.INFO, logger="kandev-pacer"):
+        tick(pacer, board, tasks, sessions, {})
+    assert heartbeat == []
+    assert not any(r.message.startswith("heartbeat:") for r in caplog.records)

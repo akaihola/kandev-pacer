@@ -615,14 +615,6 @@ class Pacer:
         a warning, not a tick error: the board paces without it.
         """
         config = self.config
-        if not config.heartbeat_webhook_url:
-            return
-        now = snapshot.now
-        if (
-            self._last_heartbeat_at is not None
-            and now - self._last_heartbeat_at < config.heartbeat_min_interval
-        ):
-            return
         open_providers = dict.fromkeys(
             group.provider for group, verdict in verdicts.items() if verdict.is_open
         )
@@ -637,6 +629,18 @@ class Pacer:
         )
         if dry is None:
             return
+        if not config.heartbeat_webhook_url:
+            log.info(
+                "heartbeat: disabled; set PACER_HEARTBEAT_WEBHOOK_URL and "
+                "PACER_HEARTBEAT_WEBHOOK_SECRET to enable refilling"
+            )
+            return
+        now = snapshot.now
+        if self._last_heartbeat_at is not None:
+            remaining = config.heartbeat_min_interval - (now - self._last_heartbeat_at)
+            if remaining > 0:
+                log.info("heartbeat: cooldown, retry in %.0fs", remaining)
+                return
         if any(
             task.get("title") == HEARTBEAT_TITLE
             and any(
@@ -645,6 +649,7 @@ class Pacer:
             )
             for task in snapshot.tasks
         ):
+            log.info("heartbeat: already running")
             return
         provider_name, launchable = dry
         self._last_heartbeat_at = now
