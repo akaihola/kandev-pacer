@@ -1,7 +1,7 @@
 # What does the consumer emit?
 
 Type: grilling
-Status: open
+Status: resolved
 Blocked by: 02
 
 ## Question
@@ -11,14 +11,21 @@ written review note with findings, proposals against `make-paced` workflow promp
 steps or pacing knobs, or some combination? Name the artifact, where it is stored and
 how Antti sees it.
 
-## Proposed answer (needs Antti)
+## Answer
 
-One review note per run, not a bare digest table. Contents: the digest totals for
-the period, then at most a handful of findings, each anchored to a record file and a
-field (step wall time, errored calls, identical commands, largest outputs, cache
-gaps with pacer wait, blockers), each ending in one concrete proposal or "no action".
-Proposals name a target: a kandev workflow step prompt (by workflow and step name),
-a pacer setting, or a `TASKS.md` item for either repo. The note itself is the
-artifact; Antti sees it by message from Tyko. Question to settle live: should
-proposals against `make-paced` workflow prompts be written as ready-to-apply text, or
-only as observations?
+Decided by Antti, 2026-09-13.
+
+For each problem: the observations that show it, plus a proposed solution written as
+a prompt, emitted into the "Unverified proposals" section (the repo may call it
+"Ideas", "incoming" or similar) of a repository's task registry. The repository is
+chosen by what the improvement touches:
+
+- `~/prg/kandev-config` when it is about Kandev's configuration, such as workflow
+  step prompts or automations.
+- `~/repos/nixos-config` when it is about global configuration, such as globally
+  installed skills.
+- The original task's attached project repository when the improvement is local to
+  that project.
+
+Not decided here: the exact section name and file per repository. See the registry
+convention ticket.

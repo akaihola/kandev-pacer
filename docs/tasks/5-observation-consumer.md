@@ -49,14 +49,25 @@ task implements the consumer from these decisions. Decisions, not code.
 - [Must the readability items land before the consumer?](5-observation-consumer/issues/07-readability-dependency.md)
   — yes for a human or model reader, no for a frontmatter reader; glob by directory,
   never parse filenames.
+- [Who is the consumer's audience?](5-observation-consumer/issues/02-audience.md)
+  — Antti, via a periodic review; problems are raised for collaborating on a mitigation.
+- [What does the consumer emit?](5-observation-consumer/issues/04-output.md)
+  — observations plus a proposed solution prompt into a target repo's "Unverified
+  proposals" registry section; kandev-config, nixos-config or the task's project repo.
+- [Where does the consumer live?](5-observation-consumer/issues/03-home.md)
+  — a Kandev task the Heartbeat creates, lowest priority, skipped when nothing is new.
+- [When does the consumer run?](5-observation-consumer/issues/08-cadence.md)
+  — whenever the Heartbeat runs and unconsumed records exist; leftover quota only.
+- [How is "lowest priority" expressed to the pacer?](5-observation-consumer/issues/12-lowest-priority-mechanism.md)
+  — column, then drag position, then priority; recommend a title-based last-place rule.
 
 ## Not yet specified
 
-- The prompt and output contract of a model-driven review pass: which record fields it
-  reads, what a "finding" looks like, how it avoids restating the tables. Waits on the
-  audience and output tickets.
-- How a proposal reaches a kandev workflow step: hand-applied by Antti, a `make-paced`
-  flag, or a kandev task. Waits on the output and boundary tickets.
+- The consumer task's prompt: which record fields it reads, what a "problem" is, how a
+  proposal prompt is worded so Antti can act on it. Waits on the registry and ledger
+  tickets.
+- The Heartbeat prompt change in `kandev-config` that creates the consumer task, and the
+  pacer change that sorts it last. Waits on the ledger ticket.
 - Whether findings should feed back into the collector (new measurements the review
   keeps wanting). Waits on the first real review.
 

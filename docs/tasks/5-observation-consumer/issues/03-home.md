@@ -1,7 +1,7 @@
 # Where does the consumer live?
 
 Type: grilling
-Status: open
+Status: resolved
 Blocked by: 02, 06
 
 ## Question
@@ -12,12 +12,12 @@ script on the same timer), or kandev (an automation or a scheduled Paced explora
 task)? Consider where the records are readable, where the pacer config is available,
 and who is allowed to spend model calls.
 
-## Proposed answer (needs Antti, waits on tickets two and four)
+## Answer
 
-The Tyko vault, as a `HEARTBEAT.md` item that spawns an Opus sub-agent when new
-records exist since the last seen `archived_at` in `memory/heartbeat-state.json`.
-Ticket six shows this needs no new machinery, the records are already there, and the
-vault already planned a session-review successor. This repo keeps `digest` as the
-deterministic table the sub-agent may quote, but the sub-agent reads record files
-directly (ticket one's environment finding). A kandev automation is the fallback if
-Antti wants the review to be a visible task on the board.
+Decided by Antti, 2026-09-13.
+
+A Kandev task, collected by the Heartbeat automation that `kandev-pacer` fires when a
+provider runs low on work, and placed as the lowest-priority task on the board. It
+therefore runs only when all other work is done and some subscription quota is left.
+The Heartbeat skips creating it when every observation has already been learned
+from. The Tyko vault is not the home; the records stay there as the input.
