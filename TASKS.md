@@ -10,12 +10,6 @@ Rules for TASKS.md usage are at the bottom of the file.
   stalled. Prefer the session with `is_primary`, then the newest primary-less session
   only when the task has no primary at all. One test per case in `test_selection.py`.
 
-- [2] Call the Heartbeat automation's webhook when a provider is running out of work.
-  The webhook address and secret are configuration; the values from kandev on
-  `agent@gogo` go into the layered config. The automation's schedule has been removed in
-  favour of that webhook, and nothing calls it yet, so the board refills only when the
-  automation is fired by hand.
-
 - [1] Read the quota from the pebble-quota collector as a configurable alternative
   source. The direct read of the Anthropic and Codex usage endpoints stays the default.
   On `agent@gogo` the collector's snapshot is used, which removes the blind hours the
@@ -63,6 +57,12 @@ Rules for TASKS.md usage are at the bottom of the file.
 ## In progress
 
 ## Completed
+
+- [2] Call the Heartbeat automation's webhook when a provider is running out of work.
+  The webhook address and secret are configuration; the values from kandev on
+  `agent@gogo` go into the layered config. The automation's schedule has been removed in
+  favour of that webhook, and nothing calls it yet, so the board refills only when the
+  automation is fired by hand.
 
 - [4] Collect archived session observations without model calls.
 
