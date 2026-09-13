@@ -93,10 +93,10 @@ Rules for TASKS.md usage are at the bottom of the file.
 
 ## In progress
 
+## Completed
+
 - [*] Show Fable in scoped gate logs even when it is the only class, and diagnose
   why waiting Fable tasks are not launchable.
-
-## Completed
 
 - [2] Call the Heartbeat automation's webhook when a provider is running out of work.
   The webhook address and secret are configuration; the values from kandev on
