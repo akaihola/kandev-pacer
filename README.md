@@ -109,7 +109,7 @@ long option such as `--interval` and `--concurrency`.
 | `PACER_HEARTBEAT_WEBHOOK_URL` | unset | the kandev automation webhook to call when a provider runs out of work. Empty turns the feature off — see [Refilling the board](#refilling-the-board) |
 | `PACER_HEARTBEAT_WEBHOOK_SECRET` | unset | sent as `X-Webhook-Secret`. Required when the URL is set; keep it out of the TOML and the nix store, load it from an env file |
 | `PACER_HEARTBEAT_MIN_LAUNCHABLE` | `2` | call the webhook when an open provider's launchable count is below this |
-| `PACER_HEARTBEAT_MIN_INTERVAL` | `1800` | seconds between calls, counted from the last attempt whatever it answered |
+| `PACER_HEARTBEAT_MIN_INTERVAL` | `1800` | seconds between attempts that led to no launch, counted from the last attempt whatever it answered |
 
 ## Which task goes next
 
@@ -154,10 +154,13 @@ Once per tick, after the providers have been paced, the pacer POSTs
 **open** and fewer than `PACER_HEARTBEAT_MIN_LAUNCHABLE` of its tasks could be launched:
 quota is available and the board is about to idle. A paused gate with no work needs no new
 work, so it never calls. It waits `PACER_HEARTBEAT_MIN_INTERVAL` between *attempts* — a
-`409` (a run is already active on kandev's side) does not retry every tick — and skips
-while a task titled `[Auto] Heartbeat` on a paced board has a session running. Each attempt
-writes one `heartbeat` record to the log with the HTTP status or the error; a failed call
-is a warning, and the board keeps pacing without it.
+`409` (a run is already active on kandev's side) does not retry every tick — unless the
+pacer has launched a task since the last one: the cooldown throttles attempts that produced
+nothing, and an attempt whose task has already been launched and finished may be repeated
+as soon as the board runs dry again. It skips while a task titled `[Auto] Heartbeat` on a
+paced board has a session running. Each attempt writes one `heartbeat` record to the log
+with the HTTP status or the error; a failed call is a warning, and the board keeps pacing
+without it.
 
 ## Logging
 
@@ -188,7 +191,8 @@ report. A configured webhook is called when an open provider has fewer than 2 la
 tasks by default, counted across all its model classes. Setting
 `PACER_HEARTBEAT_MIN_LAUNCHABLE=0` prevents triggering. If refill is due but skipped,
 the next heartbeat line explains why: the webhook is disabled, the default 1800-second
-cooldown has not elapsed, or a heartbeat is already running. Enable it with
+cooldown has not elapsed since an attempt with no launch after it, or a heartbeat is
+already running. Enable it with
 `PACER_HEARTBEAT_WEBHOOK_URL` and `PACER_HEARTBEAT_WEBHOOK_SECRET`; see the
 [deployment instructions](docs/tasks/2-heartbeat-webhook.md#deploy-on-gogo).
 

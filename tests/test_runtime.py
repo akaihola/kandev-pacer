@@ -930,6 +930,31 @@ def test_heartbeat_holds_for_the_minimum_interval(pacer, board, heartbeat, monke
     assert len(heartbeat) == 2
 
 
+def test_a_heartbeat_whose_work_was_launched_skips_the_cooldown(pacer, board, heartbeat):
+    """Empty board: one call. Its task arrives and is launched: the board is dry again,
+    and the next tick calls without waiting out the interval. Then nothing arrives,
+    so the cooldown holds -- it throttles fruitless attempts only."""
+    tick(pacer, board, [], {}, {})
+    assert len(heartbeat) == 1
+    tasks, sessions = _ready(1)
+    tick(pacer, board, tasks, sessions, {})
+    assert actions(board) == ["session.launch"]
+    assert len(heartbeat) == 2
+    tick(pacer, board, [], {}, {})
+    assert len(heartbeat) == 2
+
+
+def test_a_drain_does_not_lift_the_heartbeat_cooldown(pacer, board, heartbeat):
+    """A released prompt is the user's queued work on an existing task, not a refill."""
+    tick(pacer, board, [], {}, {})
+    assert len(heartbeat) == 1
+    tick(pacer, board, [_task("t1", "rv", "Feedback")], {"t1": _sess("s1", "WAITING_FOR_INPUT")},
+         {"s1": 1})
+    assert actions(board) == ["message.queue.drain"]
+    tick(pacer, board, [], {}, {})
+    assert len(heartbeat) == 1
+
+
 def test_heartbeat_skips_while_a_heartbeat_run_is_looking(pacer, board, heartbeat):
     tick(pacer, board, [_task("hb", "ip", "[Auto] Heartbeat")], {"hb": _sess("sh", "RUNNING")}, {})
     assert heartbeat == []

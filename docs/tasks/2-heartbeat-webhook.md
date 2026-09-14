@@ -54,6 +54,9 @@ Rule, evaluated once per tick after the providers have been reported:
    `heartbeat_min_launchable`: the board is about to idle while quota is available.
 2. Not more often than `heartbeat_min_interval` since the last call, counted from the
    last *attempt* so a `409` does not retry every tick.
+   Amended 2026-09-14: waived once a task has been launched since that attempt. Each
+   heartbeat run created one task that finished in 8–19 min, so the board sat dry for
+   the rest of every 30-minute cooldown; the interval only throttles fruitless attempts.
 3. Skip while any task titled `[Auto] Heartbeat` has a `RUNNING` session: a run is
    already looking.
 4. POST with a 10-second timeout. Log one record `{"kind": "heartbeat", "provider": ...,

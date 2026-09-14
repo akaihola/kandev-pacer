@@ -93,6 +93,9 @@ Rules for TASKS.md usage are at the bottom of the file.
 
 ## In progress
 
+- [*] Waive the heartbeat cooldown once a task has been launched since the last
+  attempt, so a full backlog does not leave the board dry for half of every cycle.
+
 ## Completed
 
 - [*] Show Fable in scoped gate logs even when it is the only class, and diagnose
