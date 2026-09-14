@@ -114,7 +114,7 @@ class Settings(BaseSettings):
     heartbeat_webhook_secret: str = Field("", alias="PACER_HEARTBEAT_WEBHOOK_SECRET")
     # Call when a provider's gate is open and its launchable count is below this.
     heartbeat_min_launchable: int = Field(2, alias="PACER_HEARTBEAT_MIN_LAUNCHABLE", ge=0)
-    # Seconds between calls, counted from the last attempt, whatever the board does.
+    # Seconds between attempts, waived once the pacer has launched a task since the last one.
     heartbeat_min_interval: int = Field(1800, alias="PACER_HEARTBEAT_MIN_INTERVAL", ge=0)
 
     # --- values derived from the ones above ---

@@ -236,6 +236,10 @@ class Pacer:
         # When the Heartbeat webhook was last *attempted*, so a refused call (409 while a
         # run is active) waits out heartbeat_min_interval like a successful one.
         self._last_heartbeat_at: float | None = None
+        # Whether a task was launched since that attempt. The cooldown throttles attempts
+        # that produced nothing; one whose task the pacer has since launched (and, as a
+        # rule, finished) has earned the next call as soon as the board runs dry again.
+        self._launched_since_heartbeat = False
 
     # --- the event log ---
 
@@ -609,9 +613,10 @@ class Pacer:
         Fires for the first provider whose gate is open and whose launchable count is
         under heartbeat_min_launchable: quota is available and the board is about to
         idle. A closed gate with no work needs no new work. Not more often than
-        heartbeat_min_interval since the last attempt, and not while a `[Auto] Heartbeat`
-        task already has a turn running -- that run is the one looking. A failed call is
-        a warning, not a tick error: the board paces without it.
+        heartbeat_min_interval since the last attempt unless a task was launched in
+        between -- the cooldown is for attempts that produced nothing -- and not while a
+        `[Auto] Heartbeat` task already has a turn running -- that run is the one looking.
+        A failed call is a warning, not a tick error: the board paces without it.
         """
         config = self.config
         open_providers = dict.fromkeys(
@@ -635,7 +640,7 @@ class Pacer:
             )
             return
         now = snapshot.now
-        if self._last_heartbeat_at is not None:
+        if self._last_heartbeat_at is not None and not self._launched_since_heartbeat:
             remaining = config.heartbeat_min_interval - (now - self._last_heartbeat_at)
             if remaining > 0:
                 log.info("heartbeat: cooldown, retry in %.0fs", remaining)
@@ -652,6 +657,7 @@ class Pacer:
             return
         provider_name, launchable = dry
         self._last_heartbeat_at = now
+        self._launched_since_heartbeat = False
         try:
             status = client.post_webhook(
                 config.heartbeat_webhook_url,
@@ -814,6 +820,10 @@ class Pacer:
             outcome = self.attempt(candidate, key, snapshot)
             if outcome is None:      # refused, no quota spent -- try the next candidate
                 continue
+            # A launch, confirmed or not, is the refill the last heartbeat asked for. A
+            # drain releases a prompt the user queued on an existing task: not new work.
+            if outcome.launched is not None and candidate.kind == "launch":
+                self._launched_since_heartbeat = True
             if outcome.launched:
                 self._spent += (
                     1  # counts against the shared total cap for later providers
