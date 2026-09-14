@@ -2,6 +2,8 @@
 
 Rules for TASKS.md usage are at the bottom of the file.
 
+## Unverified proposals
+
 ## Ordered backlog
 
 - [5] Decide what consumes the `kandev-learn` session observation records. A wayfinder
@@ -126,6 +128,16 @@ Rules for TASKS.md usage are at the bottom of the file.
 ## Rules
 
 Here are the rules for TASKS.md usage:
+
+### Unverified proposals
+
+- Bullets under `## Unverified proposals` are ideas that nobody has reviewed yet.
+  They are not candidates for scheduling: a heartbeat never picks from this
+  section. Antti reviews a proposal and moves it into `## Ordered backlog`, or
+  deletes it.
+- Before adding a proposal, read the whole section. Drop an exact duplicate.
+  Merge a similar existing proposal with the new one into a single revision
+  that combines the ideas of both.
 
 ### TASKS.md maintenance sessions
 

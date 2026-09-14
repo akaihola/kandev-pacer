@@ -60,6 +60,11 @@ task implements the consumer from these decisions. Decisions, not code.
   — whenever the Heartbeat runs and unconsumed records exist; leftover quota only.
 - [How is "lowest priority" expressed to the pacer?](5-observation-consumer/issues/12-lowest-priority-mechanism.md)
   — column, then drag position, then priority; recommend a title-based last-place rule.
+- [Where is "Unverified proposals" in each target repo?](5-observation-consumer/issues/10-registry-convention.md)
+  — follow each repo's `AGENTS.md`; kandev-config and this repo now have the section.
+- [What may the consumer write?](5-observation-consumer/issues/09-write-boundary.md)
+  — commit to the default branch; drop exact duplicates, merge similar proposals;
+  never read its own records; never create tasks from a proposal.
 
 ## Not yet specified
 
