@@ -158,9 +158,9 @@ work, so it never calls. It waits `PACER_HEARTBEAT_MIN_INTERVAL` between *attemp
 pacer has launched a task since the last one: the cooldown throttles attempts that produced
 nothing, and an attempt whose task has already been launched and finished may be repeated
 as soon as the board runs dry again. It skips while a task titled `[Auto] Heartbeat` on a
-paced board has a session running. Each attempt
-writes one `heartbeat` record to the log with the HTTP status or the error; a failed call
-is a warning, and the board keeps pacing without it.
+paced board has a session running. Each attempt writes one `heartbeat` record to the log
+with the HTTP status or the error; a failed call is a warning, and the board keeps pacing
+without it.
 
 ## Logging
 
