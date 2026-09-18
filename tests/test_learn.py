@@ -177,6 +177,22 @@ def test_observation_precision_formatting(tmp_path):
     )
 
 
+def test_observation_text_is_bounded_deterministically():
+    record = {
+        "sessions": [
+            {
+                "initial_prompt": "p" * 2000,
+                "final_response": "r" * 2000,
+            }
+        ]
+    }
+    session = learn.formatted_record(record)["sessions"][0]
+    assert session["initial_prompt"] == "p" * 997 + "..."
+    assert session["final_response"] == "r" * 997 + "..."
+    assert len(session["initial_prompt"]) == learn.TEXT_LIMIT
+    assert len(session["final_response"]) == learn.TEXT_LIMIT
+
+
 def test_actual_cost_only():
     row = {
         "tokens_in": 1,

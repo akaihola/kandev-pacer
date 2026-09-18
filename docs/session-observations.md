@@ -26,6 +26,8 @@ One observation file can contain multiple Kandev sessions. The Markdown body
 introduces each session once with a `## Session <id>` heading; session-specific
 tables below that heading omit the repeated ID. Task-level tables remain outside
 those sections.
+Each session records its first user prompt and final assistant response, each
+truncated deterministically to 1,000 characters.
 
 ## Sources and units
 

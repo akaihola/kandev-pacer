@@ -44,6 +44,7 @@ USAGE_FIELDS = dict(
         strict=True,
     )
 )
+TEXT_LIMIT = 1000
 
 
 def decode(value):
@@ -316,6 +317,13 @@ def collect_task(db_path, task_id, home, timeout=45):
             tools=evidence["tools"],
             analyzer_sha256=evidence.get("analyzer_sha256"),
             ccusage=evidence.get("ccusage", []),
+        )
+        messages = evidence.get("messages", [])
+        session["initial_prompt"] = next(
+            (text for role, text in messages if role == "user"), None
+        )
+        session["final_response"] = next(
+            (text for role, text in reversed(messages) if role == "assistant"), None
         )
         source = data[row["id"]]
         events: list[dict[str, Any]] = list(
@@ -662,6 +670,8 @@ def formatted_record(record):
     duration_keys = {"wall_seconds", "preceding_pacer_wait", "seconds", "ttl"}
 
     def visit(value, key=None):
+        if key in {"initial_prompt", "final_response"} and isinstance(value, str):
+            return value if len(value) <= TEXT_LIMIT else value[: TEXT_LIMIT - 3] + "..."
         if key == "cost_usd" and isinstance(value, dict):
             amount = value["value"]
             return {**value, "value": round(amount, 3) if amount is not None else None}
