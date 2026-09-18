@@ -92,6 +92,9 @@ long option such as `--interval` and `--concurrency`.
 | `KANDEV_WS_URL` | derived from `KANDEV_URL` | the `/ws` endpoint, if it differs |
 | `PACER_PROVIDER` | `anthropic` | which usage agent to gate on. A name matching nothing **fails closed** rather than pacing blind |
 | `PACER_PROVIDERS` | `$PACER_PROVIDER` | the subscriptions to pace, comma- or space-separated (e.g. `anthropic,openai`). Naming more than one turns on per-provider gating; see [Two subscriptions](#two-subscriptions) |
+| `PACER_QUOTA_SOURCE` | `direct` | `direct` reads provider endpoints; `pebble` reads the collector snapshot |
+| `PACER_PEBBLE_SNAPSHOT` | `~/.local/state/pebble-quota/latest.json` | collector snapshot path |
+| `PACER_PEBBLE_MAX_AGE` | `900` | maximum snapshot age in seconds |
 | `PACER_CONCURRENCY` | `1` | how many paced turns may run at once **per provider** |
 | `PACER_CONCURRENCY_TOTAL` | unset | ceiling on the sum across providers — the machine running the worktrees. Unset means each provider is bound only by its own cap |
 | `PACER_APIKEY_POLICY` | `cap` | what to do with an api-key task (no subscription window, so nothing to pace it against): `cap` launches it gated on the concurrency cap alone, `withhold` never launches it (opt in when metered spend must stay off) |
