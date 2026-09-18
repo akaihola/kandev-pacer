@@ -688,3 +688,20 @@ def test_a_new_session_releases_it_too():
     stalls = {KEY: {"fingerprint": TREE, "count": 9, "flagged": True}}
     same_step = [{"id": "t1", "workflow_step_id": "ip"}]
     assert prune_stalls(stalls, same_step, {"t1": [_sess("s2", "WAITING_FOR_INPUT", "2")]}) == {}
+
+
+def test_primary_controls_launch_eligibility_and_stall_identity():
+    task = _task("t", "ip")
+    primary = {**_sess("primary", "WAITING_FOR_INPUT", "1"), "is_primary": True}
+    child = _sess("child", "RUNNING", "2")
+    sessions = [primary, child]
+    board = Board.scan([({"id": "wf"}, CLEAN)])
+    key = ActionKey("t", "ip", "primary")
+    assert action_key(task, sessions) == key
+    assert is_launchable(task, sessions, board, set())
+    assert not is_launchable(task, sessions, board, {key})
+    stalls = {key: {"count": 5}}
+    assert prune_stalls(stalls, [task], {"t": sessions}) == stalls
+    assert action_key(task, sessions, "child").session == "child"
+    primary["state"], child["state"] = "RUNNING", "WAITING_FOR_INPUT"
+    assert not is_launchable(task, sessions, board, set())

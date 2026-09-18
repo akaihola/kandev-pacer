@@ -53,6 +53,13 @@ def newest_session(sessions):
     return max(sessions, key=lambda session: session.get("started_at", "")) if sessions else None
 
 
+def launch_session(sessions):
+    primary = newest_session(
+        [session for session in sessions if session.get("is_primary")]
+    )
+    return primary or newest_session(sessions)
+
+
 def is_wip_admitted(task):
     """Whether kandev has admitted this card into its step, rather than queueing it there.
 
@@ -68,8 +75,8 @@ def is_wip_admitted(task):
 def is_launchable(task, sessions, board, skip):
     """Whether starting a turn on this task now is both allowed and meaningful."""
     step = task.get("workflow_step_id", "")
-    newest = newest_session(sessions)
-    session_id = newest["id"] if newest else None
+    selected = launch_session(sessions)
+    session_id = selected["id"] if selected else None
     if ActionKey(task["id"], step, session_id) in skip:
         return False
     # A card kandev queued because the step's WIP limit was full sits on that step with
@@ -77,7 +84,7 @@ def is_launchable(task, sessions, board, skip):
     # launched. Launching it would defeat the limit kandev is holding it behind.
     if not is_wip_admitted(task):
         return False
-    state = newest["state"] if newest else None
+    state = selected["state"] if selected else None
     # A sessionless task counts on a work step too, not only in the queue. kandev moves a
     # task to the requested step *before* it validates that the launch can happen (state ->
     # SCHEDULING, then move, then the agent-profile check), so an admission it rejects
@@ -86,7 +93,7 @@ def is_launchable(task, sessions, board, skip):
     # so the card was skipped on every later tick while the log said "nothing to launch".
     # Four subtasks of a Heartbeat task sat like that for ~7.75h.
     if step in board.work_steps or step in board.queue_steps:
-        return newest is None or state in IDLE_STATES
+        return selected is None or state in IDLE_STATES
     return False
 
 
@@ -122,7 +129,7 @@ class Candidate(NamedTuple):
     kind: str            # "drain" or "launch"
     task: dict
     # For a drain, the session holding the queue -- which is not always the task's
-    # newest. None for a launch, which resumes the newest.
+    # newest. None for a launch, which prefers the primary.
     session: str | None = None
 
 
@@ -269,8 +276,7 @@ def matched_scopes(models, scopes):
 
 
 def pick_intent(sessions):
-    primary = newest_session([session for session in sessions if session.get("is_primary")])
-    selected = primary or newest_session(sessions)
+    selected = launch_session(sessions)
     return ("start", None) if selected is None else ("workflow_step", selected["id"])
 
 
@@ -396,19 +402,19 @@ def action_key(task, sessions, session_id=None):
     """The key a booking or failure about this task is filed under.
 
     `session_id` names the session explicitly: a drain books against the session that
-    holds the queue, which is not always the newest. Without it, the newest is used --
+    holds the queue, which is not always the newest. Without it, the launch session is used --
     that is the session a launch resumes.
     """
     if session_id is None:
-        newest = newest_session(sessions)
-        session_id = newest["id"] if newest else None
+        selected = launch_session(sessions)
+        session_id = selected["id"] if selected else None
     return ActionKey(task["id"], task.get("workflow_step_id", ""), session_id)
 
 
 def live_keys(tasks, task_sessions):
     return {
         action_key(task, task_sessions.get(task["id"], [])): (
-            newest_session(task_sessions.get(task["id"], [])) or {}
+            launch_session(task_sessions.get(task["id"], [])) or {}
         ).get("state")
         for task in tasks
     }
