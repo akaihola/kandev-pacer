@@ -70,7 +70,7 @@ class Settings(BaseSettings):
     # paces itself on the wait instead, in MIN_INTERVAL..MAX_INTERVAL -- so this can be set
     # low for a responsive gate without polling a two-hour pause at that rate. See
     # quota.poll_interval.
-    interval: int = Field(120, alias="PACER_INTERVAL", gt=0)
+    interval: int = Field(30, alias="PACER_INTERVAL", gt=0)
 
     # kandev answers session.launch only once the session it started is done needing it --
     # observed 17s to 15 minutes after the send. A *refusal* comes back in milliseconds. So a

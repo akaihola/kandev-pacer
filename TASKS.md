@@ -40,11 +40,6 @@ Rules for TASKS.md usage are at the bottom of the file.
   since the 2026-09-11 subscription upgrade — a gate that stays open makes fewer
   cache-killing waits — but the rule has no knob and no failure mode.
 
-- [*] Change the default `PACER_INTERVAL` from `120` to `30` and update the README
-  example; `agent@gogo` already runs 30 through nix. Rotate `pacer.jsonl` weekly with a
-  `RotatingFileHandler`-style size cap of 50 MB and 4 backups; the file was 407 MB and
-  unrotated. Update the "Logging" section's size estimate.
-
 - [3] Advance a finished-but-unsignalled task instead of flagging it BLOCKED. The stall
   detector gives up after `PACER_STALL_AFTER` launches that left the worktree untouched,
   which is right for a wedged card and wrong for a primary session that finished its work
@@ -69,6 +64,11 @@ Rules for TASKS.md usage are at the bottom of the file.
   source. The direct read of the Anthropic and Codex usage endpoints stays the default.
   On `agent@gogo` the collector's snapshot is used, which removes the blind hours the
   expiring Claude Code token causes at night.
+
+- [*] Change the default `PACER_INTERVAL` from `120` to `30` and update the README
+  example; `agent@gogo` already runs 30 through nix. Rotate `pacer.jsonl` weekly with a
+  `RotatingFileHandler`-style size cap of 50 MB and 4 backups; the file was 407 MB and
+  unrotated. Update the "Logging" section's size estimate.
 
 - [*] In `kandev-learn` session observation files, use the name of each step
   mentioned instead of the step ID, both in the `Steps` section table column 2,
