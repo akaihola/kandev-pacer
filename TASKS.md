@@ -6,11 +6,6 @@ Rules for TASKS.md usage are at the bottom of the file.
 
 ## Ordered backlog
 
-- [*] Change the default `PACER_INTERVAL` from `120` to `30` and update the README
-  example; `agent@gogo` already runs 30 through nix. Rotate `pacer.jsonl` weekly with a
-  `RotatingFileHandler`-style size cap of 50 MB and 4 backups; the file was 407 MB and
-  unrotated. Update the "Logging" section's size estimate.
-
 - [*] Order launchable tasks by prompt-cache deadline while the gate is open (rule 1 of
   `docs/cache-aware-pacing.md`): the task whose session's last turn ended longest ago
   but is still inside its provider's cache TTL goes first. No knob. Keep pull order and
@@ -45,6 +40,11 @@ Rules for TASKS.md usage are at the bottom of the file.
 
 
 ## Scheduled
+
+- [*] Change the default `PACER_INTERVAL` from `120` to `30` and update the README
+  example; `agent@gogo` already runs 30 through nix. Rotate `pacer.jsonl` weekly with a
+  `RotatingFileHandler`-style size cap of 50 MB and 4 backups; the file was 407 MB and
+  unrotated. Update the "Logging" section's size estimate.
 
 - [3] Advance a finished-but-unsignalled task instead of flagging it BLOCKED. The stall
   detector gives up after `PACER_STALL_AFTER` launches that left the worktree untouched,
