@@ -5,23 +5,6 @@ Rules for TASKS.md usage are at the bottom of the file.
 ## Unverified proposals
 
 ## Ordered backlog
-
-- [*] Gate on the weekly windows and make the 5-hour rule soft. When the Claude gate
-  paused, the 5-hour window bound it six times more often than the 7-day one, while the
-  general weekly window ended two of the last five weeks at about half. Add
-  `PACER_ALPHA_5H` (default `1.0`, so nothing changes until set) applied to 5-hour
-  windows only, and `PACER_INTERACTIVE_HOURS` (e.g. `08-23`, default empty) outside of
-  which the 5-hour rule is skipped and only the weekly windows and the backstop gate.
-  Deprioritized 2026-09-11: on Max 20x the weekly window is far from binding. Keep it
-  for the two knobs, which matter again if usage grows.
-
-- [*] Fall back to another agent profile when a provider's gate has been closed for
-  longer than `PACER_FALLBACK_AFTER` (seconds, default `0` = off). Map with
-  `PACER_FALLBACK_PROFILES`, e.g. `"Luna low=Sonnet low"`, resolved by name through
-  `GET /api/v1/agents`. The fallback is used only for `intent:start` launches and is
-  logged as `fallback` in the tick record. Deprioritized 2026-09-11: with Max 20x and
-  ChatGPT Pro, exhaustion is no longer the common case. Keep it for a provider that is
-  down rather than spent.
 - [*] Read secrets from an env file the pacer opens itself. Add `secrets_file`
   (`PACER_SECRETS_FILE`, default empty) as a layer between the TOML file and the
   process environment: `KEY=VALUE` lines, only keys in `CONFIG_FIELDS`, real
@@ -33,6 +16,23 @@ Rules for TASKS.md usage are at the bottom of the file.
 
 
 ## Scheduled
+
+- [*] Fall back to another agent profile when a provider's gate has been closed for
+  longer than `PACER_FALLBACK_AFTER` (seconds, default `0` = off). Map with
+  `PACER_FALLBACK_PROFILES`, e.g. `"Luna low=Sonnet low"`, resolved by name through
+  `GET /api/v1/agents`. The fallback is used only for `intent:start` launches and is
+  logged as `fallback` in the tick record. Deprioritized 2026-09-11: with Max 20x and
+  ChatGPT Pro, exhaustion is no longer the common case. Keep it for a provider that is
+  down rather than spent.
+
+- [*] Gate on the weekly windows and make the 5-hour rule soft. When the Claude gate
+  paused, the 5-hour window bound it six times more often than the 7-day one, while the
+  general weekly window ended two of the last five weeks at about half. Add
+  `PACER_ALPHA_5H` (default `1.0`, so nothing changes until set) applied to 5-hour
+  windows only, and `PACER_INTERACTIVE_HOURS` (e.g. `08-23`, default empty) outside of
+  which the 5-hour rule is skipped and only the weekly windows and the backstop gate.
+  Deprioritized 2026-09-11: on Max 20x the weekly window is far from binding. Keep it
+  for the two knobs, which matter again if usage grows.
 
 - [*] Change the default `PACER_INTERVAL` from `120` to `30` and update the README
   example; `agent@gogo` already runs 30 through nix. Rotate `pacer.jsonl` weekly with a
