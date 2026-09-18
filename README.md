@@ -99,7 +99,7 @@ long option such as `--interval` and `--concurrency`.
 | `PACER_CODEX_CREDENTIALS` | `~/.codex/auth.json` | the ChatGPT token the Codex quota is read with. **Read, never written** — same rule as the Claude credential |
 | `PACER_ALPHA` | `1.0` | target burn line. Below 1 aims under steady, finishing each window with quota spare |
 | `PACER_BACKSTOP` | `0.97` | consumed fraction at which everything is withheld regardless. `1.0` disables |
-| `PACER_INTERVAL` | `120` | seconds between ticks while headroom is at or above the burn line. Below it the tick paces itself on the wait, in 5–120s — see below |
+| `PACER_INTERVAL` | `30` | seconds between ticks while headroom is at or above the burn line. Below it the tick paces itself on the wait, in 5–120s — see below |
 | `PACER_REFUSAL_WINDOW` | `10` | how long a launch waits. Only long enough to catch a refusal — an accepted launch is answered minutes later, and waiting froze the loop |
 | `PACER_LAUNCH_LATENCY` | `90` | how long kandev may take to make an accepted launch visible. Bookings last three ticks at `PACER_INTERVAL` plus this |
 | `PACER_FAIL_BACKOFF` | 3 × `PACER_INTERVAL` | seconds before a refused launch is retried; doubles per consecutive failure, up to 8× |
@@ -166,7 +166,8 @@ without it.
 
 The stdout lines say what the pacer is doing now. The JSONL log at `PACER_LOG` says what it
 did over the last week, which is what any change to `PACER_CONCURRENCY` or `PACER_ALPHA` has
-to be argued from. The record kinds, append-only, ~300 KB/day at the default tick:
+to be argued from. The record kinds, append-only, ~1.2 MB/day at the default tick;
+rotation keeps one 50 MB file and four weekly or size-based backups:
 
 - **`tick`** — one per tick, in every branch. Carries `gate` (`open`/`paused`/`ceiling`/`blind`)
   and `action` (`launched`/`drained`/`full`/`nothing`/`skipped`/`empty`/`exhausted`/`withheld`)

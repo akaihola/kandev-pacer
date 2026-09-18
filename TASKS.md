@@ -25,7 +25,6 @@ Rules for TASKS.md usage are at the bottom of the file.
 
 ## Scheduled
 
-<<<<<<< ours
 - [*] Gate on the weekly windows and make the 5-hour rule soft. When the Claude gate
   paused, the 5-hour window bound it six times more often than the 7-day one, while the
   general weekly window ended two of the last five weeks at about half. Add

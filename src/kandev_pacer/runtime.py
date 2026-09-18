@@ -15,6 +15,7 @@ import json
 import logging
 import time
 from dataclasses import dataclass, field
+from logging.handlers import TimedRotatingFileHandler
 from pathlib import Path
 from typing import NamedTuple
 
@@ -70,6 +71,17 @@ from .selection import (
 from .workflow import Board, lint_workflow, queue_step_id
 
 log = logging.getLogger("kandev-pacer")
+
+
+class PacerLogHandler(TimedRotatingFileHandler):
+    max_bytes = 50 * 1024 * 1024
+
+    def shouldRollover(self, record):
+        if self.stream is None:
+            self.stream = self._open()
+        if self.stream.tell() + len(self.format(record).encode()) + 1 >= self.max_bytes:
+            return 1
+        return super().shouldRollover(record)
 
 
 @dataclass(frozen=True)
@@ -252,8 +264,10 @@ class Pacer:
         try:
             path = Path(self.config.log_path)
             path.parent.mkdir(parents=True, exist_ok=True)
-            with path.open("a") as file:
-                file.write(json.dumps(record, separators=(",", ":")) + "\n")
+            handler = PacerLogHandler(path, when="D", interval=7, backupCount=4, encoding="utf-8")
+            handler.setFormatter(logging.Formatter("%(message)s"))
+            handler.emit(logging.makeLogRecord({"msg": json.dumps(record, separators=(",", ":"))}))
+            handler.close()
         except OSError as error:
             if not self._log_failed:
                 log.warning(f"log: {error} (continuing unlogged)")

@@ -16,10 +16,17 @@ from conftest import board_task as _task
 from conftest import one_session as _sess
 
 from kandev_pacer import client, provider, runtime
-from kandev_pacer.config import MAX_ATTEMPTS, MAX_INTERVAL, MIN_INTERVAL, settings
+from kandev_pacer.config import (
+    MAX_ATTEMPTS,
+    MAX_INTERVAL,
+    MIN_INTERVAL,
+    Settings,
+    settings,
+)
 from kandev_pacer.runtime import (
     ERROR_RESTATE,
     Pacer,
+    PacerLogHandler,
     QuotaUnreadable,
     dump_order,
     queued_counts,
@@ -95,6 +102,22 @@ def test_log_event_roundtrip_and_never_raises(tmp_path, monkeypatch):
 
     monkeypatch.setattr(settings, "log_path", "")            # disabled -> no-op
     logger.log_event({"kind": "tick"})
+
+
+def test_default_interval_is_30():
+    assert Settings().interval == 30
+
+
+def test_log_rotation_caps_size_and_backups(tmp_path, monkeypatch):
+    path = tmp_path / "pacer.jsonl"
+    monkeypatch.setattr(PacerLogHandler, "max_bytes", 100)
+    logger = Pacer(Board.scan([]))
+    monkeypatch.setattr(settings, "log_path", str(path))
+    for number in range(6):
+        logger.log_event({"kind": "tick", "number": number})
+    backups = list(tmp_path.glob("pacer.jsonl.*"))
+    assert len(backups) <= 4
+    assert path.stat().st_size < 100
 
 
 # --- a failure that repeats every tick ---
