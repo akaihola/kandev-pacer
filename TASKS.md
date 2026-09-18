@@ -17,6 +17,8 @@ Rules for TASKS.md usage are at the bottom of the file.
 
 ## Scheduled
 
+## In progress
+
 - [*] Fall back to another agent profile when a provider's gate has been closed for
   longer than `PACER_FALLBACK_AFTER` (seconds, default `0` = off). Map with
   `PACER_FALLBACK_PROFILES`, e.g. `"Luna low=Sonnet low"`, resolved by name through
@@ -68,8 +70,6 @@ Rules for TASKS.md usage are at the bottom of the file.
   tickets need Antti. Ends at a plan handoff, not an implementation.
 
 - [*] After the 0.94-dev upgrade, I am getting `Queue failed: task_id, session_id, and session_incarnation_id are required` when I try to use the `Queue` button from the userscript in task ff3350a2-60a3-48b1-9631-796e46e23e28. Investigate and fix.
-
-## In progress
 
 - [*] In `kandev-learn` session observation files, use the name of each step
   mentioned instead of the step ID, both in the `Steps` section table column 2,

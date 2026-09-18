@@ -110,6 +110,8 @@ long option such as `--interval` and `--concurrency`.
 | `PACER_HEARTBEAT_WEBHOOK_SECRET` | unset | sent as `X-Webhook-Secret`. Required when the URL is set; keep it out of the TOML and the nix store, load it from an env file |
 | `PACER_HEARTBEAT_MIN_LAUNCHABLE` | `2` | call the webhook when an open provider's launchable count is below this |
 | `PACER_HEARTBEAT_MIN_INTERVAL` | `1800` | seconds between attempts that led to no launch, counted from the last attempt whatever it answered |
+| `PACER_FALLBACK_AFTER` | `0` | seconds a provider gate must stay closed before a configured profile fallback may be used; `0` disables it |
+| `PACER_FALLBACK_PROFILES` | unset | profile-name mappings such as `Luna low=Sonnet low`; applies only to `intent:start` |
 
 ## Which task goes next
 
