@@ -787,11 +787,24 @@ class Pacer:
                 and now - self._gate_closed_at[provider_name]
                 >= self.config.fallback_after
             ):
-                candidate = self.next_action(snapshot, queued, None)
+                ordered = ordered_tasks(
+                    snapshot.tasks, snapshot.sidebar, self.board.step_ranks
+                )
+                candidate = select_action(
+                    ordered,
+                    snapshot.sessions,
+                    {},
+                    self.board,
+                    self.skip_keys(snapshot.now),
+                    allowed=set(verdicts),
+                    provider_of=lambda task, session: GateGroup(
+                        snapshot.task_providers.get(task["id"]),
+                        snapshot.task_scopes.get(task["id"], ()),
+                    ),
+                )
                 if (
                     candidate
                     and candidate.kind == "launch"
-                    and snapshot.task_providers.get(candidate.task["id"]) == provider_name
                 ):
                     key = action_key(
                         candidate.task,

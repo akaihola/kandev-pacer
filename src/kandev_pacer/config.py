@@ -159,12 +159,12 @@ class Settings(BaseSettings):
     def fallback_profiles(self):
         """`{source profile name: fallback profile name}` mappings."""
         return {
-            match.group(1).strip(): match.group(2).strip()
+            match.group(1).strip(" ,"): match.group(2).strip(" ,")
             for match in re.finditer(
                 r"(.+?)\s*=\s*(.+?)(?=\s+\S+\s*=|$)",
                 self.fallback_profiles_raw,
             )
-            if match.group(1).strip() and match.group(2).strip()
+            if match.group(1).strip(" ,") and match.group(2).strip(" ,")
         }
 
     @property
