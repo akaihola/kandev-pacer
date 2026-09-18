@@ -42,6 +42,20 @@ def test_providers_defaults_to_the_single_provider():
     assert Settings(PACER_PROVIDER="openai").providers == ["openai"]
 
 
+def test_fallback_settings_default_and_parse_profile_names():
+    assert Settings().fallback_after == 0
+    assert Settings().fallback_profiles == {}
+    config = Settings(
+        PACER_FALLBACK_AFTER="30",
+        PACER_FALLBACK_PROFILES="Luna low=Sonnet low, Codex=Claude",
+    )
+    assert config.fallback_after == 30
+    assert config.fallback_profiles == {
+        "Luna low": "Sonnet low",
+        "Codex": "Claude",
+    }
+
+
 def test_providers_parses_a_list_and_dedupes_keeping_order():
     assert Settings(PACER_PROVIDERS="anthropic,openai").providers == [
         "anthropic",

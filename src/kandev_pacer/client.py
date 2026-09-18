@@ -119,7 +119,7 @@ def agents():
             f"agents unavailable ({error}) -> cannot attribute tasks to a provider"
         )
         return {}
-    return {
+    result = {
         profile["id"]: {
             "agent": agent.get("name"),
             "billing_type": profile.get("billing_type"),
@@ -131,6 +131,11 @@ def agents():
         for profile in agent.get("profiles") or []
         if profile.get("id")
     }
+    for agent in response.get("agents") or []:
+        for profile in agent.get("profiles") or []:
+            if profile.get("id") and profile.get("name"):
+                result[profile["id"]]["name"] = profile["name"]
+    return result
 
 
 def user_settings():

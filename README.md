@@ -120,6 +120,8 @@ long option such as `--interval` and `--concurrency`.
 The secrets file uses one `KEY=VALUE` entry per line. Blank lines and comments are ignored,
 and only settings listed in this table are loaded. Process environment variables always win
 over the file. Keep the file outside the TOML and protect it with mode `0600` or stricter.
+| `PACER_FALLBACK_AFTER` | `0` | seconds a provider gate must stay closed before a configured profile fallback may be used; `0` disables it |
+| `PACER_FALLBACK_PROFILES` | unset | profile-name mappings such as `Luna low=Sonnet low`; applies only to `intent:start` |
 
 ## Which task goes next
 

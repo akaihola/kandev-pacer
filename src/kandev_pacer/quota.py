@@ -239,6 +239,7 @@ def tick_record(
     interval=None,
     provider=None,
     scope=None,
+    fallback=False,
 ):
     return {
         "t": round(now, 3),
@@ -264,6 +265,7 @@ def tick_record(
         # How long until the next tick. Without it the gaps between records read as
         # stalls, now that the interval moves with the estimated wait.
         "interval": interval,
+        "fallback": fallback,
     }
 
 

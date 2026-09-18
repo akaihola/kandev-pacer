@@ -7,14 +7,6 @@ Rules for TASKS.md usage are at the bottom of the file.
 ## Ordered backlog
 ## Scheduled
 
-- [*] Fall back to another agent profile when a provider's gate has been closed for
-  longer than `PACER_FALLBACK_AFTER` (seconds, default `0` = off). Map with
-  `PACER_FALLBACK_PROFILES`, e.g. `"Luna low=Sonnet low"`, resolved by name through
-  `GET /api/v1/agents`. The fallback is used only for `intent:start` launches and is
-  logged as `fallback` in the tick record. Deprioritized 2026-09-11: with Max 20x and
-  ChatGPT Pro, exhaustion is no longer the common case. Keep it for a provider that is
-  down rather than spent.
-
 - [3] Advance a finished-but-unsignalled task instead of flagging it BLOCKED. The stall
   detector gives up after `PACER_STALL_AFTER` launches that left the worktree untouched,
   which is right for a wedged card and wrong for a primary session that finished its work
@@ -23,13 +15,15 @@ Rules for TASKS.md usage are at the bottom of the file.
   when the stalled session is the task's primary session, is waiting for input, and its
   step requires the signal. Falls back to `block` when the step does not move.
 
-- [5] Decide what consumes the `kandev-learn` session observation records. A wayfinder
-  map with decision tickets (audience, home, output, cadence, write boundary); grilling
-  tickets need Antti. Ends at a plan handoff, not an implementation.
-
 - [*] After the 0.94-dev upgrade, I am getting `Queue failed: task_id, session_id, and session_incarnation_id are required` when I try to use the `Queue` button from the userscript in task ff3350a2-60a3-48b1-9631-796e46e23e28. Investigate and fix.
 
-## In progress
+- [*] Fall back to another agent profile when a provider's gate has been closed for
+  longer than `PACER_FALLBACK_AFTER` (seconds, default `0` = off). Map with
+  `PACER_FALLBACK_PROFILES`, e.g. `"Luna low=Sonnet low"`, resolved by name through
+  `GET /api/v1/agents`. The fallback is used only for `intent:start` launches and is
+  logged as `fallback` in the tick record. Deprioritized 2026-09-11: with Max 20x and
+  ChatGPT Pro, exhaustion is no longer the common case. Keep it for a provider that is
+  down rather than spent.
 
 - [*] Order launchable tasks by prompt-cache deadline while the gate is open (rule 1 of
   `docs/cache-aware-pacing.md`): the task whose session's last turn ended longest ago
