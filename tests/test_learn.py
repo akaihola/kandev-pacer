@@ -366,7 +366,7 @@ def test_render_record_scopes_session_ids_to_session_sections(tmp_path):
     assert "| Implement | 1 | unknown | 1 |" in output
     assert '"step": "step-id"' in output
     assert "| Implement |" in output
-    assert "## Step IDs" in output
+    assert "## Appendix: Step IDs" in output
     assert "| Implement | step-id |" in output
 
 

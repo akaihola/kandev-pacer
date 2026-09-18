@@ -593,11 +593,6 @@ def render_record(record):
     tools = [{**t, "session": s["id"]} for s in record["sessions"] for t in s["tools"]]
     sections.extend(
         [
-            "## Step IDs",
-            table(
-                ["step", "step ID"],
-                [[name, step_id] for step_id, name in names.items()],
-            ),
             "## Tool calls",
             table(
                 ["tool", "calls"],
@@ -642,6 +637,11 @@ def render_record(record):
             table(
                 ["repository", "file changes", "insertions", "deletions"],
                 [[key, *values] for key, values in repositories.items()],
+            ),
+            "## Appendix: Step IDs",
+            table(
+                ["step", "step ID"],
+                [[name, step_id] for step_id, name in names.items()],
             ),
         ]
     )
