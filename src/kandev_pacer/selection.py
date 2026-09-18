@@ -262,8 +262,9 @@ def matched_scopes(models, scopes):
 
 
 def pick_intent(sessions):
-    newest = newest_session(sessions)
-    return ("start", None) if newest is None else ("workflow_step", newest["id"])
+    primary = newest_session([session for session in sessions if session.get("is_primary")])
+    selected = primary or newest_session(sessions)
+    return ("start", None) if selected is None else ("workflow_step", selected["id"])
 
 
 def effective_sidebar_view(sidebar):
