@@ -274,14 +274,30 @@ def test_pebble_snapshot_maps_both_services_and_scoped_windows(tmp_path, monkeyp
     monkeypatch.setattr(settings, "pebble_max_age", 900000000)
     result = provider.pebble_fetch(NOW, path)
     assert [a["usage"]["provider"] for a in result["agents"]] == ["anthropic", "openai"]
-    assert result["agents"][0]["usage"]["windows"][1]["label"] == "7d (Fable)"
+    assert [w["label"] for w in result["agents"][0]["usage"]["windows"]] == [
+        "5-hour", "7-day (Fable)"
+    ]
     assert result["agents"][0]["usage"]["windows"][0]["utilization_pct"] == 11
+    assert [w["label"] for w in parse_windows(result)] == ["5-hour", "7-day (Fable)"]
 
 
 def test_pebble_snapshot_failures_name_the_path(tmp_path, monkeypatch):
     path = tmp_path / "missing.json"
     monkeypatch.setattr(settings, "pebble_max_age", 900)
     with pytest.raises(QuotaUnavailable, match=str(path)):
+        provider.pebble_fetch(NOW, path)
+
+
+@pytest.mark.parametrize("contents", ["{}", "not json"])
+def test_invalid_or_stale_pebble_snapshot_fails_closed(tmp_path, monkeypatch, contents):
+    path = tmp_path / "latest.json"
+    path.write_text(contents)
+    with pytest.raises(QuotaUnavailable, match=str(path)):
+        provider.pebble_fetch(NOW, path)
+
+    path.write_text(json.dumps({"collected_at": "2025-07-15T00:00:00Z", "services": {}}))
+    monkeypatch.setattr(settings, "pebble_max_age", 1)
+    with pytest.raises(QuotaUnavailable, match="stale"):
         provider.pebble_fetch(NOW, path)
 
 
@@ -294,8 +310,18 @@ def test_direct_quota_source_remains_the_default(monkeypatch):
 
 def test_pebble_quota_source_is_selected(monkeypatch):
     monkeypatch.setattr(settings, "quota_source", "pebble")
-    monkeypatch.setattr(provider, "pebble_fetch", lambda now: {"agents": ["pebble"]})
-    assert provider._read_source("anthropic", False, NOW) == {"agents": ["pebble"]}
+    envelope = {"agents": [{"usage": {"provider": "anthropic"}}]}
+    monkeypatch.setattr(provider, "pebble_fetch", lambda now: envelope)
+    assert provider._read_source("anthropic", False, NOW) == envelope
+
+
+def test_pebble_source_filters_the_requested_provider(monkeypatch):
+    monkeypatch.setattr(settings, "quota_source", "pebble")
+    monkeypatch.setattr(provider, "pebble_fetch", lambda now: {"agents": [
+        {"usage": {"provider": "anthropic"}}, {"usage": {"provider": "openai"}}
+    ]})
+    agents = provider._read_source("openai", False, NOW)["agents"]
+    assert [a["usage"]["provider"] for a in agents] == ["openai"]
 
 
 def test_the_module_reads_the_credential_fresh_every_fetch(tmp_path, monkeypatch):

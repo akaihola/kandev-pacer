@@ -236,9 +236,10 @@ def pebble_fetch(now, path=None):
             ("claude", PROVIDER, "claude-acp"),
             ("codex", CODEX_PROVIDER, "codex-acp"),
         ):
+            labels = {"5h": "5-hour", "7d": "7-day"}
             windows = [
                 {
-                    "label": label,
+                    "label": labels.get(label, label.replace("7d (", "7-day (")),
                     "utilization_pct": window["used_fraction"] * 100,
                     "reset_at": window["resets_at"],
                     "duration_s": window["duration_seconds"],
@@ -475,7 +476,14 @@ SOURCE_PROVIDERS = {"anthropic", CODEX_PROVIDER, "codex"}
 def _read_source(name, fresh, now):
     """One provider's usage envelope, from its source. Raises QuotaUnavailable like the sources."""
     if settings.quota_source == "pebble":
-        return pebble_fetch(now)
+        envelope = pebble_fetch(now)
+        provider_name = "openai" if name in (CODEX_PROVIDER, "codex") else name
+        return {
+            "agents": [
+                agent for agent in envelope["agents"]
+                if agent["usage"].get("provider") == provider_name
+            ]
+        }
     if name == "anthropic":
         return usage(fresh=fresh, now=now)
     if name in (CODEX_PROVIDER, "codex"):
