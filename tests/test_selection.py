@@ -322,6 +322,13 @@ def test_pick_intent():
     assert pick_intent([]) == ("start", None)
     assert pick_intent([_sess("a", "WAITING_FOR_INPUT", "1"),
                         _sess("b", "WAITING_FOR_INPUT", "2")]) == ("workflow_step", "b")
+    assert pick_intent([_sess("primary", "WAITING_FOR_INPUT", "1") | {"is_primary": True},
+                       _sess("survey", "WAITING_FOR_INPUT", "2")]) == ("workflow_step", "primary")
+
+
+def test_pick_intent_uses_newest_session_without_primary():
+    assert pick_intent([_sess("old", "WAITING_FOR_INPUT", "1"),
+                        _sess("new", "WAITING_FOR_INPUT", "2")]) == ("workflow_step", "new")
 
 def test_newest_session():
     assert newest_session([]) is None
