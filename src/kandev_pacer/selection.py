@@ -412,11 +412,13 @@ def action_key(task, sessions, session_id=None):
 
 
 def live_keys(tasks, task_sessions):
+    """Include explicit queue-drain sessions as well as the launch session."""
     return {
-        action_key(task, task_sessions.get(task["id"], [])): (
-            launch_session(task_sessions.get(task["id"], [])) or {}
-        ).get("state")
+        ActionKey(
+            task["id"], task.get("workflow_step_id", ""), session.get("id")
+        ): session.get("state")
         for task in tasks
+        for session in (task_sessions.get(task["id"], []) or [{}])
     }
 
 
@@ -489,7 +491,7 @@ def prune_stalls(stalls, tasks, task_sessions):
     off the step, or giving the task a new session, changes the key, and the card is
     launchable again on the next tick.
     """
-    live = live_keys(tasks, task_sessions)
+    live = {action_key(task, task_sessions.get(task["id"], [])) for task in tasks}
     return {key: value for key, value in stalls.items() if key in live}
 
 

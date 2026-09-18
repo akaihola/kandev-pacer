@@ -705,3 +705,20 @@ def test_primary_controls_launch_eligibility_and_stall_identity():
     assert action_key(task, sessions, "child").session == "child"
     primary["state"], child["state"] = "RUNNING", "WAITING_FOR_INPUT"
     assert not is_launchable(task, sessions, board, set())
+
+
+def test_child_drain_records_survive_beside_a_primary():
+    task = _task("t", "ip")
+    primary = {**_sess("primary", "WAITING_FOR_INPUT", "1"), "is_primary": True}
+    child = _sess("child", "WAITING_FOR_INPUT", "2")
+    sessions = {"t": [primary, child]}
+    key = ActionKey("t", "ip", "child")
+    booked = {key: Booking(100, uncertain=True)}
+    failures = {key: {"at": 100, "attempts": 1}}
+    assert prune_booked(booked, [task], sessions, 101, 90) == booked
+    assert prune_failures(failures, [task], sessions) == failures
+    assert prune_stalls({key: {"count": 5}}, [task], sessions) == {}
+    child["state"] = "RUNNING"
+    assert prune_booked(booked, [task], sessions, 101, 90) == {}
+    sessions["t"].remove(child)
+    assert prune_failures(failures, [task], sessions) == {}
