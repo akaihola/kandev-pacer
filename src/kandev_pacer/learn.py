@@ -13,6 +13,8 @@ import sys
 import tempfile
 import time
 from collections import Counter
+from copy import deepcopy
+from datetime import UTC, datetime
 from pathlib import Path
 from textwrap import dedent
 from typing import Any
@@ -500,6 +502,7 @@ def collect_task(db_path, task_id, home, timeout=45):
 
 
 def render_record(record):
+    record = formatted_record(record)
     # JSON is a YAML 1.2 document; no extra parser dependency is needed.
     sections = [
         "---\n" + json.dumps(record, ensure_ascii=False, indent=2) + "\n---\n",
@@ -652,11 +655,41 @@ def render_record(record):
     return "\n\n".join(sections) + "\n"
 
 
+def format_timestamp(value):
+    parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    if parsed.tzinfo:
+        parsed = parsed.astimezone(UTC).replace(tzinfo=None)
+    return parsed.isoformat(timespec="milliseconds")
+
+
+def formatted_record(record):
+    """Reduce display precision without changing collection or ordering values."""
+    formatted = deepcopy(record)
+    timestamp_keys = {"archived_at", "start", "end", "at"}
+    duration_keys = {"wall_seconds", "preceding_pacer_wait", "seconds", "ttl"}
+
+    def visit(value, key=None):
+        if key == "cost_usd" and isinstance(value, dict):
+            amount = value["value"]
+            return {**value, "value": round(amount, 3) if amount is not None else None}
+        if isinstance(value, dict):
+            return {name: visit(item, name) for name, item in value.items()}
+        if isinstance(value, list):
+            return [visit(item, key) for item in value]
+        if key in timestamp_keys and isinstance(value, str):
+            return format_timestamp(value)
+        if key in duration_keys and isinstance(value, (float, int)):
+            return round(value, 3)
+        return value
+
+    return visit(formatted)
+
+
 def record_path(vault, task_id, archived_at):
     if not re.fullmatch(r"[a-zA-Z0-9_-]+", task_id):
         raise ValueError("invalid task ID")
-    date = re.sub(r"[^a-zA-Z0-9.+-]", "-", archived_at)
-    path = vault / OBSERVATIONS / archived_at[:7] / f"{date} {task_id}.md"
+    date = re.sub(r"[^a-zA-Z0-9.+-]", "-", format_timestamp(archived_at))
+    path = vault / OBSERVATIONS / format_timestamp(archived_at)[:7] / f"{date} {task_id}.md"
     if not path.resolve().is_relative_to(vault.resolve()):
         raise ValueError("observation path leaves vault")
     return path
