@@ -325,6 +325,31 @@ def test_digest_aggregates_with_coverage(tmp_path, capsys):
     assert "| task | 2026" not in capsys.readouterr().out
 
 
+def test_render_record_scopes_session_ids_to_session_sections():
+    session = {
+        "id": "session-1",
+        "notes": [],
+        "totals": {k: learn.measure(3, "fixture") for k in learn.METRICS},
+        "steps": [],
+        "tools": [],
+        "gaps": [],
+        "signals": [],
+        "blockers": {},
+    }
+    record = {
+        "sessions": [session, {**session, "id": "session-2"}],
+        "diffs": [],
+        "notes": [],
+    }
+
+    output = learn.render_record(record)
+
+    assert output.count("## Session session-") == 2
+    assert "| session |" not in output
+    assert "| session-1 |" not in output
+    assert "| session-2 |" not in output
+
+
 def test_retry_after_concurrent_head_change(sweep_args, monkeypatch):
     path = fake_write(sweep_args, "task", "2026-09-01")
     original = learn.command

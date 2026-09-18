@@ -20,6 +20,11 @@ format. Durations use milliseconds and costs use USD to 1/1000 dollar.
 Frontmatter is JSON, a YAML 1.2 subset, and includes numeric sources and coverage.
 The digest reads that frontmatter and prints a single table with totals.
 
+One observation file can contain multiple Kandev sessions. The Markdown body
+introduces each session once with a `## Session <id>` heading; session-specific
+tables below that heading omit the repeated ID. Task-level tables remain outside
+those sections.
+
 ## Sources and units
 
 - Kandev supplies task/session identities, recorded agent/model snapshots, step

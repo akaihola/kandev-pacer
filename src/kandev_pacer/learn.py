@@ -515,45 +515,60 @@ def render_record(record):
         """),
     ]
     sections.extend(record["notes"])
-    sections.extend(
-        [
-            "## Session totals",
-            table(
-                ["session", *METRICS, "availability"],
-                [
-                    [s["id"], *[s["totals"][k] for k in METRICS], s["notes"]]
-                    for s in record["sessions"]
-                ],
-            ),
-        ]
-    )
-    sections.extend(
-        [
-            "## Steps",
-            table(
-                [
-                    "session",
-                    "step",
-                    "wall seconds",
-                    "preceding pacer wait",
-                    "turns",
-                    *METRICS,
-                ],
-                [
+    for s in record["sessions"]:
+        sections.extend(
+            [
+                f"## Session {s['id']}",
+                "### Totals",
+                table(
+                    [*METRICS, "availability"],
+                    [[*[s["totals"][k] for k in METRICS], s["notes"]]],
+                ),
+                "### Steps",
+                table(
+                    ["step", "wall seconds", "preceding pacer wait", "turns", *METRICS],
                     [
-                        s["id"],
-                        r["step"],
-                        r["wall_seconds"],
-                        r["preceding_pacer_wait"],
-                        r["turns"],
-                        *[r["totals"][k]["value"] for k in METRICS],
-                    ]
-                    for s in record["sessions"]
-                    for r in s["steps"]
-                ],
-            ),
-        ]
-    )
+                        [
+                            r["step"],
+                            r["wall_seconds"],
+                            r["preceding_pacer_wait"],
+                            r["turns"],
+                            *[r["totals"][k]["value"] for k in METRICS],
+                        ]
+                        for r in s["steps"]
+                    ],
+                ),
+                "### Errored calls",
+                table(
+                    ["call", "tool", "first 120 characters"],
+                    [[t["id"], t["name"], t.get("excerpt")] for t in s["tools"] if t.get("error")],
+                ),
+                "### Cache gaps",
+                table(
+                    ["start", "end", "seconds", "TTL seconds", "pacer withheld", "usage after"],
+                    [
+                        [
+                            g[k]
+                            for k in (
+                                "start",
+                                "end",
+                                "seconds",
+                                "ttl",
+                                "pacer_withheld",
+                                "usage_after",
+                            )
+                        ]
+                        for g in s["gaps"]
+                    ],
+                ),
+                "### Step signal summaries and blockers",
+                table(
+                    ["time", "step", "verbatim metadata"],
+                    [[r.get("at"), r.get("step"), r] for r in s["signals"]]
+                    + [[None, None, s["blockers"]]],
+                ),
+            ]
+        )
     tools = [{**t, "session": s["id"]} for s in record["sessions"] for t in s["tools"]]
     sections.extend(
         [
@@ -561,15 +576,6 @@ def render_record(record):
             table(
                 ["tool", "calls"],
                 sorted(Counter(t["name"] for t in tools if t.get("called")).items()),
-            ),
-            "## Errored calls",
-            table(
-                ["session", "call", "tool", "first 120 characters"],
-                [
-                    [t["session"], t["id"], t["name"], t.get("excerpt")]
-                    for t in tools
-                    if t.get("error")
-                ],
             ),
         ]
     )
@@ -582,9 +588,9 @@ def render_record(record):
             table(["command", "calls"], [[c, n] for c, n in commands.items() if n > 1]),
             "## Ten largest tool outputs",
             table(
-                ["session", "call", "tool", "bytes"],
+                ["call", "tool", "bytes"],
                 [
-                    [t["session"], t["id"], t["name"], t["output_bytes"]]
+                    [t["id"], t["name"], t["output_bytes"]]
                     for t in sorted(
                         [t for t in tools if "output_bytes" in t],
                         key=lambda t: (-t["output_bytes"], t["id"]),
@@ -595,47 +601,8 @@ def render_record(record):
     )
     sections.extend(
         [
-            "## Cache gaps",
-            table(
-                [
-                    "session",
-                    "start",
-                    "end",
-                    "seconds",
-                    "TTL seconds",
-                    "pacer withheld",
-                    "usage after",
-                ],
-                [
-                    [
-                        s["id"],
-                        *[
-                            g[k]
-                            for k in (
-                                "start",
-                                "end",
-                                "seconds",
-                                "ttl",
-                                "pacer_withheld",
-                                "usage_after",
-                            )
-                        ],
-                    ]
-                    for s in record["sessions"]
-                    for g in s["gaps"]
-                ],
-            ),
-            "## Step signal summaries and blockers",
-            table(
-                ["session", "time", "step", "verbatim metadata"],
-                [
-                    [s["id"], r.get("at"), r.get("step"), r]
-                    for s in record["sessions"]
-                    for r in s["signals"]
-                ]
-                + [[s["id"], None, None, s["blockers"]] for s in record["sessions"]]
-                + [[None, None, None, record.get("blockers", {})]],
-            ),
+            "## Task blockers",
+            table(["verbatim metadata"], [[record.get("blockers", {})]]),
         ]
     )
     repositories = {}
