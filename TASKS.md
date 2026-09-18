@@ -6,11 +6,6 @@ Rules for TASKS.md usage are at the bottom of the file.
 
 ## Ordered backlog
 
-- [*] There is a UUID in the `kandev-learn` session observation file name. That
-  UUID is never mentioned in the file itself. It's unclear what the UUID
-  represents. Repeat the UUID and its type (e.g. task, session ID, etc.) at the
-  top of the file.
-
 - [*] In `kandev-learn` session observation files, use the name of each step
   mentioned instead of the step ID, both in the `Steps` section table column 2,
   and in column 3 of the `Step signal summaries and blockers` table. Add an
@@ -78,6 +73,11 @@ Rules for TASKS.md usage are at the bottom of the file.
 
 
 ## Scheduled
+
+- [*] There is a UUID in the `kandev-learn` session observation file name. That
+  UUID is never mentioned in the file itself. It's unclear what the UUID
+  represents. Repeat the UUID and its type (e.g. task, session ID, etc.) at the
+  top of the file.
 
 - [5] Decide what consumes the `kandev-learn` session observation records. A wayfinder
   map with decision tickets (audience, home, output, cadence, write boundary); grilling
