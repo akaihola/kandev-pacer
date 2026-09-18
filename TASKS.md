@@ -6,6 +6,15 @@ Rules for TASKS.md usage are at the bottom of the file.
 
 ## Ordered backlog
 
+- [*] Gate on the weekly windows and make the 5-hour rule soft. When the Claude gate
+  paused, the 5-hour window bound it six times more often than the 7-day one, while the
+  general weekly window ended two of the last five weeks at about half. Add
+  `PACER_ALPHA_5H` (default `1.0`, so nothing changes until set) applied to 5-hour
+  windows only, and `PACER_INTERACTIVE_HOURS` (e.g. `08-23`, default empty) outside of
+  which the 5-hour rule is skipped and only the weekly windows and the backstop gate.
+  Deprioritized 2026-09-11: on Max 20x the weekly window is far from binding. Keep it
+  for the two knobs, which matter again if usage grows.
+
 - [*] Fall back to another agent profile when a provider's gate has been closed for
   longer than `PACER_FALLBACK_AFTER` (seconds, default `0` = off). Map with
   `PACER_FALLBACK_PROFILES`, e.g. `"Luna low=Sonnet low"`, resolved by name through
@@ -24,22 +33,6 @@ Rules for TASKS.md usage are at the bottom of the file.
 
 
 ## Scheduled
-
-- [*] Gate on the weekly windows and make the 5-hour rule soft. When the Claude gate
-  paused, the 5-hour window bound it six times more often than the 7-day one, while the
-  general weekly window ended two of the last five weeks at about half. Add
-  `PACER_ALPHA_5H` (default `1.0`, so nothing changes until set) applied to 5-hour
-  windows only, and `PACER_INTERACTIVE_HOURS` (e.g. `08-23`, default empty) outside of
-  which the 5-hour rule is skipped and only the weekly windows and the backstop gate.
-  Deprioritized 2026-09-11: on Max 20x the weekly window is far from binding. Keep it
-  for the two knobs, which matter again if usage grows.
-
-- [*] Order launchable tasks by prompt-cache deadline while the gate is open (rule 1 of
-  `docs/cache-aware-pacing.md`): the task whose session's last turn ended longest ago
-  but is still inside its provider's cache TTL goes first. No knob. Keep pull order and
-  drag order as the tie-break so `--dump-order` still explains the queue. Worth less
-  since the 2026-09-11 subscription upgrade — a gate that stays open makes fewer
-  cache-killing waits — but the rule has no knob and no failure mode.
 
 - [*] Change the default `PACER_INTERVAL` from `120` to `30` and update the README
   example; `agent@gogo` already runs 30 through nix. Rotate `pacer.jsonl` weekly with a
@@ -70,6 +63,13 @@ Rules for TASKS.md usage are at the bottom of the file.
 - [*] After the 0.94-dev upgrade, I am getting `Queue failed: task_id, session_id, and session_incarnation_id are required` when I try to use the `Queue` button from the userscript in task ff3350a2-60a3-48b1-9631-796e46e23e28. Investigate and fix.
 
 ## In progress
+
+- [*] Order launchable tasks by prompt-cache deadline while the gate is open (rule 1 of
+  `docs/cache-aware-pacing.md`): the task whose session's last turn ended longest ago
+  but is still inside its provider's cache TTL goes first. No knob. Keep pull order and
+  drag order as the tie-break so `--dump-order` still explains the queue. Worth less
+  since the 2026-09-11 subscription upgrade — a gate that stays open makes fewer
+  cache-killing waits — but the rule has no knob and no failure mode.
 
 - [*] In `kandev-learn` session observation files, use the name of each step
   mentioned instead of the step ID, both in the `Steps` section table column 2,
