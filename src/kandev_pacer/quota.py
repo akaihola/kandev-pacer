@@ -155,10 +155,24 @@ def quota_verdict(usage, windows, now, config, provider=None):
                 f"{sorted(usage_providers(usage))} -> WITHHOLDING (check PACER_PROVIDER)"
             ),
         )
-    worst = worst_headroom(windows, now, config.alpha)
+    active = [window for window in windows if _window_active(window, now, config)]
+    worst = min(
+        (
+            headroom(
+                window["consumed_frac"],
+                elapsed_frac(now, window["resets_at"], window["duration_s"]),
+                _window_alpha(window, config),
+            )
+            for window in active
+        ),
+        default=1.0,
+    )
     # Withholding with no end in sight reads as an outage. It is not one: the release is
     # arithmetic. An estimate all the same -- a turn still running keeps spending `c`.
-    healed = resume_at(windows, now, config.alpha)
+    healed = max(
+        (_window_resume_at(window, now, config) for window in active),
+        default=None,
+    )
     # The hard ceiling first: it overrides the burn line, however much headroom says.
     over = [w for w in windows if w["consumed_frac"] > config.backstop] \
         if config.backstop < 1.0 else []
@@ -170,10 +184,25 @@ def quota_verdict(usage, windows, now, config, provider=None):
         return Verdict("ceiling", worst, (
             f"headroom={worst:+.3f} CEILING (consumed>{config.backstop:.2f}) "
             "-> withholding"
-        ), max(rolls, healed))
+        ), max(rolls, healed or now))
     if worst < 0:
         return Verdict("paused", worst, f"headroom={worst:+.3f} PAUSED", healed)
     return Verdict("open", worst, "")
+
+
+def _window_alpha(window, config):
+    return config.alpha_5h if window["duration_s"] == 5 * 3600 else config.alpha
+
+
+def _window_active(window, now, config):
+    if window["duration_s"] != 5 * 3600 or not config.interactive_hours:
+        return True
+    start, end = (int(part) for part in config.interactive_hours.split("-"))
+    return start <= datetime.fromtimestamp(now).hour < end
+
+
+def _window_resume_at(window, now, config):
+    return window_resume_at(window, now, _window_alpha(window, config))
 
 
 def window_records(windows, now, alpha=1.0):

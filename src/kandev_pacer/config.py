@@ -64,6 +64,8 @@ class Settings(BaseSettings):
     concurrency_total: int | None = Field(None, alias="PACER_CONCURRENCY_TOTAL", ge=1)
     # Target burn line: alpha < 1 aims below steady, finishing each window with quota spare.
     alpha: float = Field(1.0, alias="PACER_ALPHA", gt=0)
+    alpha_5h: float = Field(1.0, alias="PACER_ALPHA_5H", gt=0)
+    interactive_hours: str = Field("", alias="PACER_INTERACTIVE_HOURS")
     # Hard ceiling on consumed fraction, whatever the burn line says. 1.0 disables it.
     backstop: float = Field(0.97, alias="PACER_BACKSTOP", gt=0, le=1.0)
     # Seconds between ticks while headroom is at or above the burn line. Below it the tick
@@ -200,6 +202,22 @@ class Settings(BaseSettings):
     def _known_quota_source(cls, value):
         if value not in {"direct", "pebble"}:
             raise ValueError("PACER_QUOTA_SOURCE must be 'direct' or 'pebble'")
+    @field_validator("interactive_hours", mode="after")
+    @classmethod
+    def _valid_interactive_hours(cls, value):
+        if not value:
+            return value
+        parts = value.split("-")
+        if len(parts) != 2:
+            raise ValueError("PACER_INTERACTIVE_HOURS must be an hour range such as 08-23")
+        try:
+            start, end = (int(part) for part in parts)
+        except ValueError:
+            raise ValueError(
+                "PACER_INTERACTIVE_HOURS must be an hour range such as 08-23"
+            ) from None
+        if not (0 <= start < end <= 24):
+            raise ValueError("PACER_INTERACTIVE_HOURS must be an hour range such as 08-23")
         return value
 
     @model_validator(mode="after")

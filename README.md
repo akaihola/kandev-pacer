@@ -101,6 +101,8 @@ long option such as `--interval` and `--concurrency`.
 | `PACER_AGENT_PROVIDERS` | unset | override which subscription an agent burns, when kandev's `billing_type` is wrong for pacing. `agent=provider` pairs, e.g. `hermes-acp=openai`. Wins over `billing_type`, so an agent kandev labels `api_key` but which really spends a subscription is paced against it — see [Two subscriptions](#two-subscriptions) |
 | `PACER_CODEX_CREDENTIALS` | `~/.codex/auth.json` | the ChatGPT token the Codex quota is read with. **Read, never written** — same rule as the Claude credential |
 | `PACER_ALPHA` | `1.0` | target burn line. Below 1 aims under steady, finishing each window with quota spare |
+| `PACER_ALPHA_5H` | `1.0` | target burn line for 5-hour windows only |
+| `PACER_INTERACTIVE_HOURS` | unset | hour range such as `08-23`; outside it, skip the 5-hour burn-line rule while weekly windows and the backstop still apply |
 | `PACER_BACKSTOP` | `0.97` | consumed fraction at which everything is withheld regardless. `1.0` disables |
 | `PACER_INTERVAL` | `30` | seconds between ticks while headroom is at or above the burn line. Below it the tick paces itself on the wait, in 5–120s — see below |
 | `PACER_REFUSAL_WINDOW` | `10` | how long a launch waits. Only long enough to catch a refusal — an accepted launch is answered minutes later, and waiting froze the loop |

@@ -24,15 +24,6 @@ Rules for TASKS.md usage are at the bottom of the file.
   ChatGPT Pro, exhaustion is no longer the common case. Keep it for a provider that is
   down rather than spent.
 
-- [*] Gate on the weekly windows and make the 5-hour rule soft. When the Claude gate
-  paused, the 5-hour window bound it six times more often than the 7-day one, while the
-  general weekly window ended two of the last five weeks at about half. Add
-  `PACER_ALPHA_5H` (default `1.0`, so nothing changes until set) applied to 5-hour
-  windows only, and `PACER_INTERACTIVE_HOURS` (e.g. `08-23`, default empty) outside of
-  which the 5-hour rule is skipped and only the weekly windows and the backstop gate.
-  Deprioritized 2026-09-11: on Max 20x the weekly window is far from binding. Keep it
-  for the two knobs, which matter again if usage grows.
-
 - [*] Order launchable tasks by prompt-cache deadline while the gate is open (rule 1 of
   `docs/cache-aware-pacing.md`): the task whose session's last turn ended longest ago
   but is still inside its provider's cache TTL goes first. No knob. Keep pull order and
@@ -69,6 +60,14 @@ Rules for TASKS.md usage are at the bottom of the file.
   example; `agent@gogo` already runs 30 through nix. Rotate `pacer.jsonl` weekly with a
   `RotatingFileHandler`-style size cap of 50 MB and 4 backups; the file was 407 MB and
   unrotated. Update the "Logging" section's size estimate.
+- [*] Gate on the weekly windows and make the 5-hour rule soft. When the Claude gate
+  paused, the 5-hour window bound it six times more often than the 7-day one, while the
+  general weekly window ended two of the last five weeks at about half. Add
+  `PACER_ALPHA_5H` (default `1.0`, so nothing changes until set) applied to 5-hour
+  windows only, and `PACER_INTERACTIVE_HOURS` (e.g. `08-23`, default empty) outside of
+  which the 5-hour rule is skipped and only the weekly windows and the backstop gate.
+  Deprioritized 2026-09-11: on Max 20x the weekly window is far from binding. Keep it
+  for the two knobs, which matter again if usage grows.
 
 - [*] In `kandev-learn` session observation files, use the name of each step
   mentioned instead of the step ID, both in the `Steps` section table column 2,

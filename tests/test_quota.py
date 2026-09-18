@@ -5,6 +5,8 @@ No network.
 
 from datetime import datetime
 
+import pytest
+
 from kandev_pacer.config import MAX_INTERVAL, MIN_INTERVAL, Settings, settings
 from kandev_pacer.quota import (
     Verdict,
@@ -143,8 +145,9 @@ def test_tick_record_separates_gate_from_action():
 # --- the whole quota decision, as one pure call ---
 
 def _windows(consumed, resets_in=9000, label="5-hour"):
+    duration = 7 * 24 * 3600 if label.startswith("7-day") else 5 * 3600
     return [{"label": label, "consumed_frac": consumed,
-             "resets_at": 1000.0 + resets_in, "duration_s": 18000}]
+             "resets_at": 1000.0 + resets_in, "duration_s": duration}]
 
 
 def _usage(provider="anthropic"):
@@ -163,6 +166,39 @@ def test_quota_verdict_pauses_when_over_it():
     verdict = quota_verdict(_usage(), _windows(0.80), 1000.0, Settings())
     assert not verdict.is_open and verdict.gate == "paused"
     assert "PAUSED" in verdict.message
+
+
+def test_alpha_5h_only_and_default_preserves_behavior():
+    windows = _windows(0.60) + _windows(0.001, label="7-day")
+    assert quota_verdict(_usage(), windows, 1000.0, Settings()).gate == "paused"
+    assert quota_verdict(_usage(), windows, 1000.0, Settings(PACER_ALPHA_5H=2)).is_open
+
+
+def test_interactive_hours_skip_only_5h_at_boundaries():
+    windows = _windows(0.80) + _windows(0.10, label="7-day")
+    config = Settings(PACER_INTERACTIVE_HOURS="08-23")
+    start = datetime(2026, 1, 1, 8).timestamp()
+    end = datetime(2026, 1, 1, 23).timestamp()
+    windows = [
+        {**_windows(0.80, resets_in=9000)[0], "resets_at": start + 9000},
+        {**_windows(0.001, resets_in=9000, label="7-day")[0], "resets_at": start + 9000},
+    ]
+    assert quota_verdict(_usage(), windows, start, config).gate == "paused"
+    assert quota_verdict(_usage(), windows, end, config).is_open
+
+
+def test_interactive_hours_keeps_backstop_active():
+    config = Settings(PACER_INTERACTIVE_HOURS="08-23")
+    now = datetime(2026, 1, 1, 23).timestamp()
+    window = {**_windows(0.99, resets_in=9000)[0], "resets_at": now + 9000}
+    assert quota_verdict(_usage(), [window], now, config).gate == "ceiling"
+
+
+def test_invalid_gate_window_configuration_fails():
+    with pytest.raises(ValueError):
+        Settings(PACER_ALPHA_5H=0)
+    with pytest.raises(ValueError):
+        Settings(PACER_INTERACTIVE_HOURS="23-08")
 
 
 def test_quota_verdict_ceiling_outranks_a_healthy_burn_line():
