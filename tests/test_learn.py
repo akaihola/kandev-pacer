@@ -330,16 +330,25 @@ def test_render_record_scopes_session_ids_to_session_sections(tmp_path):
         "id": "session-1",
         "notes": [],
         "totals": {k: learn.measure(3, "fixture") for k in learn.METRICS},
-        "steps": [],
+        "steps": [
+            {
+                "step": "step-id",
+                "wall_seconds": 1,
+                "preceding_pacer_wait": None,
+                "turns": 1,
+                "totals": {k: learn.measure(3, "fixture") for k in learn.METRICS},
+            }
+        ],
         "tools": [],
         "gaps": [],
-        "signals": [],
+        "signals": [{"at": "2026-09-01", "step": "step-id", "signal": "done"}],
         "blockers": {},
     }
     record = {
         "task": "task-uuid",
         "archived_at": "2026-09-01",
         "sessions": [session, {**session, "id": "session-2"}],
+        "step_names": {"step-id": "Implement"},
         "diffs": [],
         "notes": [],
     }
@@ -354,6 +363,11 @@ def test_render_record_scopes_session_ids_to_session_sections(tmp_path):
     assert "| session |" not in output
     assert "| session-1 |" not in output
     assert "| session-2 |" not in output
+    assert "| Implement | 1 | unknown | 1 |" in output
+    assert '"step": "step-id"' in output
+    assert "| Implement |" in output
+    assert "## Step IDs" in output
+    assert "| Implement | step-id |" in output
 
 
 def test_retry_after_concurrent_head_change(sweep_args, monkeypatch):

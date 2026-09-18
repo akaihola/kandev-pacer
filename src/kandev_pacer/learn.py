@@ -50,6 +50,20 @@ def decode(value):
     return json.loads(value or "{}") or {}
 
 
+def step_names(db, workflow_id):
+    if not workflow_id:
+        return {}
+    try:
+        return dict(
+            db.execute(
+                "SELECT id, name FROM workflow_steps WHERE workflow_id=?",
+                (workflow_id,),
+            ).fetchall()
+        )
+    except sqlite3.Error:
+        return {}
+
+
 def table(headers, rows):
     def cell(value):
         if value is None:
@@ -207,6 +221,7 @@ def collect_task(db_path, task_id, home, timeout=45):
             for k in ("title", "workflow", "archived_at", "archived_by_cascade_id")
         }
         record.update(schema=1, task=task_id, sessions=[], notes=[], diffs=[])
+        record["step_names"] = step_names(db, task["workflow_id"])
         record["blockers"] = {
             k: v for k, v in decode(task["metadata"]).items() if "block" in k.lower()
         }
@@ -503,6 +518,11 @@ def collect_task(db_path, task_id, home, timeout=45):
 
 def render_record(record):
     record = formatted_record(record)
+    names = record.get("step_names", {})
+
+    def step_name(step_id):
+        return names.get(step_id) or step_id
+
     # JSON is a YAML 1.2 document; no extra parser dependency is needed.
     sections = [
         "---\n" + json.dumps(record, ensure_ascii=False, indent=2) + "\n---\n",
@@ -530,7 +550,7 @@ def render_record(record):
                     ["step", "wall seconds", "preceding pacer wait", "turns", *METRICS],
                     [
                         [
-                            r["step"],
+                            step_name(r["step"]),
                             r["wall_seconds"],
                             r["preceding_pacer_wait"],
                             r["turns"],
@@ -564,15 +584,20 @@ def render_record(record):
                 ),
                 "### Step signal summaries and blockers",
                 table(
-                    ["time", "step", "verbatim metadata"],
-                    [[r.get("at"), r.get("step"), r] for r in s["signals"]]
-                    + [[None, None, s["blockers"]]],
+                    ["time", "verbatim metadata", "step"],
+                    [[r.get("at"), r, step_name(r.get("step"))] for r in s["signals"]]
+                    + [[None, s["blockers"], None]],
                 ),
             ]
         )
     tools = [{**t, "session": s["id"]} for s in record["sessions"] for t in s["tools"]]
     sections.extend(
         [
+            "## Step IDs",
+            table(
+                ["step", "step ID"],
+                [[name, step_id] for step_id, name in names.items()],
+            ),
             "## Tool calls",
             table(
                 ["tool", "calls"],
