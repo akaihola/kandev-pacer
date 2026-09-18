@@ -85,7 +85,7 @@ def test_rearchive_and_commit_recovery(sweep_args, monkeypatch):
     args = sweep_args
     learn.sweep(args)
     monkeypatch.setattr(learn, "write_task", fake_write)
-    add(args, "task", "2026-09-02T00:00:00.000000001Z")
+    add(args, "task", "2026-09-02T00:00:00.001001Z")
     commit = learn.commit_records
 
     def fail(*_):
@@ -102,7 +102,7 @@ def test_rearchive_and_commit_recovery(sweep_args, monkeypatch):
         db.execute("UPDATE tasks SET archived_at=NULL")
     learn.sweep(args)
     with sqlite3.connect(args.db) as db:
-        db.execute("UPDATE tasks SET archived_at='2026-09-02T00:00:00.000000002Z'")
+        db.execute("UPDATE tasks SET archived_at='2026-09-02T00:00:00.002002Z'")
     learn.sweep(args)
     assert len(list((args.vault / learn.OBSERVATIONS).glob("*/*.md"))) == 2
 
@@ -133,12 +133,48 @@ def test_commit_preserves_user_index_and_disables_hooks(sweep_args):
 
 
 def test_never_overwrite_and_same_day_precision(tmp_path):
-    first = learn.record_path(tmp_path, "task", "2026-09-01T00:00:00.000000001Z")
-    second = learn.record_path(tmp_path, "task", "2026-09-01T00:00:00.000000002Z")
+    first = learn.record_path(tmp_path, "task", "2026-09-01T00:00:00.001001Z")
+    second = learn.record_path(tmp_path, "task", "2026-09-01T00:00:00.002002Z")
     assert first != second
     learn.publish(first, "first")
     learn.publish(first, "second")
     assert first.read_text() == "first"
+
+
+def test_observation_precision_formatting(tmp_path):
+    record = {
+        "archived_at": "2026-09-01T00:00:00.123456789+02:00",
+        "sessions": [
+            {
+                "start": "2026-09-01T00:00:00.123456789+02:00",
+                "end": "2026-09-01T00:00:01.987654321+02:00",
+                "signals": [{"at": "2026-09-01T00:00:00.123456789+02:00"}],
+                "steps": [
+                    {
+                        "wall_seconds": 1.234567,
+                        "preceding_pacer_wait": 0.0009876,
+                        "totals": {"cost_usd": {"value": 1.23456}},
+                    }
+                ],
+                "gaps": [{"start": "2026-09-01T00:00:00Z", "seconds": 2.34567, "ttl": 3600.1234}],
+                "totals": {"cost_usd": {"value": 9.87654}},
+            }
+        ],
+    }
+    formatted = learn.formatted_record(record)
+    session = formatted["sessions"][0]
+    assert formatted["archived_at"] == "2026-08-31T22:00:00.123"
+    assert session["start"] == "2026-08-31T22:00:00.123"
+    assert session["end"] == "2026-08-31T22:00:01.987"
+    assert session["signals"][0]["at"] == "2026-08-31T22:00:00.123"
+    assert session["steps"][0]["wall_seconds"] == 1.235
+    assert session["steps"][0]["preceding_pacer_wait"] == 0.001
+    assert session["steps"][0]["totals"]["cost_usd"]["value"] == 1.235
+    assert session["gaps"][0]["seconds"] == 2.346
+    assert session["gaps"][0]["ttl"] == 3600.123
+    assert learn.record_path(tmp_path, "task", record["archived_at"]).name == (
+        "2026-08-31T22-00-00.123 task.md"
+    )
 
 
 def test_actual_cost_only():

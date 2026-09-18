@@ -13,9 +13,10 @@ uv run --frozen kandev-learn digest --since 2026-09-01
 
 Records live under
 `~/my-knowledge/pages/PKB/Kandev Session Observations/YYYY-MM/`.
-The filename uses the full archive timestamp, with punctuation made filename-safe,
-followed by the task ID. Nanoseconds are retained so two archives on the same day
-remain distinct. Existing files, including partial records, are never replaced.
+The filename uses the archive timestamp to milliseconds in UTC, without a timezone,
+with punctuation made filename-safe, followed by the task ID. Existing files,
+including partial records, are never replaced. Observation timestamps use the same
+format. Durations use milliseconds and costs use USD to 1/1000 dollar.
 Frontmatter is JSON, a YAML 1.2 subset, and includes numeric sources and coverage.
 The digest reads that frontmatter and prints a single table with totals.
 
@@ -46,8 +47,8 @@ The digest reads that frontmatter and prints a single table with totals.
   collector calls its readers and attribution helper; it does not call the
   report, cost estimates or release simulation.
 
-Durations are seconds; tool-output size is UTF-8 bytes of stored output, including
-any truncation already present in the source. Only explicit error flags or a
+Durations are seconds, rendered to milliseconds; tool-output size is UTF-8 bytes
+of stored output, including any truncation already present in the source. Only explicit error flags or a
 Codex command's recorded exit status mark errors. Repeated commands use exact
 string equality and do not assert retry intent. The top ten outputs and command
 counts cover all task sessions. Only repeated command text and the first 120
