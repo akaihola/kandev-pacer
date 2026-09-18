@@ -74,11 +74,6 @@ Rules for TASKS.md usage are at the bottom of the file.
 
 ## Scheduled
 
-- [*] There is a UUID in the `kandev-learn` session observation file name. That
-  UUID is never mentioned in the file itself. It's unclear what the UUID
-  represents. Repeat the UUID and its type (e.g. task, session ID, etc.) at the
-  top of the file.
-
 - [5] Decide what consumes the `kandev-learn` session observation records. A wayfinder
   map with decision tickets (audience, home, output, cadence, write boundary); grilling
   tickets need Antti. Ends at a plan handoff, not an implementation.
@@ -86,6 +81,11 @@ Rules for TASKS.md usage are at the bottom of the file.
 - [*] After the 0.94-dev upgrade, I am getting `Queue failed: task_id, session_id, and session_incarnation_id are required` when I try to use the `Queue` button from the userscript in task ff3350a2-60a3-48b1-9631-796e46e23e28. Investigate and fix.
 
 ## In progress
+
+- [*] There is a UUID in the `kandev-learn` session observation file name. That
+  UUID is never mentioned in the file itself. It's unclear what the UUID
+  represents. Repeat the UUID and its type (e.g. task, session ID, etc.) at the
+  top of the file.
 
 - [*] The session ID is repeated over and over in `kandev-learn` session
   observation files. Will there ever be more than one session per file? If not,
