@@ -242,6 +242,7 @@ class Pacer:
         # that produced nothing; one whose task the pacer has since launched (and, as a
         # rule, finished) has earned the next call as soon as the board runs dry again.
         self._launched_since_heartbeat = False
+        self._gate_closed_at = {}
 
     # --- the event log ---
 
@@ -691,6 +692,11 @@ class Pacer:
         tasks of every open class.
         """
         now = snapshot.now
+        closed = not any(verdict.is_open for verdict in verdicts.values())
+        if closed:
+            self._gate_closed_at.setdefault(provider_name, now)
+        else:
+            self._gate_closed_at.pop(provider_name, None)
         # Keep the single-subscription, single-class selection path unchanged.
         split = len(verdicts) > 1
         plain = (
@@ -747,6 +753,7 @@ class Pacer:
                     round(self.interval, 1),
                     provider=_provider_label(provider_name),
                     scope="+".join(group.scopes) or None,
+                    fallback=bool(outcome.launched and outcome.launched.get("fallback")),
                 )
             )
             return gate == "open"
@@ -774,6 +781,28 @@ class Pacer:
                 quiet=quiet,
             )
         if not open_groups:
+            if (
+                closed
+                and self.config.fallback_after
+                and now - self._gate_closed_at[provider_name]
+                >= self.config.fallback_after
+            ):
+                candidate = self.next_action(snapshot, queued, None)
+                if (
+                    candidate
+                    and candidate.kind == "launch"
+                    and snapshot.task_providers.get(candidate.task["id"]) == provider_name
+                ):
+                    key = action_key(
+                        candidate.task,
+                        snapshot.sessions.get(candidate.task["id"], []),
+                        None,
+                    )
+                    outcome = self.attempt(candidate, key, snapshot, fallback=True)
+                    if outcome is not None:
+                        group = next(iter(verdicts))
+                        report(group, verdicts[group].gate, outcome)
+                        return False
             return False
 
         cap = self.config.concurrency
@@ -868,7 +897,7 @@ class Pacer:
             )
         return True
 
-    def attempt(self, candidate, key, snapshot):
+    def attempt(self, candidate, key, snapshot, fallback=False):
         """Try one action. Returns the Outcome for the caller to report, or None.
 
         None means kandev refused: the refusal spent no quota, so the tick still owes
@@ -883,7 +912,7 @@ class Pacer:
         sessions = client.sessions_of(task["id"])
         if candidate.kind == "drain":
             return self.drain(fresh, key, sessions, snapshot, candidate.session)
-        return self.launch(fresh, key, sessions, snapshot)
+        return self.launch(fresh, key, sessions, snapshot, fallback=fallback)
 
     def drain(self, task, key, sessions, snapshot, drain_id):
         """Release the user prompt parked on `drain_id`, the session holding the queue.
@@ -914,7 +943,7 @@ class Pacer:
             {"task": task["id"], "session": holder["id"], "step": step},
         )
 
-    def launch(self, task, key, sessions, snapshot):
+    def launch(self, task, key, sessions, snapshot, fallback=False):
         """Start a turn: in place at a work step, or admitting the task from the queue."""
         # Before anything is spent: has the last run of launches achieved anything? The
         # fingerprint read here is what the *previous* turn left behind, so comparing it
@@ -937,6 +966,20 @@ class Pacer:
         # its own session, so it stays profile-free -- kandev owns routing, the pacer owns
         # timing.
         profile = task_agent_profile(task) if intent == "start" else None
+        if fallback and intent == "start":
+            source = snapshot.agents.get(profile)
+            target_name = self.config.fallback_profiles.get((source or {}).get("name"))
+            target = next(
+                (
+                    pid for pid, info in snapshot.agents.items()
+                    if info.get("name") == target_name
+                ),
+                None,
+            )
+            if target:
+                profile = target
+            else:
+                return Outcome("skipped", f"fallback unavailable for {label(task)!r}")
         try:
             client.ws_launch(task["id"], intent, session_id, target, agent_profile_id=profile)
         except client.RequestOutcomeUnknown as error:
@@ -955,7 +998,10 @@ class Pacer:
             "launched",
             f"launched {label(task)!r} intent={intent} workflow={workflow!r} "
             f"target={self.board.name_of(target)!r}",
-            {"task": task["id"], "intent": intent, "session": session_id, "target": target},
+            {
+                "task": task["id"], "intent": intent, "session": session_id,
+                "target": target, "fallback": fallback,
+            },
         )
 
     def give_up(self, key, task):

@@ -6,6 +6,7 @@ changing one is a code change, not a configuration change.
 """
 
 import os
+import re
 import tomllib
 from pathlib import Path
 from typing import Any
@@ -116,6 +117,8 @@ class Settings(BaseSettings):
     heartbeat_min_launchable: int = Field(2, alias="PACER_HEARTBEAT_MIN_LAUNCHABLE", ge=0)
     # Seconds between attempts, waived once the pacer has launched a task since the last one.
     heartbeat_min_interval: int = Field(1800, alias="PACER_HEARTBEAT_MIN_INTERVAL", ge=0)
+    fallback_after: float = Field(0, alias="PACER_FALLBACK_AFTER", ge=0)
+    fallback_profiles_raw: str = Field("", alias="PACER_FALLBACK_PROFILES")
 
     # --- values derived from the ones above ---
     #
@@ -151,6 +154,18 @@ class Settings(BaseSettings):
             if agent.strip() and provider.strip():
                 overrides[agent.strip()] = provider.strip()
         return overrides
+
+    @property
+    def fallback_profiles(self):
+        """`{source profile name: fallback profile name}` mappings."""
+        return {
+            match.group(1).strip(): match.group(2).strip()
+            for match in re.finditer(
+                r"(.+?)\s*=\s*(.+?)(?=\s+\S+\s*=|$)",
+                self.fallback_profiles_raw,
+            )
+            if match.group(1).strip() and match.group(2).strip()
+        }
 
     @property
     def fail_backoff(self):

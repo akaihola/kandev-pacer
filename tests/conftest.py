@@ -219,6 +219,7 @@ class FakeBoard:
                         "profiles": [
                             {
                                 "id": pid,
+                                "name": info.get("name"),
                                 "billing_type": info.get("billing_type"),
                                 "model": info.get("model"),
                                 "fallback_model": info.get("fallback_model"),
