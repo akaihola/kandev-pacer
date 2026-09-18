@@ -25,6 +25,7 @@ Rules for TASKS.md usage are at the bottom of the file.
 
 ## Scheduled
 
+<<<<<<< ours
 - [*] Gate on the weekly windows and make the 5-hour rule soft. When the Claude gate
   paused, the 5-hour window bound it six times more often than the 7-day one, while the
   general weekly window ended two of the last five weeks at about half. Add
@@ -40,11 +41,6 @@ Rules for TASKS.md usage are at the bottom of the file.
   drag order as the tie-break so `--dump-order` still explains the queue. Worth less
   since the 2026-09-11 subscription upgrade — a gate that stays open makes fewer
   cache-killing waits — but the rule has no knob and no failure mode.
-
-- [*] Change the default `PACER_INTERVAL` from `120` to `30` and update the README
-  example; `agent@gogo` already runs 30 through nix. Rotate `pacer.jsonl` weekly with a
-  `RotatingFileHandler`-style size cap of 50 MB and 4 backups; the file was 407 MB and
-  unrotated. Update the "Logging" section's size estimate.
 
 - [3] Advance a finished-but-unsignalled task instead of flagging it BLOCKED. The stall
   detector gives up after `PACER_STALL_AFTER` launches that left the worktree untouched,
@@ -70,6 +66,11 @@ Rules for TASKS.md usage are at the bottom of the file.
 - [*] After the 0.94-dev upgrade, I am getting `Queue failed: task_id, session_id, and session_incarnation_id are required` when I try to use the `Queue` button from the userscript in task ff3350a2-60a3-48b1-9631-796e46e23e28. Investigate and fix.
 
 ## In progress
+
+- [*] Change the default `PACER_INTERVAL` from `120` to `30` and update the README
+  example; `agent@gogo` already runs 30 through nix. Rotate `pacer.jsonl` weekly with a
+  `RotatingFileHandler`-style size cap of 50 MB and 4 backups; the file was 407 MB and
+  unrotated. Update the "Logging" section's size estimate.
 
 - [*] In `kandev-learn` session observation files, use the name of each step
   mentioned instead of the step ID, both in the `Steps` section table column 2,
