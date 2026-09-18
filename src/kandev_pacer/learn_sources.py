@@ -97,6 +97,28 @@ def content_text(content):
     return json.dumps(content, ensure_ascii=False, sort_keys=True)
 
 
+def message_text(agent, entry):
+    if agent == "codex":
+        payload = entry.get("payload", {})
+        if payload.get("type") == "output_text":
+            return "assistant", payload.get("text", "")
+        if payload.get("type") == "message":
+            parts = payload.get("content", [])
+            return payload.get("role"), "\n".join(
+                p.get("text", "") for p in parts if isinstance(p, dict)
+            )
+        return None, ""
+    message = entry.get("message", {})
+    role = message.get("role") or entry.get("type")
+    parts = []
+    for block in message.get("content", []) if isinstance(message, dict) else []:
+        if isinstance(block, str):
+            parts.append(block)
+        elif block.get("type") == "text":
+            parts.append(block.get("text", ""))
+    return role, "\n".join(parts)
+
+
 def tool_events(agent, entries):
     """Normalize call/result records; never infer an error from prose."""
     calls = {}
@@ -203,6 +225,17 @@ def opencode_entries(export):
         if info.get("modelID"):
             models.add(info["modelID"])
         for part in message.get("parts", []):
+            if part.get("type") == "text":
+                entries.append(
+                    {
+                        "timestamp": info.get("time", {}).get("created"),
+                        "message": {
+                            "role": info.get("role"),
+                            "content": [{"type": "text", "text": part.get("text", "")}],
+                        },
+                    }
+                )
+                continue
             if part.get("type") != "tool":
                 continue
             state = part.get("state", {})
@@ -552,6 +585,13 @@ def collect_transcripts(home, session, timeout=45):
                         result["pi_usage"].append(
                             {"at": e["timestamp"], **msg["usage"]}
                         )
+                    role, text = message_text(agent, e)
+                    if text:
+                        messages = result.setdefault("messages", [])
+                        if messages and messages[-1][0] == role:
+                            messages[-1] = (role, messages[-1][1] + text)
+                        else:
+                            messages.append((role, text))
                 if file and agent in ("claude", "codex"):
                     requests = (
                         cache_waste.claude_requests(file)

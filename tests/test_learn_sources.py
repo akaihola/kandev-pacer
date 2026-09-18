@@ -21,6 +21,21 @@ def test_tool_formats(agent):
     assert len(calls[1]["excerpt"]) == 120
 
 
+def test_message_text_extracts_prompt_and_response():
+    assert sources.message_text(
+        "claude",
+        {"type": "user", "message": {"content": [{"type": "text", "text": "start"}]}},
+    ) == ("user", "start")
+    assert sources.message_text(
+        "codex",
+        {"payload": {"type": "output_text", "text": "done"}},
+    ) == ("assistant", "done")
+    assert sources.message_text(
+        "codex",
+        {"payload": {"type": "message", "role": "user", "content": [{"text": "start"}]}},
+    ) == ("user", "start")
+
+
 def test_encodings():
     assert sources.claude_slug("/a/b.c_d e:@!") == "-a-b-c-d-e---"
     assert sources.pi_slug("/a/b.c_d e:@!") == "--a-b.c_d e-@!--"
