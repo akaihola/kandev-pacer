@@ -124,6 +124,7 @@ class Settings(BaseSettings):
     heartbeat_min_launchable: int = Field(2, alias="PACER_HEARTBEAT_MIN_LAUNCHABLE", ge=0)
     # Seconds between attempts, waived once the pacer has launched a task since the last one.
     heartbeat_min_interval: int = Field(1800, alias="PACER_HEARTBEAT_MIN_INTERVAL", ge=0)
+    secrets_file: str = Field("", alias="PACER_SECRETS_FILE")
 
     # --- values derived from the ones above ---
     #
@@ -238,7 +239,7 @@ DEFAULT_CONFIG_PATH = Path.home() / ".config" / "kandev-pacer" / "config.toml"
 
 
 def load_settings(config_path=None, overrides: dict[str, Any] | None = None):
-    """Load TOML, environment and command-line values in increasing precedence."""
+    """Load TOML, an optional restricted env file, environment and CLI values."""
     values = {}
     path = Path(config_path) if config_path else DEFAULT_CONFIG_PATH
     if path.is_file():
@@ -248,8 +249,31 @@ def load_settings(config_path=None, overrides: dict[str, Any] | None = None):
                 for name, value in tomllib.load(file).get("kandev-pacer", {}).items()
                 if name in Settings.model_fields
             })
-    values.update({key: value for key, value in os.environ.items() if key in CONFIG_FIELDS})
-    values.update(overrides or {})
+    environment = {key: value for key, value in os.environ.items() if key in CONFIG_FIELDS}
+    command_line = overrides or {}
+    secrets_path = command_line.get(
+        "PACER_SECRETS_FILE",
+        environment.get("PACER_SECRETS_FILE", values.get("PACER_SECRETS_FILE", "")),
+    )
+    secret_values = {}
+    if secrets_path:
+        secret_file = Path(secrets_path)
+        if secret_file.stat().st_mode & 0o077:
+            raise ValueError(f"secrets file {secret_file} must not be group- or world-readable")
+        with secret_file.open() as file:
+            for line_number, line in enumerate(file, 1):
+                line = line.rstrip("\n")
+                if not line or line.lstrip().startswith("#"):
+                    continue
+                key, separator, value = line.partition("=")
+                if not separator:
+                    raise ValueError(f"invalid secrets file line {line_number}")
+                if key not in CONFIG_FIELDS:
+                    continue
+                secret_values[key] = value
+    values.update(secret_values)
+    values.update(environment)
+    values.update(command_line)
     return Settings(**values)  # ty: ignore[invalid-argument-type]
 
 

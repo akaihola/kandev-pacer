@@ -7,15 +7,6 @@ Rules for TASKS.md usage are at the bottom of the file.
 ## Ordered backlog
 ## Scheduled
 
-- [*] Read secrets from an env file the pacer opens itself. Add `secrets_file`
-  (`PACER_SECRETS_FILE`, default empty) as a layer between the TOML file and the
-  process environment: `KEY=VALUE` lines, only keys in `CONFIG_FIELDS`, real
-  environment still wins. Refuse to start if the file is group- or world-readable,
-  and never log its contents. On `agent@gogo` the nix-generated `config.toml` points
-  it at `~/.config/secrets/kandev-pacer.env`, so starting the pacer no longer needs a
-  `source` first and a forgotten one cannot leave `heartbeat_webhook_url` without its
-  secret. Do not hardcode that path; it is a nixos-config convention.
-
 - [*] Fall back to another agent profile when a provider's gate has been closed for
   longer than `PACER_FALLBACK_AFTER` (seconds, default `0` = off). Map with
   `PACER_FALLBACK_PROFILES`, e.g. `"Luna low=Sonnet low"`, resolved by name through
@@ -50,6 +41,15 @@ Rules for TASKS.md usage are at the bottom of the file.
 - [*] After the 0.94-dev upgrade, I am getting `Queue failed: task_id, session_id, and session_incarnation_id are required` when I try to use the `Queue` button from the userscript in task ff3350a2-60a3-48b1-9631-796e46e23e28. Investigate and fix.
 
 ## In progress
+
+- [*] Read secrets from an env file the pacer opens itself. Add `secrets_file`
+  (`PACER_SECRETS_FILE`, default empty) as a layer between the TOML file and the
+  process environment: `KEY=VALUE` lines, only keys in `CONFIG_FIELDS`, real
+  environment still wins. Refuse to start if the file is group- or world-readable,
+  and never log its contents. On `agent@gogo` the nix-generated `config.toml` points
+  it at `~/.config/secrets/kandev-pacer.env`, so starting the pacer no longer needs a
+  `source` first and a forgotten one cannot leave `heartbeat_webhook_url` without its
+  secret. Do not hardcode that path; it is a nixos-config convention.
 
 - [1] Read the quota from the pebble-quota collector as a configurable alternative
   source. The direct read of the Anthropic and Codex usage endpoints stays the default.
