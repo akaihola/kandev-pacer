@@ -1115,3 +1115,248 @@ def test_heartbeat_no_refill_opportunity_stays_quiet(
         tick(pacer, board, tasks, sessions, {})
     assert heartbeat == []
     assert not any(r.message.startswith("heartbeat:") for r in caplog.records)
+
+
+@pytest.fixture
+def signal_stall(pacer, board, monkeypatch):
+    from kandev_pacer.selection import action_key
+
+    monkeypatch.setattr(settings, "stall_action", "signal")
+    monkeypatch.setattr(settings, "stall_after", 1)
+    board.steps = [{**s, "auto_advance_requires_signal": True} for s in CLEAN]
+    sessions = _sess("primary", "WAITING_FOR_INPUT")
+    sessions[0]["is_primary"] = True
+    board.load([_task("t", "ip")], {"t": sessions}, {})
+    key = action_key(board.tasks[0], sessions)
+    pacer.stalled[key] = {"fingerprint": {}, "count": 0, "flagged": False}
+    events = []
+    monkeypatch.setattr(pacer, "log_event", events.append)
+    return key, events
+
+
+def test_signal_advances_task_without_spending_a_turn(pacer, board, signal_stall):
+    key, events = signal_stall
+    board.signal_target = "rv"
+    pacer.tick()
+    assert actions(board) == ["mcp.step_complete"]
+    assert board.tasks[0]["workflow_step_id"] == "rv"
+    assert key in pacer.pending_signals
+    assert pacer.stalled[key]["count"] == 0
+    pacer.tick()
+    assert not pacer.pending_signals and not pacer.stalled
+    assert [e["action"] for e in events if e["kind"] == "stalled"] == [
+        "signalled",
+        "advanced",
+    ]
+
+
+@pytest.mark.parametrize(
+    "change,reason",
+    [
+        ("child", "not primary"),
+        ("state", "not waiting"),
+        ("ungated", "does not require"),
+        ("missing_step", "does not require"),
+        ("missing_session", "not primary"),
+        ("read_error", "cannot read"),
+    ],
+)
+def test_signal_ineligibility_blocks(
+    pacer, board, signal_stall, monkeypatch, change, reason
+):
+    key, events = signal_stall
+    sessions = board.sessions["t"]
+    if change == "child":
+        sessions[0].pop("is_primary")
+    elif change == "state":
+        sessions[0]["state"] = "COMPLETED"
+    elif change == "ungated":
+        board.steps = CLEAN
+    elif change == "missing_step":
+        board.steps = []
+    elif change == "missing_session":
+        sessions = []
+    elif change == "read_error":
+
+        def fail(_):
+            raise client.ReadFailed("offline")
+
+        monkeypatch.setattr(client, "steps_of", fail)
+    pacer.stalled[key]["count"] = 1
+    pacer.give_up(key, board.tasks[0], sessions)
+    assert actions(board) == ["task.state"]
+    assert events[-1]["action"] == "blocked"
+    assert reason in events[-1]["reason"]
+
+
+@pytest.mark.parametrize("latency", [0, 90])
+def test_ignored_signal_blocks_once_even_with_closed_gate(
+    pacer,
+    board,
+    signal_stall,
+    monkeypatch,
+    latency,
+):
+    key, events = signal_stall
+    monkeypatch.setattr(settings, "launch_latency", latency)
+    pacer.tick()
+    deadline, _ = pacer.pending_signals[key]
+    if latency:
+        pacer.check_signals(deadline - 0.01)
+        pacer.tick()
+        assert actions(board) == ["mcp.step_complete"]
+    board.usage_pct = 99
+    monkeypatch.setattr(runtime.time, "time", lambda: deadline)
+    pacer.tick()
+    assert not pacer.pending_signals
+    assert pacer.stalled[key]["flagged"]
+    for _ in range(3):
+        pacer.tick()
+    board.usage_pct = 10
+    pacer.tick()
+    assert actions(board) == ["mcp.step_complete", "task.state"]
+    assert [e["action"] for e in events if e["kind"] == "stalled"] == [
+        "signalled",
+        "blocked",
+    ]
+
+
+@pytest.mark.parametrize("unknown", [False, True])
+def test_signal_errors_preserve_fallback(
+    pacer, board, signal_stall, monkeypatch, unknown
+):
+    key, events = signal_stall
+
+    def fail(*_):
+        if unknown:
+            raise client.RequestOutcomeUnknown("reply lost")
+        raise RuntimeError("unsupported action")
+
+    monkeypatch.setattr(client, "ws_step_complete", fail)
+    pacer.tick()
+    if unknown:
+        assert actions(board) == []
+        assert events[0]["action"] == "signal_uncertain"
+        pacer.check_signals(pacer.pending_signals[key][0])
+    assert actions(board) == ["task.state"]
+    assert [e for e in events if e["kind"] == "stalled"][-1]["action"] == "blocked"
+    assert key in pacer.skip_keys(0)
+
+
+@pytest.mark.parametrize("change", ["moved", "deleted", "session"])
+def test_pending_signal_cancels_stale_evidence(pacer, board, signal_stall, change):
+    key, events = signal_stall
+    pacer.tick()
+    deadline, _ = pacer.pending_signals[key]
+    if change == "moved":
+        board.tasks[0]["workflow_step_id"] = "rv"
+    elif change == "deleted":
+        board.tasks.clear()
+    else:
+        board.sessions["t"][0]["id"] = "replacement"
+    pacer.check_signals(deadline)
+    assert not pacer.pending_signals and key not in pacer.stalled
+    assert actions(board) == ["mcp.step_complete"]
+    assert events[-1]["action"] == (
+        "advanced" if change == "moved" else "signal_cancelled"
+    )
+
+
+def test_failed_pending_read_retries_without_blocking(
+    pacer, board, signal_stall, monkeypatch
+):
+    key, events = signal_stall
+    pacer.tick()
+    deadline, _ = pacer.pending_signals[key]
+    with monkeypatch.context() as patch:
+
+        def fail(_):
+            raise client.ReadFailed("offline")
+
+        patch.setattr(client, "task_of", fail)
+        pacer.check_signals(deadline)
+    assert key in pacer.pending_signals
+    assert events[-1]["action"] == "signal_check_failed"
+    board.tasks[0]["workflow_step_id"] = "rv"
+    pacer.check_signals(deadline + 1)
+    assert not pacer.pending_signals
+    assert actions(board) == ["mcp.step_complete"]
+
+
+def test_failed_block_write_is_not_reported_as_blocked(
+    pacer, board, signal_stall, monkeypatch
+):
+    key, events = signal_stall
+    monkeypatch.setattr(pacer, "flag_blocked", lambda *_: False)
+    pacer.tick()
+    pacer.check_signals(pacer.pending_signals[key][0])
+    assert events[-1]["action"] == "block_failed"
+    assert not pacer.stalled[key]["flagged"]
+    assert key in pacer.skip_keys(0)
+
+
+def test_stale_launch_selection_does_not_signal(pacer, board, signal_stall):
+    key, events = signal_stall
+    snapshot = pacer.read()
+    board.sessions["t"][0]["id"] = "replacement"
+    outcome = pacer.launch(board.tasks[0], key, board.sessions["t"], snapshot)
+    assert outcome.action == "skipped"
+    assert not actions(board) and key not in pacer.stalled
+
+
+def test_stall_action_configuration(tmp_path, monkeypatch):
+    from kandev_pacer.config import Settings, load_settings
+
+    monkeypatch.delenv("PACER_STALL_ACTION", raising=False)
+    assert Settings().stall_action == "block"
+    for action in ("block", "signal"):
+        assert Settings(PACER_STALL_ACTION=action).stall_action == action
+    with pytest.raises(ValueError, match="PACER_STALL_ACTION"):
+        Settings(PACER_STALL_ACTION="advance")  # ty: ignore[invalid-argument-type]
+    config = tmp_path / "config.toml"
+    config.write_text('[kandev-pacer]\nstall_action = "signal"\n')
+    assert load_settings(config).stall_action == "signal"
+    monkeypatch.setenv("PACER_STALL_ACTION", "block")
+    assert load_settings(config).stall_action == "block"
+
+
+def test_lost_signal_reply_can_still_advance(pacer, board, signal_stall, monkeypatch):
+    key, events = signal_stall
+
+    def lose_reply(*_):
+        board.tasks[0]["workflow_step_id"] = "rv"
+        raise client.RequestOutcomeUnknown("reply lost")
+
+    monkeypatch.setattr(client, "ws_step_complete", lose_reply)
+    pacer.tick()
+    pacer.check_signals(pacer.pending_signals[key][0])
+    assert not pacer.pending_signals and not pacer.stalled
+    assert not actions(board)
+    assert [e["action"] for e in events if e["kind"] == "stalled"] == [
+        "signal_uncertain",
+        "advanced",
+    ]
+
+
+def test_newer_child_does_not_steal_primary_signal(pacer, board, signal_stall):
+    key, _ = signal_stall
+    child = _sess("child", "WAITING_FOR_INPUT")[0]
+    child["started_at"] = "2"
+    board.sessions["t"].append(child)
+    pacer.tick()
+    assert key in pacer.pending_signals
+    signals = [p for a, p in board.ws_log if a == "mcp.step_complete"]
+    assert len(signals) == 1 and signals[0]["session_id"] == "primary"
+    pacer.tick()
+    assert actions(board) == ["mcp.step_complete"]
+
+
+def test_signal_uses_current_step_requirement(pacer, board, signal_stall):
+    _, events = signal_stall
+    # The startup scan required a signal; the operator has since disabled it.
+    pacer.board.steps["wf"] = board.steps
+    board.steps = CLEAN
+    pacer.tick()
+    assert actions(board) == ["task.state"]
+    stalled = [e for e in events if e["kind"] == "stalled"]
+    assert stalled[-1]["reason"] == "step does not require a signal"

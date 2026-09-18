@@ -9,7 +9,7 @@ import os
 import re
 import tomllib
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings
@@ -96,6 +96,9 @@ class Settings(BaseSettings):
     # completed task is relaunched every tick until its context window fills. 0 disables
     # the check and restores that behaviour. See progress.py for what "untouched" reads.
     stall_after: int = Field(5, alias="PACER_STALL_AFTER", ge=0)
+    stall_action: Literal["block", "signal"] = Field(
+        "block", alias="PACER_STALL_ACTION"
+    )
 
     # Where Claude Code keeps the subscription token the quota is read with. Read, never
     # written -- see provider.py on why the pacer refuses to refresh it.

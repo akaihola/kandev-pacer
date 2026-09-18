@@ -231,6 +231,7 @@ class Pacer:
         self.booked = {}     # key -> when the turn was spent
         self.failed = {}     # key -> {at, attempts, flagged}
         self.stalled = {}    # key -> {fingerprint, count, flagged}
+        self.pending_signals = {}  # key -> (deadline, untouched turns)
         # Seconds run() waits after the current tick. Each tick sets it from what the
         # quota says is coming, so a long pause is not polled at a short gate's rate.
         self.interval = config.interval
@@ -410,6 +411,7 @@ class Pacer:
         """Actions this tick must leave alone: paid for, backing off, or given up on."""
         return (
             set(self.booked)
+            | set(self.pending_signals)
             | backed_off(self.failed, now)
             | stalled_keys(self.stalled, self.config.stall_after)
         )
@@ -606,6 +608,7 @@ class Pacer:
     def tick(self):
         """Run one tick. Returns whether any gate was open, for the caller."""
         snapshot = self.read()
+        self.check_signals(snapshot.now)
         self.booked = prune_booked(
             self.booked, snapshot.tasks, snapshot.sessions,
             snapshot.now, self.config.booking_ttl,
@@ -1017,9 +1020,12 @@ class Pacer:
         # against the one taken at the previous launch is what says whether that turn did
         # any work. A finished task answers "no" every time, forever, and nothing on the
         # board would ever say so.
+        if action_key(task, sessions) != key:
+            self.stalled.pop(key, None)
+            return Outcome("skipped", f"{label(task)!r} changed session -> skip")
         self.stalled[key] = note_stall(self.stalled, key, progress.fingerprint(sessions))
         if stalled_out(self.stalled, key, self.config.stall_after):
-            return self.give_up(key, task)
+            return self.give_up(key, task, sessions)
         workflow = self.board.name_of(task.get("workflow_id"))
         target = launch_target(task, self.board)
         if target is None:
@@ -1071,30 +1077,109 @@ class Pacer:
             },
         )
 
-    def give_up(self, key, task):
-        """Stop launching a card whose turns have stopped changing anything, and say so.
+    def stall_event(self, key, turns, action, reason):
+        log.warning(f"stalled task {key.task}: {action}: {reason}")
+        self.log_event(
+            {
+                "t": round(time.time(), 3),
+                "kind": "stalled",
+                "task": key.task,
+                "turns": turns,
+                "step": key.step,
+                "session": key.session,
+                "action": action,
+                "reason": reason,
+            }
+        )
 
-        Deliberately not a failure. Nothing refused this launch, so the backoff machinery
-        would keep retrying it for as long as the board stands still -- which, for a task
-        that is simply finished, is forever. This is the pacer concluding the card needs
-        a person, and BLOCKED on the board is how it says so.
-
-        Returning None puts it on `attempt`'s refusal path: no quota was spent, so the
-        tick still owes the board a turn and moves on to the next candidate.
-        """
+    def give_up(self, key, task, sessions=(), reason=None):
+        """Signal an eligible idle primary, or leave the stalled card for a person."""
         record = self.stalled[key]
         turns = record["count"]
+        if reason is None and self.config.stall_action == "signal":
+            session = next((s for s in sessions if s["id"] == key.session), {})
+            if not session.get("is_primary"):
+                reason = "stalled session is not primary"
+            elif session.get("state") != "WAITING_FOR_INPUT":
+                reason = "primary session is not waiting for input"
+            else:
+                try:
+                    step = next(
+                        (
+                            s
+                            for s in client.steps_of(task.get("workflow_id", ""))
+                            if s["id"] == key.step
+                        ),
+                        {},
+                    )
+                except Exception as error:
+                    reason = f"cannot read signal requirement: {error}"
+                else:
+                    if not step.get("auto_advance_requires_signal"):
+                        reason = "step does not require a signal"
+            if reason is None:
+                summary = (
+                    f"kandev-pacer: {turns} turns left the worktree untouched, "
+                    "advancing on the agent's behalf"
+                )
+                action = "signalled"
+                try:
+                    client.ws_step_complete(key.task, key.session, summary)
+                except client.RequestOutcomeUnknown as error:
+                    action, summary = "signal_uncertain", str(error)
+                except Exception as error:
+                    reason = f"signal rejected: {error}"
+                if reason is None:
+                    self.pending_signals[key] = (
+                        time.time() + self.config.launch_latency,
+                        turns,
+                    )
+                    record["count"] = 0
+                    self.stall_event(key, turns, action, summary)
+                    return None
+        reason = reason or f"{turns} consecutive turns left the workspace untouched"
         if not record["flagged"]:
-            record["flagged"] = self.flag_blocked(
-                task, f"{turns} consecutive turns left the workspace untouched"
-            )
-        log.warning(f"giving up on {label(task)!r}: {turns} turns changed nothing -- "
-                    "flagged for a person, and left alone until the card moves")
-        self.log_event({
-            "t": round(time.time(), 3), "kind": "stalled", "task": task["id"],
-            "turns": turns, "step": key.step, "session": key.session,
-        })
+            record["flagged"] = self.flag_blocked(task, reason)
+        self.stall_event(
+            key, turns, "blocked" if record["flagged"] else "block_failed", reason
+        )
         return None
+
+    def check_signals(self, now):
+        """Observe movement before retrying work, even when the quota gate is closed."""
+        for key, (deadline, turns) in list(self.pending_signals.items()):
+            try:
+                task = client.task_of(key.task)
+                sessions = client.sessions_of(key.task) if task else []
+            except Exception as error:
+                self.stall_event(key, turns, "signal_check_failed", str(error))
+                continue
+            if task is None or task.get("workflow_step_id", "") != key.step:
+                self.stall_event(
+                    key,
+                    turns,
+                    "advanced" if task else "signal_cancelled",
+                    "task moved" if task else "task disappeared",
+                )
+            elif action_key(task, sessions) != key:
+                self.stall_event(
+                    key, turns, "signal_cancelled", "launch session changed"
+                )
+            elif now < deadline:
+                continue
+            else:
+                self.stalled[key] = {
+                    "fingerprint": None,
+                    "count": turns,
+                    "flagged": False,
+                }
+                self.give_up(
+                    key, task, reason="signal did not move the step before the deadline"
+                )
+                del self.pending_signals[key]
+                continue
+            del self.pending_signals[key]
+            self.stalled.pop(key, None)
 
     def note_uncertain(self, key, task, reason):
         """Reserve the slot when kandev may have acted but its answer never arrived.

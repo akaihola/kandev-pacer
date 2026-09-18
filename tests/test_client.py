@@ -226,3 +226,19 @@ def test_post_webhook_returns_an_http_error_status_and_raises_on_no_answer(monke
     monkeypatch.setattr(client.urllib.request, "urlopen", down)
     with pytest.raises(client.WriteFailed, match="POST http://kandev/hook"):
         client.post_webhook("http://kandev/hook", "s3cret", {})
+
+
+def test_step_complete_sends_required_payload(board):
+    client.ws_step_complete("t", "primary", "Finished without a signal")
+    assert board.ws_log == [
+        (
+            "mcp.step_complete",
+            {
+                "task_id": "t",
+                "session_id": "primary",
+                "summary": "Finished without a signal",
+            },
+        )
+    ]
+    with pytest.raises(RuntimeError, match="summary are required"):
+        client.ws_step_complete("t", "primary", "")

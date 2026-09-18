@@ -15,14 +15,11 @@ It asserts *shape* -- which endpoints answer, in what envelope, carrying which k
 and never the contents of anyone's board, so it passes against any instance with at
 least one workflow. Rows that need a task or a session skip themselves on an empty one.
 
-Nothing here starts a turn or spends quota. The REST calls are reads; the provider call
-is the same read the gate already makes every five minutes; and of the four WebSocket
-actions the pacer sends, only the two that cannot act are sent -- `message.queue.get`,
-which is a read, and `task.state` with a payload kandev rejects before touching the
-task. `session.launch` and `message.queue.drain` are deliberately never sent, which
-leaves their names the one part of the contract this module cannot check. The one HTTP
-write, make-paced's step update, is probed against a step id that does not exist, so
-kandev refuses it before it can change anything.
+Nothing here starts a turn or spends quota. REST and provider calls are reads.
+WebSocket probes use message.queue.get or payloads missing required fields, including
+mcp.step_complete without task_id, session_id or summary. They cannot advance a card.
+session.launch and message.queue.drain are never sent. The step update probe uses a
+nonexistent step id so kandev refuses it before changing anything.
 
 Keys come in two tiers, because Go's `omitempty` decides which is which. A field
 declared without it is in every response, so its absence is a contract break and is
@@ -465,10 +462,12 @@ def test_unknown_action_is_distinguishable(live):
 @pytest.mark.parametrize(
     "action, payload",
     [
-        # Both are refused on their payload before the handler touches anything:
-        # queue.get wants a session_id, task.state wants an id and a state.
+        # These are refused on their payload before the handler touches anything:
+        # queue.get needs session identity; task.state needs an id and state.
+        # step_complete needs task_id, session_id and a nonempty summary.
         ("message.queue.get", {}),
         ("task.state", {}),
+        ("mcp.step_complete", {}),
     ],
 )
 def test_action_is_still_recognized(live, action, payload):
