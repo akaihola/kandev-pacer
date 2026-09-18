@@ -76,6 +76,11 @@ Rules for TASKS.md usage are at the bottom of the file.
 
 ## In progress
 
+- [*] In `kandev-learn` session observation files, use the name of each step
+  mentioned instead of the step ID, both in the `Steps` section table column 2,
+  and in column 3 of the `Step signal summaries and blockers` table. Add an
+  appendix mapping step names to step IDs.
+
 - [*] Launch only the primary session. `pick_intent` in `selection.py` takes the newest
   session, which on a task with `survey-*` child sessions is a read-only subagent: in the
   48 h to 2026-09-06 21 of 60 launches went to such sessions and four cards were flagged
