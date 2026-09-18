@@ -6,13 +6,6 @@ Rules for TASKS.md usage are at the bottom of the file.
 
 ## Ordered backlog
 
-- [*] Order launchable tasks by prompt-cache deadline while the gate is open (rule 1 of
-  `docs/cache-aware-pacing.md`): the task whose session's last turn ended longest ago
-  but is still inside its provider's cache TTL goes first. No knob. Keep pull order and
-  drag order as the tie-break so `--dump-order` still explains the queue. Worth less
-  since the 2026-09-11 subscription upgrade — a gate that stays open makes fewer
-  cache-killing waits — but the rule has no knob and no failure mode.
-
 - [*] Gate on the weekly windows and make the 5-hour rule soft. When the Claude gate
   paused, the 5-hour window bound it six times more often than the 7-day one, while the
   general weekly window ended two of the last five weeks at about half. Add
@@ -40,6 +33,13 @@ Rules for TASKS.md usage are at the bottom of the file.
 
 
 ## Scheduled
+
+- [*] Order launchable tasks by prompt-cache deadline while the gate is open (rule 1 of
+  `docs/cache-aware-pacing.md`): the task whose session's last turn ended longest ago
+  but is still inside its provider's cache TTL goes first. No knob. Keep pull order and
+  drag order as the tie-break so `--dump-order` still explains the queue. Worth less
+  since the 2026-09-11 subscription upgrade — a gate that stays open makes fewer
+  cache-killing waits — but the rule has no knob and no failure mode.
 
 - [*] Change the default `PACER_INTERVAL` from `120` to `30` and update the README
   example; `agent@gogo` already runs 30 through nix. Rotate `pacer.jsonl` weekly with a
