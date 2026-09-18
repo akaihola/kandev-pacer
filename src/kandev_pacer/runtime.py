@@ -15,6 +15,7 @@ import json
 import logging
 import time
 from dataclasses import dataclass, field
+from datetime import datetime
 from pathlib import Path
 from typing import NamedTuple
 
@@ -525,6 +526,7 @@ class Pacer:
         single-class path with no filter, exactly as before providers went plural.
         """
         ordered = ordered_tasks(snapshot.tasks, snapshot.sidebar, self.board.step_ranks)
+        cache_deadlines = self.cache_deadlines(snapshot)
         if allowed is None:
             return select_action(
                 ordered,
@@ -532,6 +534,7 @@ class Pacer:
                 queued,
                 self.board,
                 self.skip_keys(snapshot.now),
+                cache_deadlines=cache_deadlines,
             )
         return select_action(
             ordered,
@@ -544,7 +547,33 @@ class Pacer:
                 snapshot.task_providers.get(task["id"]),
                 snapshot.task_scopes.get(task["id"], ()),
             ),
+            cache_deadlines=cache_deadlines,
         )
+
+    def cache_deadlines(self, snapshot):
+        """Warm prompt-cache deadlines, keyed by task; cold tasks stay in queue order."""
+        deadlines = {}
+        for task in snapshot.tasks:
+            provider_name = snapshot.task_providers.get(task["id"])
+            ttl = provider.prompt_cache_ttl(provider_name)
+            if ttl is None:
+                continue
+            sessions = snapshot.sessions.get(task["id"], [])
+            session = max(sessions, key=lambda item: item.get("started_at", ""),
+                          default=None)
+            turns = [turn for turn in (session or {}).get(
+                "turns", (session or {}).get("task_session_turns", [])
+            ) if turn.get("completed_at")]
+            if turns:
+                ended = max(turn["completed_at"] for turn in turns)
+                try:
+                    deadlines[task["id"]] = datetime.fromisoformat(
+                        ended.replace("Z", "+00:00")
+                    ).timestamp() + ttl
+                except (TypeError, ValueError):
+                    continue
+        return {task_id: deadline for task_id, deadline in deadlines.items()
+                if deadline > snapshot.now}
 
     # --- 3. act ---
 
@@ -1116,7 +1145,7 @@ def dump_order(pacer):
         )
     else:
         description = "board pull order (no sidebar view sorts by hand)"
-    print(f"order: {description}")
+    print(f"order: {description}; warm prompt-cache deadlines lead launch ties")
     print(f"scope: {[board.name_of(workflow) for workflow in board.scope]}")
 
     tasks = client.paced_tasks(board.scope)

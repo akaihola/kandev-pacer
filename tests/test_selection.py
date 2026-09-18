@@ -318,6 +318,30 @@ def test_select_action_uses_board_pull_order():
     assert select_action([at_rv], {"rv1": [_sess("s", "WAITING_FOR_INPUT")]},
                          {}, BOARD, set()) is None
 
+def test_select_action_orders_warm_launches_by_cache_deadline():
+    old = {"id": "old", "workflow_step_id": "ip", "created_at": "1"}
+    new = {"id": "new", "workflow_step_id": "ip", "created_at": "2"}
+    sessions = {"old": [], "new": []}
+    chosen = select_action([new, old], sessions, {}, BOARD, set(),
+                           cache_deadlines={"old": 20, "new": 30})
+    assert chosen.task["id"] == "old"
+
+def test_select_action_keeps_cold_and_expired_launches_in_queue_order():
+    old = {"id": "old", "workflow_step_id": "ip", "created_at": "1"}
+    new = {"id": "new", "workflow_step_id": "ip", "created_at": "2"}
+    chosen = select_action([new, old], {"old": [], "new": []}, {}, BOARD, set(),
+                           cache_deadlines={"old": 20})
+    assert chosen.task["id"] == "old"
+    assert select_action([new, old], {"old": [], "new": []}, {}, BOARD, set(),
+                         cache_deadlines={}) .task["id"] == "new"
+
+def test_select_action_cache_deadline_tie_keeps_pull_order():
+    old = {"id": "old", "workflow_step_id": "ip", "created_at": "1"}
+    new = {"id": "new", "workflow_step_id": "ip", "created_at": "2"}
+    chosen = select_action([new, old], {"old": [], "new": []}, {}, BOARD, set(),
+                           cache_deadlines={"old": 20, "new": 20})
+    assert chosen.task["id"] == "new"
+
 def test_pick_intent():
     assert pick_intent([]) == ("start", None)
     assert pick_intent([_sess("a", "WAITING_FOR_INPUT", "1"),

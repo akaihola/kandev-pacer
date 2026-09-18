@@ -127,7 +127,8 @@ class Candidate(NamedTuple):
 
 
 def select_action(
-    ordered, task_sessions, queued, board, skip, allowed=None, provider_of=None
+    ordered, task_sessions, queued, board, skip, allowed=None, provider_of=None,
+    cache_deadlines=None,
 ):
     """The one turn to spend now, or None.
 
@@ -151,11 +152,17 @@ def select_action(
         session = drain_session(task, task_sessions.get(task["id"], []), queued, skip)
         if session is not None and eligible(task, session):
             return Candidate("drain", task, session["id"])
-    for task in ordered:
-        if is_launchable(
-            task, task_sessions.get(task["id"], []), board, skip
-        ) and eligible(task, None):
-            return Candidate("launch", task)
+    launchable = [
+        task for task in ordered
+        if is_launchable(task, task_sessions.get(task["id"], []), board, skip)
+        and eligible(task, None)
+    ]
+    if cache_deadlines:
+        warm = [task for task in launchable if cache_deadlines.get(task["id"]) is not None]
+        cold = [task for task in launchable if cache_deadlines.get(task["id"]) is None]
+        launchable = sorted(warm, key=lambda task: cache_deadlines[task["id"]]) + cold
+    if launchable:
+        return Candidate("launch", launchable[0])
     return None
 
 

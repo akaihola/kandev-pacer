@@ -234,11 +234,11 @@ tick, which [`concurrency-sizing.md`] already wanted for other reasons.
 
 ### What the pacer would need
 
-- `quota.cache_deadline(session_turns, ttl)` — pure, from `task_session_turns`, which the
-  pacer already reads through `client.sessions_of`;
+- `provider.prompt_cache_ttl(provider)` supplies the documented provider TTL, and the
+  launch selector applies the resulting deadline to the newest session's completed turns;
 - `Settings.cache_margin` (`PACER_CACHE_MARGIN`, seconds, default `0`);
-- in `selection.select_action`, the deadline as the leading sort key for launchable tasks
-  whose deadline is still ahead — `task_order_key` already composes keys;
+- in `selection.select_action`, the deadline leads only among launchable tasks whose deadline
+  is still ahead; the original ordered list remains the stable tie-break;
 - in `Pacer.run_provider`, before `next_action`, the early-release check against
   `Verdict.resumes_at`, and a `cache_release` reason on the tick record;
 - prefix size `P` for the margin derivation is a constant (the fitted 165 k), not a live
