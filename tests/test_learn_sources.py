@@ -24,7 +24,7 @@ def test_tool_formats(agent):
 def test_message_text_extracts_prompt_and_response():
     assert sources.message_text(
         "claude",
-        {"message": {"role": "user", "content": [{"type": "text", "text": "start"}]}},
+        {"type": "user", "message": {"content": [{"type": "text", "text": "start"}]}},
     ) == ("user", "start")
     assert sources.message_text(
         "codex",

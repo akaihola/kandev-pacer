@@ -109,7 +109,7 @@ def message_text(agent, entry):
             )
         return None, ""
     message = entry.get("message", {})
-    role = message.get("role")
+    role = message.get("role") or entry.get("type")
     parts = []
     for block in message.get("content", []) if isinstance(message, dict) else []:
         if isinstance(block, str):
@@ -587,7 +587,11 @@ def collect_transcripts(home, session, timeout=45):
                         )
                     role, text = message_text(agent, e)
                     if text:
-                        result.setdefault("messages", []).append((role, text))
+                        messages = result.setdefault("messages", [])
+                        if messages and messages[-1][0] == role:
+                            messages[-1] = (role, messages[-1][1] + text)
+                        else:
+                            messages.append((role, text))
                 if file and agent in ("claude", "codex"):
                     requests = (
                         cache_waste.claude_requests(file)
