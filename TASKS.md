@@ -95,9 +95,9 @@ Rules for TASKS.md usage are at the bottom of the file.
 
 - [6] After the 0.94-dev upgrade, I'm getting failed queue statuses.
 
-- [*] After the 0.94-dev upgrade, I am getting `Queue failed: task_id, session_id, and session_incarnation_id are required` when I try to use the `Queue` button from the userscript in task ff3350a2-60a3-48b1-9631-796e46e23e28. Investigate and fix.
-
 ## In progress
+
+- [*] After the 0.94-dev upgrade, I am getting `Queue failed: task_id, session_id, and session_incarnation_id are required` when I try to use the `Queue` button from the userscript in task ff3350a2-60a3-48b1-9631-796e46e23e28. Investigate and fix.
 
 ## Completed
 
