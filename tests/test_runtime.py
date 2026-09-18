@@ -1360,3 +1360,17 @@ def test_signal_uses_current_step_requirement(pacer, board, signal_stall):
     assert actions(board) == ["task.state"]
     stalled = [e for e in events if e["kind"] == "stalled"]
     assert stalled[-1]["reason"] == "step does not require a signal"
+
+
+@pytest.mark.parametrize("state", ["STARTING", "RUNNING"])
+def test_pending_signal_cannot_block_a_resumed_primary(
+    pacer, board, signal_stall, state
+):
+    key, events = signal_stall
+    pacer.tick()
+    deadline, _ = pacer.pending_signals[key]
+    board.sessions["t"][0]["state"] = state
+    pacer.check_signals(deadline)
+    assert not pacer.pending_signals and key not in pacer.stalled
+    assert actions(board) == ["mcp.step_complete"]
+    assert events[-1]["action"] == "signal_cancelled"

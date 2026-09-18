@@ -1165,6 +1165,11 @@ class Pacer:
                 self.stall_event(
                     key, turns, "signal_cancelled", "launch session changed"
                 )
+            elif any(
+                s["id"] == key.session and s.get("state") in RUNNING_STATES
+                for s in sessions
+            ):
+                self.stall_event(key, turns, "signal_cancelled", "primary resumed work")
             elif now < deadline:
                 continue
             else:
