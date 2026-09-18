@@ -218,9 +218,13 @@ def load_settings(config_path=None, overrides: dict[str, Any] | None = None):
                 for name, value in tomllib.load(file).get("kandev-pacer", {}).items()
                 if name in Settings.model_fields
             })
-    values.update({key: value for key, value in os.environ.items() if key in CONFIG_FIELDS})
-    values.update(overrides or {})
-    secrets_path = values.get("PACER_SECRETS_FILE", "")
+    environment = {key: value for key, value in os.environ.items() if key in CONFIG_FIELDS}
+    command_line = overrides or {}
+    secrets_path = command_line.get(
+        "PACER_SECRETS_FILE",
+        environment.get("PACER_SECRETS_FILE", values.get("PACER_SECRETS_FILE", "")),
+    )
+    secret_values = {}
     if secrets_path:
         secret_file = Path(secrets_path)
         if secret_file.stat().st_mode & 0o077:
@@ -235,8 +239,10 @@ def load_settings(config_path=None, overrides: dict[str, Any] | None = None):
                     raise ValueError(f"invalid secrets file line {line_number}")
                 if key not in CONFIG_FIELDS:
                     continue
-                values[key] = value
-    values.update({key: value for key, value in os.environ.items() if key in CONFIG_FIELDS})
+                secret_values[key] = value
+    values.update(secret_values)
+    values.update(environment)
+    values.update(command_line)
     return Settings(**values)  # ty: ignore[invalid-argument-type]
 
 

@@ -27,6 +27,15 @@ def test_secrets_file_is_filtered_and_environment_wins(monkeypatch, tmp_path):
     assert not hasattr(settings, "NOT_CONFIG")
 
 
+def test_command_line_overrides_secrets_file(tmp_path):
+    path = secret_file(tmp_path, "PACER_INTERVAL=7\n")
+    settings = load_settings(
+        tmp_path / "missing.toml",
+        {"PACER_SECRETS_FILE": str(path), "PACER_INTERVAL": 11},
+    )
+    assert settings.interval == 11
+
+
 def test_secrets_file_rejects_insecure_permissions(tmp_path):
     path = secret_file(tmp_path, "PACER_INTERVAL=7\n", 0o640)
     with pytest.raises(ValueError, match="group- or world-readable"):
