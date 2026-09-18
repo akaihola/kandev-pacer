@@ -44,9 +44,10 @@ def step(id, name, otc=None, oe=None, ots=None, start=False, stage="custom",
             "prompt": prompt, "auto_advance_requires_signal": signal}
 
 
-def sess(id, state, started="1"):
+def sess(id, state, started="1", incarnation=None):
     # `started_at` is the real field name in GET /tasks/:id/sessions -- there is no `created_at`.
-    return {"id": id, "state": state, "started_at": started}
+    return {"id": id, "state": state, "started_at": started,
+            "session_incarnation_id": incarnation or f"inc-{id}"}
 
 
 def task(id, step="ip", pos=0, prio="medium", created="2026-01-01T00:00:00Z", parent=None):
@@ -259,6 +260,9 @@ class FakeBoard:
             return frames + [_frame(rid, "error", action, {"message": reason})]
 
         if action == "message.queue.get":
+            if not all(payload.get(key) for key in
+                       ("task_id", "session_id", "session_incarnation_id")):
+                return fail("task_id, session_id, and session_incarnation_id are required")
             if session_id == "sBoom":
                 return fail("boom")
             count = 1 if session_id == "sStale" else self.queues.get(session_id, 0)

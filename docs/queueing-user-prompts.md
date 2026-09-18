@@ -21,7 +21,7 @@ are declared in `apps/backend/pkg/websocket/actions.go:114`:
 | Action | Effect |
 |---|---|
 | `message.queue.add` | Park one entry. `{session_id, task_id, content, model?, plan_mode?, attachments?}` → the created entry incl. its `id`. |
-| `message.queue.get` | `{session_id}` → `{entries, count, max}`. |
+| `message.queue.get` | `{task_id, session_id, session_incarnation_id}` → `{entries, count, max}`. |
 | `message.queue.update` | Edit a parked entry's content/attachments. |
 | `message.queue.remove` | Delete one entry by `entry_id`. |
 | `message.queue.cancel` | Clear the whole queue for a session. |

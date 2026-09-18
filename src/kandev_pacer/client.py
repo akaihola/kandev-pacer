@@ -265,7 +265,11 @@ def ws_drain(session_id):
     return ws_request("message.queue.drain", {"session_id": session_id})
 
 
-def ws_queue_count(session_id):
+def ws_queue_count(task_id, session_id, session_incarnation_id):
     """How many prompts are parked on this session's queue."""
-    return int((ws_request("message.queue.get", {"session_id": session_id})
+    return int((ws_request("message.queue.get", {
+        "task_id": task_id,
+        "session_id": session_id,
+        "session_incarnation_id": session_incarnation_id,
+    })
                 or {}).get("count") or 0)
