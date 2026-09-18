@@ -116,8 +116,19 @@ def test_log_rotation_caps_size_and_backups(tmp_path, monkeypatch):
     for number in range(6):
         logger.log_event({"kind": "tick", "number": number})
     backups = list(tmp_path.glob("pacer.jsonl.*"))
-    assert len(backups) <= 4
+    assert 0 < len(backups) <= 4
     assert path.stat().st_size < 100
+
+
+def test_log_rotation_is_weekly(tmp_path, monkeypatch):
+    path = tmp_path / "pacer.jsonl"
+    logger = Pacer(Board.scan([]))
+    monkeypatch.setattr(settings, "log_path", str(path))
+    logger.log_event({"kind": "before"})
+    assert logger._log_handler is not None
+    logger._log_handler.rolloverAt = 0
+    logger.log_event({"kind": "after"})
+    assert len(list(tmp_path.glob("pacer.jsonl.*"))) == 1
 
 
 # --- a failure that repeats every tick ---

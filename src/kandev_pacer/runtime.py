@@ -237,6 +237,8 @@ class Pacer:
         # whether this tick's quota reading may come from cache; see usage().
         self.resumes_at: float | None = None
         self._log_failed = False
+        self._log_handler = None
+        self._log_handler_path = None
         self._tick_error = (
             None  # the failure being repeated, or None if the last tick worked
         )
@@ -264,10 +266,19 @@ class Pacer:
         try:
             path = Path(self.config.log_path)
             path.parent.mkdir(parents=True, exist_ok=True)
-            handler = PacerLogHandler(path, when="D", interval=7, backupCount=4, encoding="utf-8")
-            handler.setFormatter(logging.Formatter("%(message)s"))
-            handler.emit(logging.makeLogRecord({"msg": json.dumps(record, separators=(",", ":"))}))
-            handler.close()
+            if self._log_handler_path != path:
+                if self._log_handler:
+                    self._log_handler.close()
+                self._log_handler = PacerLogHandler(
+                    path, when="D", interval=7, backupCount=4, encoding="utf-8"
+                )
+                self._log_handler.setFormatter(logging.Formatter("%(message)s"))
+                self._log_handler_path = path
+            handler = self._log_handler
+            assert handler is not None
+            handler.emit(
+                logging.makeLogRecord({"msg": json.dumps(record, separators=(",", ":"))})
+            )
         except OSError as error:
             if not self._log_failed:
                 log.warning(f"log: {error} (continuing unlogged)")
