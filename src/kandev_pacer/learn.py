@@ -507,6 +507,7 @@ def render_record(record):
     sections = [
         "---\n" + json.dumps(record, ensure_ascii=False, indent=2) + "\n---\n",
         "# Session observations",
+        f"Observation file ID: `{record['task']}` (task ID).",
         dedent("""\
         Durations are seconds. Output sizes are UTF-8 bytes. Costs are recorded USD.
         Token categories retain source semantics; reasoning can be included in output.

@@ -17,6 +17,8 @@ The filename uses the archive timestamp to milliseconds in UTC, without a timezo
 with punctuation made filename-safe, followed by the task ID. Existing files,
 including partial records, are never replaced. Observation timestamps use the same
 format. Durations use milliseconds and costs use USD to 1/1000 dollar.
+Each record repeats the filename's final UUID near the top as `Observation file ID`
+and labels it as the archived task ID; this is the same value as frontmatter `task`.
 Frontmatter is JSON, a YAML 1.2 subset, and includes numeric sources and coverage.
 The digest reads that frontmatter and prints a single table with totals.
 

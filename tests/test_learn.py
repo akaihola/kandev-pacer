@@ -325,7 +325,7 @@ def test_digest_aggregates_with_coverage(tmp_path, capsys):
     assert "| task | 2026" not in capsys.readouterr().out
 
 
-def test_render_record_scopes_session_ids_to_session_sections():
+def test_render_record_scopes_session_ids_to_session_sections(tmp_path):
     session = {
         "id": "session-1",
         "notes": [],
@@ -337,6 +337,8 @@ def test_render_record_scopes_session_ids_to_session_sections():
         "blockers": {},
     }
     record = {
+        "task": "task-uuid",
+        "archived_at": "2026-09-01",
         "sessions": [session, {**session, "id": "session-2"}],
         "diffs": [],
         "notes": [],
@@ -344,6 +346,10 @@ def test_render_record_scopes_session_ids_to_session_sections():
 
     output = learn.render_record(record)
 
+    assert learn.record_path(tmp_path, record["task"], record["archived_at"]).name.endswith(
+        " task-uuid.md"
+    )
+    assert "Observation file ID: `task-uuid` (task ID)." in output
     assert output.count("## Session session-") == 2
     assert "| session |" not in output
     assert "| session-1 |" not in output
