@@ -50,6 +50,12 @@ class Settings(BaseSettings):
     # launches it (fail-closed, so an upgrade does not quietly start spending metered money);
     # opt into that when metered spend must stay off unless asked for.
     apikey_policy: str = Field("cap", alias="PACER_APIKEY_POLICY")
+    quota_source: str = Field("direct", alias="PACER_QUOTA_SOURCE")
+    pebble_snapshot: str = Field(
+        str(Path.home() / ".local" / "state" / "pebble-quota" / "latest.json"),
+        alias="PACER_PEBBLE_SNAPSHOT",
+    )
+    pebble_max_age: float = Field(900, alias="PACER_PEBBLE_MAX_AGE", ge=0)
 
     # How many turns may be in flight at once, per provider. `concurrency_total` caps the sum
     # across providers -- the machine running the worktrees is the one genuinely shared thing.
@@ -187,6 +193,13 @@ class Settings(BaseSettings):
             raise ValueError(
                 f"PACER_APIKEY_POLICY must be one of {sorted(APIKEY_POLICIES)}, not {value!r}"
             )
+        return value
+
+    @field_validator("quota_source", mode="after")
+    @classmethod
+    def _known_quota_source(cls, value):
+        if value not in {"direct", "pebble"}:
+            raise ValueError("PACER_QUOTA_SOURCE must be 'direct' or 'pebble'")
         return value
 
     @model_validator(mode="after")

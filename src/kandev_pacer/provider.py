@@ -223,6 +223,39 @@ def fetch(now, path=None):
     return usage_envelope(payload, now, oauth.get("subscriptionType") or "")
 
 
+def pebble_fetch(now, path=None):
+    path = Path(path or settings.pebble_snapshot)
+    try:
+        snapshot = json.loads(path.read_text())
+        collected = datetime.fromisoformat(snapshot["collected_at"].replace("Z", "+00:00"))
+        if now - collected.timestamp() > settings.pebble_max_age:
+            raise ValueError("snapshot is stale")
+        services = snapshot["services"]
+        agents = []
+        for service, provider_name, agent_id in (
+            ("claude", PROVIDER, "claude-acp"),
+            ("codex", CODEX_PROVIDER, "codex-acp"),
+        ):
+            windows = [
+                {
+                    "label": label,
+                    "utilization_pct": window["used_fraction"] * 100,
+                    "reset_at": window["resets_at"],
+                    "duration_s": window["duration_seconds"],
+                }
+                for label, window in (services.get(service) or {}).get("windows", {}).items()
+            ]
+            if windows:
+                agents.append({"agent_id": agent_id, "usage": {
+                    "provider": provider_name, "plan": "", "windows": windows
+                }})
+        return {"agents": agents}
+    except QuotaUnavailable:
+        raise
+    except Exception as error:
+        raise QuotaUnavailable(f"cannot read pebble snapshot {path}: {error}") from error
+
+
 # --- the second source: Codex, read from ChatGPT directly ---
 #
 # Same read-only rule as the Claude credential, for the same reason: Codex CLI owns and
@@ -441,6 +474,8 @@ SOURCE_PROVIDERS = {"anthropic", CODEX_PROVIDER, "codex"}
 
 def _read_source(name, fresh, now):
     """One provider's usage envelope, from its source. Raises QuotaUnavailable like the sources."""
+    if settings.quota_source == "pebble":
+        return pebble_fetch(now)
     if name == "anthropic":
         return usage(fresh=fresh, now=now)
     if name in (CODEX_PROVIDER, "codex"):
