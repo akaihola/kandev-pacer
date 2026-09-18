@@ -270,7 +270,7 @@ async function buildPayload(editor) {
 // The queue lives behind the WebSocket API only (no /api/v1 route). One
 // connection per click keeps this stateless — the page's own socket is
 // deliberately not reused.
-function queueMessage(sessionId, taskId, payload) {
+function queueMessage(taskId, sessionId, sessionIncarnationId, payload) {
   return new Promise((resolve, reject) => {
     const ws = new WebSocket(`${location.origin.replace("http", "ws")}/ws`);
     ws.onerror = () => reject(new Error("websocket failed"));
@@ -280,7 +280,12 @@ function queueMessage(sessionId, taskId, payload) {
           id: "us-queue",
           type: "request",
           action: "message.queue.add",
-          payload: { session_id: sessionId, task_id: taskId, ...payload },
+          payload: {
+            task_id: taskId,
+            session_id: sessionId,
+            session_incarnation_id: sessionIncarnationId,
+            ...payload,
+          },
         }),
       );
     ws.onmessage = (e) => {
@@ -292,12 +297,21 @@ function queueMessage(sessionId, taskId, payload) {
   });
 }
 
-// The selected session is not in the URL; the task payload names it. This is the
-// same default the page itself hydrates with (task.primary_session_id).
-async function primarySessionId(taskId) {
-  const res = await fetch(`/api/v1/tasks/${taskId}`);
-  const body = await res.json();
-  return (body.task ?? body).primary_session_id;
+// The queue API now validates all three identities. Read the current session
+// incarnation instead of relying on the task's cached primary_session_id.
+async function queueTarget(taskId) {
+  const [taskRes, sessionsRes] = await Promise.all([
+    fetch(`/api/v1/tasks/${taskId}`),
+    fetch(`/api/v1/tasks/${taskId}/sessions`),
+  ]);
+  const task = await taskRes.json();
+  const sessions = (await sessionsRes.json()).sessions ?? [];
+  const primaryId = (task.task ?? task).primary_session_id;
+  const session = sessions.find((candidate) => candidate.is_primary) ??
+    sessions.find((candidate) => candidate.id === primaryId) ?? sessions[0];
+  if (!session?.id || !session.session_incarnation_id)
+    throw new Error("task session identity is unavailable");
+  return { sessionId: session.id, sessionIncarnationId: session.session_incarnation_id };
 }
 
 function taskIdFromUrl() {
@@ -313,7 +327,8 @@ async function onQueue(button) {
   try {
     const payload = await buildPayload(editor);
     if (!payload) return;
-    await queueMessage(await primarySessionId(taskId), taskId, payload);
+    const target = await queueTarget(taskId);
+    await queueMessage(taskId, target.sessionId, target.sessionIncarnationId, payload);
     editor.focus();
     document.execCommand("selectAll");
     document.execCommand("delete");

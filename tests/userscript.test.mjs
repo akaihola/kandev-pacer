@@ -167,6 +167,36 @@ test("plain text needs no document and no fetch", async () => {
   assert.deepEqual(local(await ctx.buildPayload(editor)), { content: "just words" });
 });
 
+test("queues with the current primary session incarnation", async () => {
+  const sent = [];
+  const ctx = load({
+    WebSocket: class {
+      constructor() { this.readyState = 1; queueMicrotask(() => this.onopen()); }
+      send(message) {
+        sent.push(JSON.parse(message));
+        queueMicrotask(() => this.onmessage({ data: JSON.stringify({ id: "us-queue", type: "response" }) }));
+      }
+      close() {}
+    },
+    fetch: async (url) => ({
+      json: async () => url.endsWith("/sessions")
+        ? { sessions: [{ id: "stale", session_incarnation_id: "old", is_primary: false }, { id: "current", session_incarnation_id: "inc-7", is_primary: true }] }
+        : { task: { id: "task-7", primary_session_id: "stale" } },
+    }),
+  });
+  assert.deepEqual(local(await ctx.queueTarget("task-7")), {
+    sessionId: "current",
+    sessionIncarnationId: "inc-7",
+  });
+  await ctx.queueMessage("task-7", "current", "inc-7", { content: "queued" });
+  assert.deepEqual(local(sent[0].payload), {
+    task_id: "task-7",
+    session_id: "current",
+    session_incarnation_id: "inc-7",
+    content: "queued",
+  });
+});
+
 test("valid entity references ride along; duplicates and malformed ones dropped", async () => {
   const ctx = load();
   const ref = {
