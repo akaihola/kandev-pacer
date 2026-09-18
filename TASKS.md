@@ -11,14 +11,6 @@ Rules for TASKS.md usage are at the bottom of the file.
 
 ## In progress
 
-- [3] Advance a finished-but-unsignalled task instead of flagging it BLOCKED. The stall
-  detector gives up after `PACER_STALL_AFTER` launches that left the worktree untouched,
-  which is right for a wedged card and wrong for a primary session that finished its work
-  and never called `step_complete_kandev`. Add `PACER_STALL_ACTION` (`block`, the default,
-  or `signal`), and on `signal` send kandev's `mcp.step_complete` on the agent's behalf
-  when the stalled session is the task's primary session, is waiting for input, and its
-  step requires the signal. Falls back to `block` when the step does not move.
-
 - [*] Fall back to another agent profile when a provider's gate has been closed for
   longer than `PACER_FALLBACK_AFTER` (seconds, default `0` = off). Map with
   `PACER_FALLBACK_PROFILES`, e.g. `"Luna low=Sonnet low"`, resolved by name through
@@ -94,6 +86,14 @@ Rules for TASKS.md usage are at the bottom of the file.
 - [6] After the 0.94-dev upgrade, I'm getting failed queue statuses.
 
 ## Completed
+
+- [3] Advance a finished-but-unsignalled task instead of flagging it BLOCKED. The stall
+  detector gives up after `PACER_STALL_AFTER` launches that left the worktree untouched,
+  which is right for a wedged card and wrong for a primary session that finished its work
+  and never called `step_complete_kandev`. Add `PACER_STALL_ACTION` (`block`, the default,
+  or `signal`), and on `signal` send kandev's `mcp.step_complete` on the agent's behalf
+  when the stalled session is the task's primary session, is waiting for input, and its
+  step requires the signal. Falls back to `block` when the step does not move.
 
 - [*] Waive the heartbeat cooldown once a task has been launched since the last
   attempt, so a full backlog does not leave the board dry for half of every cycle.
