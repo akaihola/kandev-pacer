@@ -6,14 +6,6 @@ Rules for TASKS.md usage are at the bottom of the file.
 
 ## Ordered backlog
 
-- [3] Advance a finished-but-unsignalled task instead of flagging it BLOCKED. The stall
-  detector gives up after `PACER_STALL_AFTER` launches that left the worktree untouched,
-  which is right for a wedged card and wrong for a primary session that finished its work
-  and never called `step_complete_kandev`. Add `PACER_STALL_ACTION` (`block`, the default,
-  or `signal`), and on `signal` send kandev's `mcp.step_complete` on the agent's behalf
-  when the stalled session is the task's primary session, is waiting for input, and its
-  step requires the signal. Falls back to `block` when the step does not move.
-
 - [*] Change the default `PACER_INTERVAL` from `120` to `30` and update the README
   example; `agent@gogo` already runs 30 through nix. Rotate `pacer.jsonl` weekly with a
   `RotatingFileHandler`-style size cap of 50 MB and 4 backups; the file was 407 MB and
@@ -53,6 +45,14 @@ Rules for TASKS.md usage are at the bottom of the file.
 
 
 ## Scheduled
+
+- [3] Advance a finished-but-unsignalled task instead of flagging it BLOCKED. The stall
+  detector gives up after `PACER_STALL_AFTER` launches that left the worktree untouched,
+  which is right for a wedged card and wrong for a primary session that finished its work
+  and never called `step_complete_kandev`. Add `PACER_STALL_ACTION` (`block`, the default,
+  or `signal`), and on `signal` send kandev's `mcp.step_complete` on the agent's behalf
+  when the stalled session is the task's primary session, is waiting for input, and its
+  step requires the signal. Falls back to `block` when the step does not move.
 
 - [1] Read the quota from the pebble-quota collector as a configurable alternative
   source. The direct read of the Anthropic and Codex usage endpoints stays the default.
