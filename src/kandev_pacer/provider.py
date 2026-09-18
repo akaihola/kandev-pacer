@@ -52,6 +52,7 @@ PROVIDER = "anthropic"
 # board pacing it sets PACER_PROVIDERS=anthropic,openai.
 CODEX_USAGE_URL = "https://chatgpt.com/backend-api/codex/usage"
 CODEX_PROVIDER = "openai"
+PROMPT_CACHE_TTLS = {PROVIDER: 3600.0, CODEX_PROVIDER: 300.0}
 # The endpoint is Cloudflare-fronted and refuses a bare Python-urllib User-Agent -- and a
 # browser one -- with 403; it answers only to the Codex CLI's own agent string. So the read
 # has to present as codex_cli_rs. The version is cosmetic to the check today (any codex_cli_rs
@@ -69,6 +70,10 @@ FRESH_MAX_AGE = 15.0
 EXPIRY_SKEW = 60.0
 
 TIMEOUT = 15.0
+
+
+def prompt_cache_ttl(provider):
+    return PROMPT_CACHE_TTLS.get(provider)
 
 
 class QuotaUnavailable(RuntimeError):
