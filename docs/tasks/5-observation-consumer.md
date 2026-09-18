@@ -65,16 +65,42 @@ task implements the consumer from these decisions. Decisions, not code.
 - [What may the consumer write?](5-observation-consumer/issues/09-write-boundary.md)
   — commit to the default branch; drop exact duplicates, merge similar proposals;
   never read its own records; never create tasks from a proposal.
+- [How does the consumer know which records are already learned from?](5-observation-consumer/issues/11-consumed-ledger.md)
+  — a list file at `Kandev Session Observations/consumed.md` in the vault, one line
+  per record read or skipped, written by the consumer and read by the Heartbeat.
 
 ## Not yet specified
 
-- The consumer task's prompt: which record fields it reads, what a "problem" is, how a
-  proposal prompt is worded so Antti can act on it. Waits on the registry and ledger
-  tickets.
-- The Heartbeat prompt change in `kandev-config` that creates the consumer task, and the
-  pacer change that sorts it last. Waits on the ledger ticket.
-- Whether findings should feed back into the collector (new measurements the review
-  keeps wanting). Waits on the first real review.
+Nothing. Every decision this map set out to make is made. What is left is
+implementation, described under Handoff below.
+
+One thing to revisit after the first real run: whether findings should feed back
+into the collector, because the review keeps wanting a measurement that is not
+there. That is new work, not a gap in this map.
+
+## Handoff
+
+The way is clear. A planning task implements the consumer from the decisions above.
+It has three parts, in this order.
+
+1. **The consumer task's prompt**, which is the bulk of the work. It reads the
+   leftover records, finds problems worth Antti's attention, and writes observations
+   plus a proposed solution prompt into the right repository, following that
+   repository's `AGENTS.md`. It dedupes and merges against existing proposals, skips
+   records of its own past runs, and appends every record it handled to the list
+   file with a local vault commit. Decide the batch cap here; there are 127 records
+   waiting.
+2. **The Heartbeat change** in `~/prg/kandev-config`: create the consumer task at the
+   lowest Kandev priority when, and only when, the record folders hold something the
+   list file does not.
+3. **The pacer change** in this repository: recognise the consumer task and sort it
+   after every other launchable task of the same provider, so it spends only
+   leftover quota and shows up correctly in `--dump-order`.
+
+Depends on the five readability items for `kandev-learn` records, all currently under
+`## In progress` in `TASKS.md`. A consumer that reads the Markdown body wants step
+names and the quoted prompt and final response. It must still cope with the older
+records, which keep their original shape forever.
 
 ## Out of scope
 
