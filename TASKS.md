@@ -25,15 +25,6 @@ Rules for TASKS.md usage are at the bottom of the file.
   ChatGPT Pro, exhaustion is no longer the common case. Keep it for a provider that is
   down rather than spent.
 
-- [*] Gate on the weekly windows and make the 5-hour rule soft. When the Claude gate
-  paused, the 5-hour window bound it six times more often than the 7-day one, while the
-  general weekly window ended two of the last five weeks at about half. Add
-  `PACER_ALPHA_5H` (default `1.0`, so nothing changes until set) applied to 5-hour
-  windows only, and `PACER_INTERACTIVE_HOURS` (e.g. `08-23`, default empty) outside of
-  which the 5-hour rule is skipped and only the weekly windows and the backstop gate.
-  Deprioritized 2026-09-11: on Max 20x the weekly window is far from binding. Keep it
-  for the two knobs, which matter again if usage grows.
-
 - [*] Order launchable tasks by prompt-cache deadline while the gate is open (rule 1 of
   `docs/cache-aware-pacing.md`): the task whose session's last turn ended longest ago
   but is still inside its provider's cache TTL goes first. No knob. Keep pull order and
@@ -70,6 +61,15 @@ Rules for TASKS.md usage are at the bottom of the file.
 - [*] After the 0.94-dev upgrade, I am getting `Queue failed: task_id, session_id, and session_incarnation_id are required` when I try to use the `Queue` button from the userscript in task ff3350a2-60a3-48b1-9631-796e46e23e28. Investigate and fix.
 
 ## In progress
+
+- [*] Gate on the weekly windows and make the 5-hour rule soft. When the Claude gate
+  paused, the 5-hour window bound it six times more often than the 7-day one, while the
+  general weekly window ended two of the last five weeks at about half. Add
+  `PACER_ALPHA_5H` (default `1.0`, so nothing changes until set) applied to 5-hour
+  windows only, and `PACER_INTERACTIVE_HOURS` (e.g. `08-23`, default empty) outside of
+  which the 5-hour rule is skipped and only the weekly windows and the backstop gate.
+  Deprioritized 2026-09-11: on Max 20x the weekly window is far from binding. Keep it
+  for the two knobs, which matter again if usage grows.
 
 - [*] In `kandev-learn` session observation files, use the name of each step
   mentioned instead of the step ID, both in the `Steps` section table column 2,
