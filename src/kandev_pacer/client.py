@@ -262,6 +262,17 @@ def ws_launch(task_id, intent, session_id, workflow_step_id, agent_profile_id=No
     return ws_request("session.launch", payload, timeout=settings.refusal_window)
 
 
+def ws_step_complete(task_id, session_id, summary):
+    return ws_request(
+        "mcp.step_complete",
+        {
+            "task_id": task_id,
+            "session_id": session_id,
+            "summary": summary,
+        },
+    )
+
+
 def ws_set_state(task_id, state):
     return ws_request("task.state", {"id": task_id, "state": state})
 

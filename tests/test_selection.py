@@ -688,3 +688,37 @@ def test_a_new_session_releases_it_too():
     stalls = {KEY: {"fingerprint": TREE, "count": 9, "flagged": True}}
     same_step = [{"id": "t1", "workflow_step_id": "ip"}]
     assert prune_stalls(stalls, same_step, {"t1": [_sess("s2", "WAITING_FOR_INPUT", "2")]}) == {}
+
+
+def test_primary_controls_launch_eligibility_and_stall_identity():
+    task = _task("t", "ip")
+    primary = {**_sess("primary", "WAITING_FOR_INPUT", "1"), "is_primary": True}
+    child = _sess("child", "RUNNING", "2")
+    sessions = [primary, child]
+    board = Board.scan([({"id": "wf"}, CLEAN)])
+    key = ActionKey("t", "ip", "primary")
+    assert action_key(task, sessions) == key
+    assert is_launchable(task, sessions, board, set())
+    assert not is_launchable(task, sessions, board, {key})
+    stalls = {key: {"count": 5}}
+    assert prune_stalls(stalls, [task], {"t": sessions}) == stalls
+    assert action_key(task, sessions, "child").session == "child"
+    primary["state"], child["state"] = "RUNNING", "WAITING_FOR_INPUT"
+    assert not is_launchable(task, sessions, board, set())
+
+
+def test_child_drain_records_survive_beside_a_primary():
+    task = _task("t", "ip")
+    primary = {**_sess("primary", "WAITING_FOR_INPUT", "1"), "is_primary": True}
+    child = _sess("child", "WAITING_FOR_INPUT", "2")
+    sessions = {"t": [primary, child]}
+    key = ActionKey("t", "ip", "child")
+    booked = {key: Booking(100, uncertain=True)}
+    failures = {key: {"at": 100, "attempts": 1}}
+    assert prune_booked(booked, [task], sessions, 101, 90) == booked
+    assert prune_failures(failures, [task], sessions) == failures
+    assert prune_stalls({key: {"count": 5}}, [task], sessions) == {}
+    child["state"] = "RUNNING"
+    assert prune_booked(booked, [task], sessions, 101, 90) == {}
+    sessions["t"].remove(child)
+    assert prune_failures(failures, [task], sessions) == {}

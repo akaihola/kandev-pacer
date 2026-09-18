@@ -135,6 +135,8 @@ class FakeBoard:
     """The kandev the tests run against: tasks, sessions, message queues, actions taken."""
 
     def __init__(self):
+        self.steps = CLEAN
+        self.signal_target = None
         self.tasks = []
         self.sessions = {}
         self.queues = {}
@@ -206,7 +208,7 @@ class FakeBoard:
         if path == "/api/v1/workflows":
             return {"workflows": [{"id": "wf", "name": "Fake Paced"}]}
         if path.endswith("/workflow/steps"):
-            return {"steps": CLEAN}
+            return {"steps": self.steps}
         if path == "/api/v1/workflows/wf/tasks":
             return {"tasks": self.tasks}
         if path.endswith("/tasks"):        # any other workflow: the out-of-scope ones
@@ -276,6 +278,16 @@ class FakeBoard:
             if took:
                 self.queues[session_id] -= 1
             body = {"session_id": session_id, "drained": took}
+        elif action == "mcp.step_complete":
+            if not all(
+                payload.get(key) for key in ("task_id", "session_id", "summary")
+            ):
+                return fail("task_id, session_id, and summary are required")
+            if self.signal_target:
+                for task in self.tasks:
+                    if task["id"] == payload["task_id"]:
+                        task["workflow_step_id"] = self.signal_target
+            body = {"success": True}
         elif action == "task.state" and str(payload.get("id", "")).startswith("boomflag"):
             return fail("no")
         elif action == "session.launch" and str(payload.get("task_id", "")).startswith("silent"):

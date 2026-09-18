@@ -108,6 +108,8 @@ long option such as `--interval` and `--concurrency`.
 | `PACER_REFUSAL_WINDOW` | `10` | how long a launch waits. Only long enough to catch a refusal — an accepted launch is answered minutes later, and waiting froze the loop |
 | `PACER_LAUNCH_LATENCY` | `90` | how long kandev may take to make an accepted launch visible. Bookings last three ticks at `PACER_INTERVAL` plus this |
 | `PACER_FAIL_BACKOFF` | 3 × `PACER_INTERVAL` | seconds before a refused launch is retried; doubles per consecutive failure, up to 8× |
+| `PACER_STALL_AFTER` | `5` | consecutive unchanged turns before giving up; `0` disables stall detection |
+| `PACER_STALL_ACTION` | `block` | `block` flags stalled tasks; `signal` tries to advance an idle primary session on a step that requires a completion signal |
 | `PACER_BLOCK_AFTER` | `2` | consecutive failures before the card is flagged `BLOCKED`. `0` keeps the pacer read-only |
 | `PACER_CREDENTIALS` | `~/.claude/.credentials.json` | the subscription token the quota is read with. **Read, never written** — Claude Code owns this file, and a second refresher racing it would rotate the token out from under the user's login |
 | `PACER_LOG` | `~/.local/state/kandev-pacer/pacer.jsonl` | JSONL event log. Empty disables it |
@@ -194,6 +196,16 @@ rotation keeps one 50 MB file and four weekly or size-based backups:
   HTTP status or error. See [Refilling the board](#refilling-the-board).
 
 ## Troubleshooting
+
+With `PACER_STALL_ACTION=signal`, a stalled primary session waiting for input can
+advance through `mcp.step_complete` when its current step requires that signal.
+The pacer waits up to `PACER_LAUNCH_LATENCY` seconds, checking on later ticks.
+If the step stays put, the signal is rejected, or the session is ineligible, it
+falls back to `BLOCKED`. The default `block` action keeps the existing behavior.
+`stalled` log records distinguish `signalled`, `advanced`, `signal_uncertain`,
+and `blocked` or `block_failed` outcomes and give the fallback reason.
+Pending signals and stall counts are in memory and reset on restart. An idle
+primary can have a real blocker; review such cards before enabling this option.
 
 **Nothing ever launches, every tick logs `nothing to launch`.** The workflow is probably not
 enrolled, or its steps are tagged but do not route on turn completion. `--dump-order` names
