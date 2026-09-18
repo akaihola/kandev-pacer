@@ -83,11 +83,6 @@ Rules for TASKS.md usage are at the bottom of the file.
 
 ## Scheduled
 
-- [*] In session observation files from `kandev-learn`, truncate long values for
-  brevity when full precision is not needed. For example, use millisecond
-  precision for durations, 1/1000 dollars for cost, and milliseconds without
-  timezone for timestamps (also in file names).
-
 - [*] The session ID is repeated over and over in `kandev-learn` session
   observation files. Will there ever be more than one session per file? If not,
   just state the ID once at the top of the file. If yes, state the ID for each
@@ -96,6 +91,11 @@ Rules for TASKS.md usage are at the bottom of the file.
 - [*] After the 0.94-dev upgrade, I am getting `Queue failed: task_id, session_id, and session_incarnation_id are required` when I try to use the `Queue` button from the userscript in task ff3350a2-60a3-48b1-9631-796e46e23e28. Investigate and fix.
 
 ## In progress
+
+- [*] In session observation files from `kandev-learn`, truncate long values for
+  brevity when full precision is not needed. For example, use millisecond
+  precision for durations, 1/1000 dollars for cost, and milliseconds without
+  timezone for timestamps (also in file names).
 
 - [6] After the 0.94-dev upgrade, I'm getting failed queue statuses.
 
