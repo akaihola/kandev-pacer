@@ -707,8 +707,10 @@ def test_drains_the_session_holding_the_queue_not_the_newest(pacer, board):
     never fired and the card sat parked while the pacer spent its slots further down the
     order -- with nothing in the log to say a prompt was being skipped.
     """
-    sessions = {"t1": [{"id": "old", "state": "WAITING_FOR_INPUT", "started_at": "1"},
-                       {"id": "new", "state": "WAITING_FOR_INPUT", "started_at": "2"}]}
+    sessions = {"t1": [{"id": "old", "state": "WAITING_FOR_INPUT", "started_at": "1",
+                         "session_incarnation_id": "inc-old"},
+                       {"id": "new", "state": "WAITING_FOR_INPUT", "started_at": "2",
+                        "session_incarnation_id": "inc-new"}]}
     tick(pacer, board, [_task("t1", "rv", "Feedback")], sessions, {"old": 1})
 
     assert actions(board) == ["message.queue.drain"]

@@ -145,12 +145,14 @@ def queued_counts(task_sessions):
     queue-status hiccup must degrade to launch-only pacing, never stop the tick.
     """
     counts = {}
-    for sessions in task_sessions.values():
+    for task_id, sessions in task_sessions.items():
         for session in sessions:
             if session.get("state") not in DRAINABLE_STATES:
                 continue
             try:
-                counts[session["id"]] = client.ws_queue_count(session["id"])
+                counts[session["id"]] = client.ws_queue_count(
+                    task_id, session["id"], session["session_incarnation_id"]
+                )
             except Exception as error:
                 log.warning(f"queue status failed for session {session['id']} ({error}) "
                             "-> treating as empty")
