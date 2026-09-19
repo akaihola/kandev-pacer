@@ -201,3 +201,38 @@ focused tests, the live read-only queue contract test, and diff-scoped lint pass
 The tracker audit found 21 distinct issues, each under exactly one heading; only
 issue 6 moved relative to main. Deployment and the separate capacity-deferral
 proposal remain pending.
+
+
+## Deployment, 2026-09-20
+
+Merged the reviewed branch into `/home/agent/prg/kandev-pacer` with `--no-ff`
+as `896001a`. Issue 6 is back under Completed. The only pre-existing dirty file
+in the main worktree was `TASKS.md`, containing new backlog items and formatting
+edits; those edits were preserved without committing or discarding them.
+Consequently main cannot be reported clean. The task worktree was clean.
+
+Restarted the terminal-owned pacer in tmux pane `%1`, using the documented private
+environment file without exposing its values. Previous PID `494620` exited before
+replacement PID `707856` started at 02:25:18 EEST. The replacement runs from the
+main checkout, logs successful startup and pacing ticks without the reported
+queue-identity error, and successfully called the configured heartbeat webhook.
+The read-only queue contract test also passed from the merged checkout.
+
+Userscript 1.1.3 is available in the main checkout. No accessible installed browser
+profile or userscript manager was found on this host; browser-side installation
+could not be verified or updated. Update the script in the browser before testing
+the Queue button. No live user prompt was added or drained for verification.
+
+End-user checks on a designated test task:
+
+- After updating the userscript to 1.1.3, type a prompt and click Queue. Confirm it
+  appears in the queue without an identity error. When the provider gate opens,
+  confirm the queued prompt runs once.
+- With fallback already configured and the normal gate closed, a pending prompt on
+  the first task should stay queued while another eligible task can still launch.
+- When historical failures exist, the pacing status labels their count as global
+  retained failure records; it does not claim each provider has that many held tasks.
+
+The separate backend capacity-deferral proposal remains unresolved. The existing
+quota-default test failure was reproduced on untouched main during implementation;
+no unrelated quota behavior was changed for deployment.
