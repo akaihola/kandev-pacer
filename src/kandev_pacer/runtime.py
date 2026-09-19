@@ -901,7 +901,7 @@ class Pacer:
             candidate = self.next_action(snapshot, queued, allowed)
             if candidate is None:
                 held = (
-                    f", {len(self.failed)} held after a failed launch"
+                    f", {len(self.failed)} global retained failure records"
                     if self.failed
                     else ""
                 )

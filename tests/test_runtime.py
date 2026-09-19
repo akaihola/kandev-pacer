@@ -1483,3 +1483,20 @@ def test_closed_gate_fallback_reads_queue_before_launch(pacer, board, monkeypatc
     assert any(a == "message.queue.get" for a, _ in board.ws_log)
     assert actions(board) == []
     assert pacer.failed == {} and pacer.stalled == {}
+
+
+def test_failure_summary_labels_global_history(pacer, board, caplog):
+    from kandev_pacer.selection import ActionKey
+
+    task = _task("t1", "rv")
+    sessions = _sess("s1", "WAITING_FOR_INPUT")
+    board.load([task], {"t1": sessions}, {})
+    pacer.failed[ActionKey("t1", "rv", "s1")] = {
+        "at": 0,
+        "attempts": 1,
+        "flagged": False,
+    }
+    with caplog.at_level(logging.INFO, logger="kandev-pacer"):
+        pacer.tick()
+    assert "1 global retained failure records" in caplog.text
+    assert "held after a failed launch" not in caplog.text
