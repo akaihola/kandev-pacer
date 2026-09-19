@@ -17,11 +17,12 @@ task implements the consumer from these decisions. Decisions, not code.
 
 ## Notes
 
-- Collector docs: `docs/session-observations.md`,
-  `docs/session-observations-verification.md`. The collector stays measurement only;
-  interpretation belongs to the consumer.
-- Eight records exist (2026-09-11 to 2026-09-13). Three predate the unattributed-usage
-  repair; see the verification doc.
+- Collector docs: [session observations](../session-observations.md),
+  [verification evidence](../session-observations-verification.md). The collector
+  stays measurement only; interpretation belongs to the consumer.
+- The initial 2026-09-13 research covered eight records dated 2026-09-11 to
+  2026-09-13. Three predate the unattributed-usage repair; see the verification doc.
+  The handoff below records the later 2026-09-18 backlog of 127 records.
 - The five `[*]` readability items in `TASKS.md` (short numbers and timestamps, session
   ID once, filename UUID stated once, step names instead of IDs, quoted prompt and final
   response) are taken as given. Tickets factor them in; they are not re-decided here.
@@ -42,7 +43,8 @@ task implements the consumer from these decisions. Decisions, not code.
 
 - [What in a record can a consumer rely on today?](5-observation-consumer/issues/01-record-facts-a-consumer-can-rely-on.md)
   — frontmatter is the interface; cost is null for Codex, cache gaps are not misses,
-  steps are IDs, the collector cannot start where the pacer config is invalid.
+  the original records use step IDs, and the collector cannot start where the pacer
+  config is invalid. New records include the completed readability changes below.
 - [What does the Tyko vault already offer a consumer?](5-observation-consumer/issues/06-tyko-fit.md)
   — heartbeat-plus-Opus-sub-agent fits; the vault already planned a session-review
   successor with deterministic pre-scans; unread digests have been dropped before.
