@@ -180,7 +180,7 @@ test("queues with the current primary session incarnation", async () => {
     },
     fetch: async (url) => ({
       json: async () => url.endsWith("/sessions")
-        ? { sessions: [{ id: "stale", session_incarnation_id: "old", is_primary: false }, { id: "current", session_incarnation_id: "inc-7", is_primary: true }] }
+        ? { sessions: [{ id: "stale", queue_incarnation_id: "old", is_primary: false }, { id: "current", queue_incarnation_id: "inc-7", is_primary: true }] }
         : { task: { id: "task-7", primary_session_id: "stale" } },
     }),
   });
@@ -238,4 +238,11 @@ test("refuses innerText when the document is unreadable and a chip is present", 
   await assert.rejects(() => ctx.buildPayload(chipEditor), /mention chip would be mangled/);
   const plainEditor = { querySelector: () => null, innerText: "  plain fallback  " };
   assert.deepEqual(local(await ctx.buildPayload(plainEditor)), { content: "plain fallback" });
+});
+
+test("missing queue incarnation rejects before admission", async () => {
+  const ctx = load({
+    fetch: async () => ({ json: async () => ({ sessions: [{ id: "s", is_primary: true }] }) }),
+  });
+  await assert.rejects(ctx.queueTarget("t"), /task session identity is unavailable/);
 });

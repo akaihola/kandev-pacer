@@ -25,7 +25,7 @@ are declared in `apps/backend/pkg/websocket/actions.go:114`:
 | `message.queue.update` | Edit a parked entry's content/attachments. |
 | `message.queue.remove` | Delete one entry by `entry_id`. |
 | `message.queue.cancel` | Clear the whole queue for a session. |
-| `message.queue.drain` | **Start a turn now** from the head entry. |
+| `message.queue.drain` | `{task_id, session_id, session_incarnation_id}`: **start a turn now** from the head entry. |
 
 Handlers: `internal/orchestrator/handlers/queue_handlers.go`. There is no
 `/api/v1` route for any of them — the queue is WebSocket-only.
@@ -281,3 +281,23 @@ The backend needs nothing; only the typing surface does. Options, cheapest first
   parking mechanism.
 - **Faking the session state in SQLite** to trick `deriveSessionInputMode` into
   queue mode: races the orchestrator's own state writes. Not viable.
+
+
+## Queue identity after 0.94-dev
+
+Session REST responses expose `queue_incarnation_id`. Send that value under
+`session_incarnation_id` in queue WebSocket requests, alongside `task_id` and
+`session_id`. Status reads, explicit drains, and userscript admission all require
+this mapping. A missing identity or malformed count is unknown, not an empty queue.
+
+A failed idle-session queue read withholds that task's automatic workflow launch;
+other tasks and known queued prompts remain eligible. The final launch check reads
+queues again, including fallback launches that bypass the normal open-gate scan.
+A pending prompt also prevents that automatic launch. Before draining, pacer compares
+the fresh queue incarnation with the one selected from the tick snapshot. If it
+changed, pacer waits for another tick rather than draining the replacement queue.
+
+Deploy both the Python repair and the updated installed userscript. Restart the
+actual pacer process with its existing configuration and credentials, then verify
+queue reads from the replacement process. A merge alone does not update a running
+Python process. Test prompt admission and release only on a designated test task.

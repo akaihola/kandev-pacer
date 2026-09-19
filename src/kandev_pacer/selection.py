@@ -112,7 +112,7 @@ def drain_session(task, sessions, queued, skip=frozenset()):
         session
         for session in sessions
         if session.get("state") in DRAINABLE_STATES
-        and queued.get(session["id"], 0) > 0
+        and (queued.get(session["id"]) or 0) > 0
         and ActionKey(task["id"], step, session["id"]) not in skip
     ]
     return newest_session(holding)
@@ -162,6 +162,10 @@ def select_action(
     launchable = [
         task for task in ordered
         if is_launchable(task, task_sessions.get(task["id"], []), board, skip)
+        and not any(
+            session["id"] in queued and queued[session["id"]] is None
+            for session in task_sessions.get(task["id"], [])
+        )
         and eligible(task, None)
     ]
     if cache_deadlines:

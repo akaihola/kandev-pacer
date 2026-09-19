@@ -59,21 +59,30 @@ def actions(board):
 # --- which sessions a tick asks about before it decides ---
 
 def test_queued_counts_only_asks_about_drainable_sessions(board):
-    board.load([], {}, {"sReview": 2, "sIdle": 0})
-    counts = queued_counts({
-        "a": _sess("sReview", "WAITING_FOR_INPUT"),
-        "b": _sess("sIdle", "WAITING_FOR_INPUT"),
-        "c": _sess("sRun", "RUNNING"),      # turn in flight
-        "d": _sess("sNew", "CREATED"),      # prepared but not promptable
-    })
+    board.load(
+        [],
+        {
+            "a": _sess("sReview", "WAITING_FOR_INPUT"),
+            "b": _sess("sIdle", "WAITING_FOR_INPUT"),
+        },
+        {"sReview": 2, "sIdle": 0},
+    )
+    counts = queued_counts(
+        {
+            "a": _sess("sReview", "WAITING_FOR_INPUT"),
+            "b": _sess("sIdle", "WAITING_FOR_INPUT"),
+            "c": _sess("sRun", "RUNNING"),  # turn in flight
+            "d": _sess("sNew", "CREATED"),  # prepared but not promptable
+        }
+    )
     assert counts == {"sReview": 2, "sIdle": 0}
     asked = sorted(p["session_id"] for a, p in board.ws_log if a == "message.queue.get")
     assert asked == ["sIdle", "sReview"]
 
 
-def test_unreadable_queue_degrades_to_empty(board):
-    """A failing queue read must not kill the tick -- it falls back to launch-only pacing."""
-    assert queued_counts({"t": _sess("sBoom", "WAITING_FOR_INPUT")}) == {}
+def test_unreadable_queue_is_unknown(board):
+    board.sessions = {"t": _sess("sBoom", "WAITING_FOR_INPUT")}
+    assert queued_counts(board.sessions) == {"sBoom": None}
 
 
 def tick(pacer, board, tasks, sessions, queues):
@@ -741,10 +750,22 @@ def test_drains_the_session_holding_the_queue_not_the_newest(pacer, board):
     never fired and the card sat parked while the pacer spent its slots further down the
     order -- with nothing in the log to say a prompt was being skipped.
     """
-    sessions = {"t1": [{"id": "old", "state": "WAITING_FOR_INPUT", "started_at": "1",
-                         "session_incarnation_id": "inc-old"},
-                       {"id": "new", "state": "WAITING_FOR_INPUT", "started_at": "2",
-                        "session_incarnation_id": "inc-new"}]}
+    sessions = {
+        "t1": [
+            {
+                "id": "old",
+                "state": "WAITING_FOR_INPUT",
+                "started_at": "1",
+                "queue_incarnation_id": "inc-old",
+            },
+            {
+                "id": "new",
+                "state": "WAITING_FOR_INPUT",
+                "started_at": "2",
+                "queue_incarnation_id": "inc-new",
+            },
+        ]
+    }
     tick(pacer, board, [_task("t1", "rv", "Feedback")], sessions, {"old": 1})
 
     assert actions(board) == ["message.queue.drain"]
@@ -1374,3 +1395,130 @@ def test_pending_signal_cannot_block_a_resumed_primary(
     assert not pacer.pending_signals and key not in pacer.stalled
     assert actions(board) == ["mcp.step_complete"]
     assert events[-1]["action"] == "signal_cancelled"
+
+
+def test_unknown_queue_withholds_task_until_read_recovers(pacer, board, monkeypatch):
+    tasks = [_task("t1", "ip"), _task("t2", "ip")]
+    sessions = {
+        "t1": _sess("s1", "WAITING_FOR_INPUT") + _sess("sBad", "WAITING_FOR_INPUT"),
+        "t2": _sess("s2", "WAITING_FOR_INPUT"),
+    }
+    read = client.ws_queue_count
+
+    def failing(task_id, session_id, incarnation):
+        if session_id == "sBad":
+            raise RuntimeError("queue unavailable")
+        return read(task_id, session_id, incarnation)
+
+    monkeypatch.setattr(client, "ws_queue_count", failing)
+    tick(pacer, board, tasks, sessions, {})
+    assert [p["task_id"] for a, p in board.ws_log if a == "session.launch"] == ["t2"]
+    assert pacer.failed == {}
+    assert not any(k.task == "t1" for k in pacer.stalled)
+    monkeypatch.setattr(client, "ws_queue_count", read)
+    board.ws_log.clear()
+    pacer.tick()
+    assert [p["task_id"] for a, p in board.ws_log if a == "session.launch"] == ["t1"]
+
+
+@pytest.mark.parametrize("change", ["incarnation", "missing"])
+def test_drain_rechecks_snapshot_identity(pacer, board, monkeypatch, change):
+    board.load([_task("t1", "rv")], {"t1": _sess("s1", "WAITING_FOR_INPUT")}, {"s1": 1})
+    read = client.sessions_of
+    calls = 0
+
+    def replaced(task_id):
+        nonlocal calls
+        calls += 1
+        sessions = read(task_id)
+        if calls > 1:
+            return (
+                []
+                if change == "missing"
+                else [{**sessions[0], "queue_incarnation_id": "new"}]
+            )
+        return sessions
+
+    monkeypatch.setattr(client, "sessions_of", replaced)
+    pacer.tick()
+    assert actions(board) == []
+    assert pacer.booked == {} and pacer.failed == {}
+
+
+@pytest.mark.parametrize("fallback", [False, True])
+@pytest.mark.parametrize("count", [None, 1])
+def test_final_launch_check_catches_new_pending_or_unknown_queue(
+    pacer, board, monkeypatch, fallback, count
+):
+    from kandev_pacer.selection import Candidate, action_key
+
+    task = _task("t1", "ip")
+    sessions = _sess("s1", "WAITING_FOR_INPUT")
+    board.load([task], {"t1": sessions}, {})
+    snapshot = pacer.read()
+
+    def read(*args):
+        if count is None:
+            raise RuntimeError("unavailable")
+        return count
+
+    monkeypatch.setattr(client, "ws_queue_count", read)
+    result = pacer.attempt(
+        Candidate("launch", task),
+        action_key(task, sessions),
+        snapshot,
+        fallback=fallback,
+    )
+    assert result.action == "skipped"
+    assert actions(board) == []
+    assert pacer.failed == {} and pacer.stalled == {}
+
+
+def test_closed_gate_fallback_reads_queue_before_launch(pacer, board, monkeypatch):
+    monkeypatch.setattr(settings, "fallback_after", 1)
+    board.usage_pct = 95
+    pacer._gate_closed_at["anthropic"] = 0
+    board.load([_task("t1", "ip")], {"t1": _sess("sBoom", "WAITING_FOR_INPUT")}, {})
+    pacer.tick()
+    assert any(a == "message.queue.get" for a, _ in board.ws_log)
+    assert actions(board) == []
+    assert pacer.failed == {} and pacer.stalled == {}
+
+
+def test_failure_summary_labels_global_history(pacer, board, caplog):
+    from kandev_pacer.selection import ActionKey
+
+    task = _task("t1", "rv")
+    sessions = _sess("s1", "WAITING_FOR_INPUT")
+    board.load([task], {"t1": sessions}, {})
+    pacer.failed[ActionKey("t1", "rv", "s1")] = {
+        "at": 0,
+        "attempts": 1,
+        "flagged": False,
+    }
+    with caplog.at_level(logging.INFO, logger="kandev-pacer"):
+        pacer.tick()
+    assert "1 global retained failure records" in caplog.text
+    assert "held after a failed launch" not in caplog.text
+
+
+@pytest.mark.parametrize("blocked_session,queues", [("sBoom", {}), ("s1", {"s1": 1})])
+def test_fallback_skips_unreadable_or_pending_queue_for_other_work(
+    pacer, board, monkeypatch, blocked_session, queues
+):
+    monkeypatch.setattr(settings, "fallback_after", 1)
+    board.usage_pct = 95
+    pacer._gate_closed_at["anthropic"] = 0
+    board.load(
+        [_task("t1", "ip"), _task("t2", "ip")],
+        {
+            "t1": _sess(blocked_session, "WAITING_FOR_INPUT"),
+            "t2": _sess("s2", "WAITING_FOR_INPUT"),
+        },
+        queues,
+    )
+    pacer.tick()
+    assert [p["task_id"] for a, p in board.ws_log if a == "session.launch"] == ["t2"]
+    assert not any(a == "message.queue.drain" for a, _ in board.ws_log)
+    assert pacer.failed == {}
+    assert not any(k.task == "t1" for k in pacer.stalled)

@@ -46,8 +46,12 @@ def step(id, name, otc=None, oe=None, ots=None, start=False, stage="custom",
 
 def sess(id, state, started="1", incarnation=None):
     # `started_at` is the real field name in GET /tasks/:id/sessions -- there is no `created_at`.
-    return {"id": id, "state": state, "started_at": started,
-            "session_incarnation_id": incarnation or f"inc-{id}"}
+    return {
+        "id": id,
+        "state": state,
+        "started_at": started,
+        "queue_incarnation_id": incarnation or f"inc-{id}",
+    }
 
 
 def task(id, step="ip", pos=0, prio="medium", created="2026-01-01T00:00:00Z", parent=None):
@@ -262,10 +266,29 @@ class FakeBoard:
         def fail(reason):
             return frames + [_frame(rid, "error", action, {"message": reason})]
 
+        if action in {"message.queue.get", "message.queue.drain"}:
+            if not all(
+                payload.get(key)
+                for key in ("task_id", "session_id", "session_incarnation_id")
+            ):
+                return fail(
+                    "task_id, session_id, and session_incarnation_id are required"
+                )
+            holder = next(
+                (
+                    s
+                    for s in self.sessions.get(payload["task_id"], [])
+                    if s["id"] == session_id
+                ),
+                None,
+            )
+            if (
+                holder is None
+                or holder.get("queue_incarnation_id")
+                != payload["session_incarnation_id"]
+            ):
+                return fail("Session not found")
         if action == "message.queue.get":
-            if not all(payload.get(key) for key in
-                       ("task_id", "session_id", "session_incarnation_id")):
-                return fail("task_id, session_id, and session_incarnation_id are required")
             if session_id == "sBoom":
                 return fail("boom")
             count = 1 if session_id == "sStale" else self.queues.get(session_id, 0)

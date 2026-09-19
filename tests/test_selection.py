@@ -722,3 +722,17 @@ def test_child_drain_records_survive_beside_a_primary():
     assert prune_booked(booked, [task], sessions, 101, 90) == {}
     sessions["t"].remove(child)
     assert prune_failures(failures, [task], sessions) == {}
+
+
+def test_unknown_queue_blocks_launch_but_not_known_prompt():
+    board = Board.scan([({"id": "wf", "name": "Paced"}, CLEAN)])
+    tasks = [_task("t1", "ip"), _task("t2", "ip")]
+    sessions = {
+        "t1": [_sess("s1", "WAITING_FOR_INPUT"), _sess("s2", "WAITING_FOR_INPUT")],
+        "t2": [],
+    }
+    queued = {"s1": None, "s2": 0}
+    assert select_action(tasks, sessions, queued, board, set()).task["id"] == "t2"
+    queued["s2"] = 1
+    chosen = select_action(tasks, sessions, queued, board, set())
+    assert (chosen.kind, chosen.session) == ("drain", "s2")

@@ -3,7 +3,7 @@
 // @description  Adds a "Queue" button beside the composer's submit button. Parks the
 //               typed prompt on the session's message queue instead of starting a turn,
 //               so kandev-pacer decides when the quota gets spent.
-// @version      1.1.2
+// @version      1.1.3
 // @include      /^[^:]*?:\/\/[^\/]*?:(38429|8449)\/.*?$/
 // @grant        none
 // @run-at       document-idle
@@ -309,9 +309,9 @@ async function queueTarget(taskId) {
   const primaryId = (task.task ?? task).primary_session_id;
   const session = sessions.find((candidate) => candidate.is_primary) ??
     sessions.find((candidate) => candidate.id === primaryId) ?? sessions[0];
-  if (!session?.id || !session.session_incarnation_id)
+  if (!session?.id || !session.queue_incarnation_id)
     throw new Error("task session identity is unavailable");
-  return { sessionId: session.id, sessionIncarnationId: session.session_incarnation_id };
+  return { sessionId: session.id, sessionIncarnationId: session.queue_incarnation_id };
 }
 
 function taskIdFromUrl() {

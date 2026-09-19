@@ -638,3 +638,18 @@ def test_running_is_counted_per_provider(duo, board):
     was_open = run(duo, board, [ta, tc], {"ta": _sess("sa", "RUNNING"), "tc": sc}, {})
     assert launches(board) == ["tc"]
     assert was_open is True
+
+
+def test_unknown_queue_does_not_block_other_provider(duo, board):
+    run(
+        duo,
+        board,
+        [_task("t1", "ip", profile="p-claude"), _task("t2", "ip", profile="p-codex")],
+        {
+            "t1": _sess("sBoom", "WAITING_FOR_INPUT"),
+            "t2": _sess("s2", "WAITING_FOR_INPUT"),
+        },
+        {},
+    )
+    assert launches(board) == ["t2"]
+    assert duo.failed == {}
