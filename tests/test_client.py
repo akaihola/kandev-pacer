@@ -8,28 +8,39 @@ from email.message import Message
 
 import pytest
 import websocket
+from conftest import sess
 
 from kandev_pacer import client
 from kandev_pacer.client import ws_drain
 from kandev_pacer.config import settings
 
 
+@pytest.fixture(autouse=True)
+def queue_sessions(request):
+    if "board" not in request.fixturenames:
+        return
+    board = request.getfixturevalue("board")
+    board.sessions = {
+        "t": [sess(s, "WAITING_FOR_INPUT") for s in ("sAny", "sReview", "sBusy", "s1")]
+    }
+
+
 def test_connections_present_the_servers_own_origin(board):
     """/ws rejects a foreign Origin, so the pacer must send the server's own URL."""
-    ws_drain("sAny")
+    ws_drain("t", "sAny", "inc-sAny")
     assert board.origins == [settings.url]
 
 
 def test_drain_reports_whether_it_took_anything(board):
-    board.load([], {}, {"sReview": 1})
-    assert ws_drain("sReview")["drained"] is True
+    board.load([], board.sessions, {"sReview": 1})
+    assert ws_drain("t", "sReview", "inc-sReview")["drained"] is True
     # Queue now empty -> kandev answers drained:false, which means no turn was spent.
-    assert ws_drain("sReview")["drained"] is False
+    assert ws_drain("t", "sReview", "inc-sReview")["drained"] is False
 
 
 def test_ws_errors_surface_with_kandev_reason(board):
     try:
-        ws_drain("sBusy")
+        ws_drain("t", "sBusy", "inc-sBusy")
     except RuntimeError as error:
         assert "Session is busy" in str(error)
     else:
@@ -111,7 +122,7 @@ def test_a_request_that_never_answers_raises_outcome_unknown(board, monkeypatch)
     fake.inbox.clear()
     monkeypatch.setattr(fake, "send", lambda raw: None)      # sent, never answered
     try:
-        client.ws_drain("s1")
+        client.ws_drain("t", "s1", "inc-s1")
     except client.RequestOutcomeUnknown as error:
         assert "outcome unknown" in str(error)
     else:
@@ -124,8 +135,8 @@ def test_unrelated_pushes_spend_the_same_deadline(board, monkeypatch):
     Every push makes recv() return, and a per-recv socket timeout would restart on each
     one. The deadline is absolute, so the budget shrinks instead of resetting.
     """
-    board.load([], {}, {"sReview": 1})
-    client.ws_drain("sReview")
+    board.load([], board.sessions, {"sReview": 1})
+    client.ws_drain("t", "sReview", "inc-sReview")
     connection = board.connections[-1]
     assert connection.timeouts == sorted(connection.timeouts, reverse=True), \
         f"deadlines must shrink, got {connection.timeouts}"
@@ -242,3 +253,41 @@ def test_step_complete_sends_required_payload(board):
     ]
     with pytest.raises(RuntimeError, match="summary are required"):
         client.ws_step_complete("t", "primary", "")
+
+
+@pytest.mark.parametrize("operation", [client.ws_queue_count, client.ws_drain])
+@pytest.mark.parametrize(
+    "identity", [("", "s1", "inc-s1"), ("t", "", "inc-s1"), ("t", "s1", None)]
+)
+def test_queue_identity_is_required_before_sending(board, operation, identity):
+    with pytest.raises(ValueError, match="queue identity"):
+        operation(*identity)
+    assert board.ws_log == []
+
+
+@pytest.mark.parametrize("operation", [client.ws_queue_count, client.ws_drain])
+@pytest.mark.parametrize("task_id,incarnation", [("wrong", "inc-s1"), ("t", "old")])
+def test_queue_rejects_wrong_task_or_incarnation(
+    board, operation, task_id, incarnation
+):
+    with pytest.raises(RuntimeError, match="Session not found"):
+        operation(task_id, "s1", incarnation)
+
+
+@pytest.mark.parametrize("count", [None, -1, "1", True])
+def test_invalid_queue_count_is_not_empty(monkeypatch, count):
+    monkeypatch.setattr(client, "ws_request", lambda *a: {"count": count})
+    with pytest.raises(ValueError, match="invalid count"):
+        client.ws_queue_count("t", "s", "inc")
+
+
+def test_queue_requests_use_the_same_identity(board):
+    client.ws_queue_count("t", "s1", "inc-s1")
+    client.ws_drain("t", "s1", "inc-s1")
+    assert board.ws_log == [
+        (
+            action,
+            {"task_id": "t", "session_id": "s1", "session_incarnation_id": "inc-s1"},
+        )
+        for action in ("message.queue.get", "message.queue.drain")
+    ]

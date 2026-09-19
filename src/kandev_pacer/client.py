@@ -277,15 +277,32 @@ def ws_set_state(task_id, state):
     return ws_request("task.state", {"id": task_id, "state": state})
 
 
-def ws_drain(session_id):
-    return ws_request("message.queue.drain", {"session_id": session_id})
+def queue_identity(task_id, session_id, session_incarnation_id):
+    if not all((task_id, session_id, session_incarnation_id)):
+        raise ValueError(
+            "queue identity requires task_id, session_id, and session_incarnation_id"
+        )
+    return {
+        "task_id": task_id,
+        "session_id": session_id,
+        "session_incarnation_id": session_incarnation_id,
+    }
+
+
+def ws_drain(task_id, session_id, session_incarnation_id):
+    return ws_request(
+        "message.queue.drain",
+        queue_identity(task_id, session_id, session_incarnation_id),
+    )
 
 
 def ws_queue_count(task_id, session_id, session_incarnation_id):
     """How many prompts are parked on this session's queue."""
-    return int((ws_request("message.queue.get", {
-        "task_id": task_id,
-        "session_id": session_id,
-        "session_incarnation_id": session_incarnation_id,
-    })
-                or {}).get("count") or 0)
+    response = ws_request(
+        "message.queue.get",
+        queue_identity(task_id, session_id, session_incarnation_id),
+    )
+    count = (response or {}).get("count")
+    if type(count) is not int or count < 0:
+        raise ValueError("queue status returned an invalid count")
+    return count

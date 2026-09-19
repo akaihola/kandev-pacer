@@ -154,8 +154,8 @@ def queued_counts(task_sessions):
     Asking only the newest reported an empty queue for a task that had a prompt waiting,
     so the drain never fired and the card sat parked indefinitely.
 
-    A session we cannot ask about is left out, which reads downstream as "empty" -- a
-    queue-status hiccup must degrade to launch-only pacing, never stop the tick.
+    A failed read is unknown (None), so that task cannot launch a workflow prompt
+    ahead of a possibly queued user prompt. Other tasks can still proceed.
     """
     counts = {}
     for task_id, sessions in task_sessions.items():
@@ -164,11 +164,14 @@ def queued_counts(task_sessions):
                 continue
             try:
                 counts[session["id"]] = client.ws_queue_count(
-                    task_id, session["id"], session["session_incarnation_id"]
+                    task_id, session["id"], session.get("queue_incarnation_id")
                 )
             except Exception as error:
-                log.warning(f"queue status failed for session {session['id']} ({error}) "
-                            "-> treating as empty")
+                counts[session["id"]] = None
+                log.warning(
+                    f"queue status failed for session {session['id']} ({error}) "
+                    "-> withholding automatic launches for this task"
+                )
     return counts
 
 
@@ -982,6 +985,12 @@ class Pacer:
         sessions = client.sessions_of(task["id"])
         if candidate.kind == "drain":
             return self.drain(fresh, key, sessions, snapshot, candidate.session)
+        # Recheck before launch, including fallback paths that skipped queue reads.
+        counts = queued_counts({task["id"]: sessions})
+        if any(count != 0 for count in counts.values()):
+            return Outcome(
+                "skipped", f"{label(task)!r} queue pending or unknown -> skip launch"
+            )
         return self.launch(fresh, key, sessions, snapshot, fallback=fallback)
 
     def drain(self, task, key, sessions, snapshot, drain_id):
@@ -993,8 +1002,25 @@ class Pacer:
         holder = next((s for s in sessions if s["id"] == drain_id), None)
         if holder is None or holder.get("state") not in DRAINABLE_STATES:
             return Outcome("skipped", f"{label(task)!r} no longer idle -> skip drain")
+        previous = next(
+            (s for s in snapshot.sessions.get(task["id"], []) if s["id"] == drain_id),
+            None,
+        )
+        incarnation = holder.get("queue_incarnation_id")
+        if (
+            not incarnation
+            or not previous
+            or previous.get("queue_incarnation_id") != incarnation
+        ):
+            return Outcome(
+                "skipped", f"{label(task)!r} changed queue identity -> skip drain"
+            )
         try:
-            drained = bool((client.ws_drain(holder["id"]) or {}).get("drained"))
+            drained = bool(
+                (client.ws_drain(task["id"], holder["id"], incarnation) or {}).get(
+                    "drained"
+                )
+            )
         except client.RequestOutcomeUnknown as error:
             self.note_uncertain(key, task, f"drain: {error}")
             return Outcome("uncertain", f"{label(task)!r} drain unconfirmed", launched={})

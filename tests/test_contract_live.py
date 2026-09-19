@@ -478,18 +478,20 @@ def test_action_is_still_recognized(live, action, payload):
     )
 
 
-def test_queue_get_answers_a_count(tasks, sessions):
-    """The read the pacer makes to see whether a session has a prompt parked on it.
-
-    A live read against an idle session, which is safe: it dispatches nothing. The count
-    itself is board contents, so only its type is asserted.
-    """
-    idle = next((s for s in sessions if s["state"] in IDLE_STATES), None)
-    if idle is None:
-        pytest.skip("no idle session to read a queue from")
-    task_id = next(task["id"] for task in tasks
-                   if any(session["id"] == idle["id"]
-                          for session in client.sessions_of(task["id"])))
-    assert isinstance(client.ws_queue_count(
-        task_id, idle["id"], idle["session_incarnation_id"]
-    ), int)
+def test_queue_get_answers_a_count(tasks):
+    """Read a real idle queue without dispatching a turn."""
+    for task in tasks:
+        for session in client.sessions_of(task["id"]):
+            if session["state"] not in IDLE_STATES:
+                continue
+            assert session.get("queue_incarnation_id"), (
+                "REST session lacks queue identity"
+            )
+            assert isinstance(
+                client.ws_queue_count(
+                    task["id"], session["id"], session["queue_incarnation_id"]
+                ),
+                int,
+            )
+            return
+    pytest.skip("no idle session to read a queue from")
