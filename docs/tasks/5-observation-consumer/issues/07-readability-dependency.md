@@ -12,7 +12,9 @@ direction so the plan handoff orders the work.
 
 ## Answer
 
-Resolved 2026-09-13.
+Resolved 2026-09-13. The dependency analysis below is historical; all five
+readability tasks are now completed, as recorded in the
+[map handoff](../../5-observation-consumer.md#handoff).
 
 - A machine consumer reads frontmatter only and is not blocked by any of the five
   items. It must glob the month directories and read `archived_at` instead of parsing
@@ -22,6 +24,6 @@ Resolved 2026-09-13.
   response make the body hard to judge, and a model pass would spend tokens on the
   raw tool list.
 - Dependency direction: the five `[*]` items land first, then the consumer's first
-  real run. They are small, already ordered ahead of this map in `TASKS.md`, and the
+  real run. They were small and ordered ahead of this map in `TASKS.md`; the
   consumer plan should list them under `depends_on`. The consumer must still accept
   the eight existing records in the old shape, since records are immutable.

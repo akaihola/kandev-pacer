@@ -13,7 +13,10 @@ items change the file shape a consumer will see?
 ## Answer
 
 Resolved 2026-09-13 from the two collector docs, the collector source and the eight
-records.
+records. The findings below describe that snapshot. The five readability tasks
+are now completed; [the map handoff](../../5-observation-consumer.md#handoff)
+and [collector docs](../../../session-observations.md) describe the newer records.
+Old records remain immutable.
 
 **The JSON frontmatter is the machine interface.** Every Markdown table restates a
 frontmatter field. Top level: `task`, `title`, `workflow`, `archived_at`, `totals`,

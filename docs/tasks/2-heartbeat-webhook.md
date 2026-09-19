@@ -40,7 +40,7 @@ Configuration, all three layers (TOML, env, CLI) like every other setting:
 | `heartbeat_webhook_url` | `PACER_HEARTBEAT_WEBHOOK_URL` | empty (off) | the full webhook URL |
 | `heartbeat_webhook_secret` | `PACER_HEARTBEAT_WEBHOOK_SECRET` | empty | sent as `X-Webhook-Secret` |
 | `heartbeat_min_launchable` | `PACER_HEARTBEAT_MIN_LAUNCHABLE` | `2` | call when a provider's launchable count is below this |
-| `heartbeat_min_interval` | `PACER_HEARTBEAT_MIN_INTERVAL` | `1800` | seconds between calls, whatever the board does |
+| `heartbeat_min_interval` | `PACER_HEARTBEAT_MIN_INTERVAL` | `1800` | seconds between attempts unless a task has launched since the last attempt |
 
 An empty URL disables the feature; a URL with an empty secret fails validation at startup
 with both names in the message. The secret is a secret: on `agent@gogo` the URL goes into

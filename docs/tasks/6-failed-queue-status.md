@@ -1,4 +1,15 @@
+---
+depends_on: []
+---
+
 # `Queue status failed` after 0.94-dev upgrade
+
+## Original report
+
+The pacer fails to read queue status through `message.queue.get` and treats the
+queue as empty. This is separate from
+[task 7, the userscript Queue button failure](7-queue-button-session-identifiers.md),
+which affects writing to the queue.
 
 ```
 queue status failed for session b02d0f53-da34-4812-bf5a-255c63bb90cc (message.queue.get failed: task_id, session_id, and session_incarnation_id are required) -> treating as empty

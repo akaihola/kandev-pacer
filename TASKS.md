@@ -59,9 +59,11 @@ Rules for TASKS.md usage are at the bottom of the file.
 
 - [3] Optionally signal completion for eligible stalled primary sessions; block if the step
   does not advance.
+  - Depends on: [13]
 
 - [*] Waive the heartbeat cooldown once a task has been launched since the last
   attempt, so a full backlog does not leave the board dry for half of every cycle.
+  - Depends on: [2]
 
 - [*] Show Fable in scoped gate logs even when it is the only class, and diagnose
   why waiting Fable tasks are not launchable.
@@ -106,10 +108,10 @@ Here are the rules for TASKS.md usage:
   Merge a similar existing proposal with the new one into a single revision
   that combines the ideas of both.
 
-### Invariant: one heading per issue
+### One heading per issue
 
 At any time, each issue's bullet must be under exactly one `##` heading (for example
-`## Ordered backlog` or `## In progress`). It must never be under two headings at the
+`## Ordered backlog` or `## In Progress`). It must never be under two headings at the
 same time.
 
 - Before you commit any change to TASKS.md, read the whole file and check that no bullet
@@ -121,9 +123,16 @@ same time.
   - a numbered reference-style link (e.g. `[1]`) to a description file, or
   - `[*]` to indicate no description file is needed for a simple task.
 - Link references are listed between `## Completed` and `## Rules`.
-- If any issue is missing a link:
-  - Create the first missing numbered description file in
-    docs/tasks/<N-issue-description>.md and add the link
+- Keep simple tasks inline with `[*]`. Move detailed requirements, rationale, examples
+  and acceptance criteria into `docs/tasks/N-issue-description.md`, leaving a concise
+  summary and numbered reference. Reuse an existing description for the same issue.
+- New descriptions use the next unused number above the highest top-level task number
+  in the tracker or `docs/tasks/`. Nested decision-ticket numbers are local to their
+  parent task. Do not renumber existing tasks.
+- Treat completed descriptions as historical requests and decisions. Keep dated
+  evidence; distinguish it from current behavior when adding an update.
+- Verify status moves against repository history and available Kandev evidence.
+  A completed decision map does not mean its implementation handoff is implemented.
 - Any completed tasks which haven't yet been moved from `## In Progress` to
   `## Completed` should be moved there.
 - Any in progress tasks which haven't yet been moved from `## Ordered backlog` or
@@ -158,7 +167,7 @@ same time.
 
 - Rebase the worktree feature branch on `main` before moving the issue, and keep it
   rebased afterwards.
-- Move the issue under `## In progress` in `TASKS.md` in the worktree branch, ensure
+- Move the issue under `## In Progress` in `TASKS.md` in the worktree branch, ensure
   it's not in `## Ordered backlog`, and commit.
 - Create or update, review and refine a plan in docs/tasks/<N-issue-description>.md in
   `main` if more description is needed than nicely fits in a bullet point. If you
@@ -170,8 +179,8 @@ same time.
 3. Merge and deploy (typically by last steps of a task workflow)
 
 - Merge the rebased branch on `main`, and remove the worktree and branch.
-- Move the issue from `## In progress` to `## Completed` in TASKS.md and commit.
-- Do any deployment steps if defined in the general development worklow.
+- Move the issue from `## In Progress` to `## Completed` in TASKS.md and commit.
+- Do any deployment steps if defined in the general development workflow.
 
 When TASKS.md conflicts during a rebase or merge:
 

@@ -1,11 +1,11 @@
 ---
-depends_on: []
+depends_on: [13]
 ---
 
 # Advance a finished task instead of flagging it BLOCKED
 
-Land this after the "launch only the primary session" item. Both conditions below rest on
-knowing which session is the primary one, and while the pacer still launches `survey-*`
+Land this after [task 13, primary-session selection](13-primary-session-selection.md).
+The signal checks below rest on knowing which session is the primary one, and while the pacer still launches `survey-*`
 children, a signal sent for one of those would advance a step the primary session has not
 finished.
 
