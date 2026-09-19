@@ -10,6 +10,8 @@ Rules for TASKS.md usage are at the bottom of the file.
 
 ## In Progress
 
+- [6] After the 0.94-dev upgrade, I'm getting failed queue statuses.
+
 ## Completed
 
 - [5] Decide the observation consumer's audience, home, output, cadence and write boundary.
@@ -54,8 +56,6 @@ Rules for TASKS.md usage are at the bottom of the file.
   brevity when full precision is not needed. For example, use millisecond
   precision for durations, 1/1000 dollars for cost, and milliseconds without
   timezone for timestamps (also in file names).
-
-- [6] After the 0.94-dev upgrade, I'm getting failed queue statuses.
 
 - [3] Optionally signal completion for eligible stalled primary sessions; block if the step
   does not advance.
