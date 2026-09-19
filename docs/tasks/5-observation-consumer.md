@@ -97,8 +97,8 @@ It has three parts, in this order.
    after every other launchable task of the same provider, so it spends only
    leftover quota and shows up correctly in `--dump-order`.
 
-Depends on the five readability items for `kandev-learn` records, all currently under
-`## In progress` in `TASKS.md`. A consumer that reads the Markdown body wants step
+Depends on the five readability items for `kandev-learn` records, all now under
+`## Completed` in `TASKS.md`. A consumer that reads the Markdown body wants step
 names and the quoted prompt and final response. It must still cope with the older
 records, which keep their original shape forever.
 
