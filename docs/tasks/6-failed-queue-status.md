@@ -154,3 +154,36 @@ shape, unknown-queue launch suppression, incarnation replacement before drain,
 and deferral replay/cancellation without duplicate launches or BLOCKED flags.
 Run the live queue-read contract test as a required deployment check, not only the
 unit suite. Test per-provider hold counts with both expired and active records.
+
+## Implemented queue repair, 2026-09-20
+
+The implementation uses REST `queue_incarnation_id` for status reads, drains,
+and userscript admission. Outgoing requests retain `session_incarnation_id`.
+Missing identities are rejected before sending, and missing or malformed counts
+remain unknown. Unknown queue reads withhold affected automatic launches, including
+fallbacks; unrelated tasks and known queued prompts can proceed. The final launch
+check also catches prompts added after selection. Drains compare the fresh queue
+incarnation with the tick snapshot before sending. Userscript version is 1.1.3.
+
+The status line now labels its count as global retained failure records. It no
+longer claims those records represent currently held tasks for each provider.
+Capacity deferrals still follow the existing failure path. Their separate fix
+proposal above remains unresolved; this repair does not change capacity accounting,
+heartbeat behavior, backend replay, or historical BLOCKED tasks.
+
+Verification before the diagnostic-only change: 244 focused tests passed, including
+the Node userscript suite. The live queue-read contract test executed and passed.
+Diff-scoped formatting and lint passed. The broader suite had 408 passes, 20 opt-in
+live-test skips, and one unrelated failure:
+`tests/test_provider.py::test_direct_quota_source_remains_the_default` expects
+`Settings().quota_source == "direct"`, but receives `None`. That failure also
+reproduces in a clean archive of main at `b345049`; it was not changed here.
+
+The added diagnostic regression also passed after the wording change, and final
+diff-scoped lint passed.
+
+Deployment remains pending. Reidentify the running process, preserve its configuration
+and credentials, and account for in-flight work before restarting. Update the
+installed userscript too. Verify queue reads from the replacement process, and use
+a designated test task for any live add/drain smoke test. No production process
+was restarted and no live prompt was added or drained during this implementation.
