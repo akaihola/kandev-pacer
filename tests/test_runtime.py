@@ -1500,3 +1500,25 @@ def test_failure_summary_labels_global_history(pacer, board, caplog):
         pacer.tick()
     assert "1 global retained failure records" in caplog.text
     assert "held after a failed launch" not in caplog.text
+
+
+@pytest.mark.parametrize("blocked_session,queues", [("sBoom", {}), ("s1", {"s1": 1})])
+def test_fallback_skips_unreadable_or_pending_queue_for_other_work(
+    pacer, board, monkeypatch, blocked_session, queues
+):
+    monkeypatch.setattr(settings, "fallback_after", 1)
+    board.usage_pct = 95
+    pacer._gate_closed_at["anthropic"] = 0
+    board.load(
+        [_task("t1", "ip"), _task("t2", "ip")],
+        {
+            "t1": _sess(blocked_session, "WAITING_FOR_INPUT"),
+            "t2": _sess("s2", "WAITING_FOR_INPUT"),
+        },
+        queues,
+    )
+    pacer.tick()
+    assert [p["task_id"] for a, p in board.ws_log if a == "session.launch"] == ["t2"]
+    assert not any(a == "message.queue.drain" for a, _ in board.ws_log)
+    assert pacer.failed == {}
+    assert not any(k.task == "t1" for k in pacer.stalled)

@@ -850,6 +850,17 @@ class Pacer:
                 ordered = ordered_tasks(
                     snapshot.tasks, snapshot.sidebar, self.board.step_ranks
                 )
+                # Fallback cannot drain while the normal gate is closed. Skip
+                # pending and unreadable queues so they do not starve other work.
+                fallback_queues = queued_counts(snapshot.sessions)
+                ordered = [
+                    task
+                    for task in ordered
+                    if all(
+                        fallback_queues.get(session["id"], 0) == 0
+                        for session in snapshot.sessions.get(task["id"], [])
+                    )
+                ]
                 candidate = select_action(
                     ordered,
                     snapshot.sessions,

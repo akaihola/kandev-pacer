@@ -187,3 +187,17 @@ and credentials, and account for in-flight work before restarting. Update the
 installed userscript too. Verify queue reads from the replacement process, and use
 a designated test task for any live add/drain smoke test. No production process
 was restarted and no live prompt was added or drained during this implementation.
+
+## AI review, 2026-09-20
+
+Review found and repaired a fallback selection defect. With a closed normal gate,
+a first task with a pending or unreadable queue was repeatedly selected and skipped,
+preventing unrelated fallback work from running. Fallback now filters those tasks
+before selection and still rechecks the selected task immediately before dispatch.
+It does not drain user prompts through the closed gate.
+
+Both new regression cases failed before the repair and passed afterward. All 247
+focused tests, the live read-only queue contract test, and diff-scoped lint passed.
+The tracker audit found 21 distinct issues, each under exactly one heading; only
+issue 6 moved relative to main. Deployment and the separate capacity-deferral
+proposal remain pending.
