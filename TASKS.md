@@ -5,15 +5,18 @@ Rules for TASKS.md usage are at the bottom of the file.
 ## Unverified proposals
 
 ## Ordered backlog
+
 ## Scheduled
+
+## In Progress
+
+## Completed
 
 - [5] Decide what consumes the `kandev-learn` session observation records. A wayfinder
   map with decision tickets (audience, home, output, cadence, write boundary); grilling
   tickets need Antti. Ends at a plan handoff, not an implementation.
 
 - [*] After the 0.94-dev upgrade, I am getting `Queue failed: task_id, session_id, and session_incarnation_id are required` when I try to use the `Queue` button from the userscript in task ff3350a2-60a3-48b1-9631-796e46e23e28. Investigate and fix.
-
-## In progress
 
 - [*] Fall back to another agent profile when a provider's gate has been closed for
   longer than `PACER_FALLBACK_AFTER` (seconds, default `0` = off). Map with
@@ -89,8 +92,6 @@ Rules for TASKS.md usage are at the bottom of the file.
 
 - [6] After the 0.94-dev upgrade, I'm getting failed queue statuses.
 
-## Completed
-
 - [3] Advance a finished-but-unsignalled task instead of flagging it BLOCKED. The stall
   detector gives up after `PACER_STALL_AFTER` launches that left the worktree untouched,
   which is right for a wedged card and wrong for a primary session that finished its work
@@ -125,6 +126,8 @@ Rules for TASKS.md usage are at the bottom of the file.
 [5]: docs/tasks/5-observation-consumer.md
 [6]: docs/tasks/6-failed-queue-status.md
 [*]: TASKS.md
+
+## Accepted
 
 ---
 
