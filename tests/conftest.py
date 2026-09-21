@@ -28,7 +28,7 @@ def _load_test_modules():
     # Settings load during import, before fixtures can isolate the offline suite.
     if not os.environ.get("PACER_LIVE_KANDEV"):
         for key in tuple(os.environ):
-            if key.startswith(("PACER_", "KANDEV_")):
+            if key.upper().startswith(("PACER_", "KANDEV_")):
                 _operator_settings.delenv(key)
         default_config = Path.home() / ".config" / "kandev-pacer" / "config.toml"
         is_file = Path.is_file

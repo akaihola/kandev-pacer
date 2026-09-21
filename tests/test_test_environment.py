@@ -9,14 +9,17 @@ import pytest
 
 
 @pytest.mark.parametrize("live", [False, True])
-def test_collection_isolates_offline_settings_and_preserves_live(tmp_path, live):
+@pytest.mark.parametrize("lowercase", [False, True])
+def test_collection_isolates_offline_settings_and_preserves_live(
+    tmp_path, live, lowercase
+):
     config = tmp_path / ".config" / "kandev-pacer" / "config.toml"
     config.parent.mkdir(parents=True)
     config.write_text('[kandev-pacer]\ninterval = 77\nquota_source = "pebble"\n')
     environment = {
         key: value
         for key, value in os.environ.items()
-        if not key.startswith(("PACER_", "KANDEV_"))
+        if not key.upper().startswith(("PACER_", "KANDEV_"))
     }
     environment.update(
         KANDEV_URL="http://operator.invalid:1234",
@@ -24,6 +27,11 @@ def test_collection_isolates_offline_settings_and_preserves_live(tmp_path, live)
         PACER_HEARTBEAT_WEBHOOK_URL="http://operator.invalid/hook",
         PACER_HEARTBEAT_WEBHOOK_SECRET="test-secret" if live else "",
     )
+    if lowercase:
+        environment = {
+            key.lower() if key.startswith(("PACER_", "KANDEV_")) else key: value
+            for key, value in environment.items()
+        }
     if live:
         environment["PACER_LIVE_KANDEV"] = "1"
     result = subprocess.run(
