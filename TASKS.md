@@ -17,6 +17,8 @@ Rules for TASKS.md usage are at the bottom of the file.
 
 ## In Progress
 
+## Completed
+
 - [*] I see this:
 
     ```
@@ -27,8 +29,6 @@ Rules for TASKS.md usage are at the bottom of the file.
 
     In this situation, shouldn't heartbeat be executed immediately because Fable has
     nothing to launch?
-
-## Completed
 
 - [5] Decide the observation consumer's audience, home, output, cadence and write boundary.
   Completed decision map and implementation handoff.
