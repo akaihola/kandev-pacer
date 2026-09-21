@@ -313,9 +313,8 @@ async function queueTarget(taskId) {
   const primaryId = (task?.task ?? task)?.primary_session_id;
   const session = sessions.find((candidate) => candidate?.is_primary === true) ??
     sessions.find((candidate) => candidate?.id === primaryId) ?? sessions[0];
-  if (session?.task_id !== taskId ||
-      ![session?.id, session?.queue_incarnation_id].every((id) => typeof id === "string" && id.trim()))
-    throw new Error("task session identity is unavailable: expected id, task_id and queue_incarnation_id from the sessions API");
+  if (![session?.id, session?.queue_incarnation_id].every((id) => typeof id === "string" && id.trim()))
+    throw new Error("task session identity is unavailable: expected id and queue_incarnation_id from the sessions API");
   return { sessionId: session.id, sessionIncarnationId: session.queue_incarnation_id };
 }
 

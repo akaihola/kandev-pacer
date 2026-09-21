@@ -75,6 +75,19 @@ test("Queue click maps the live REST identity and clears only after admission", 
   assert.equal(click.closed, true);
 });
 
+test("Queue accepts identity from a task-scoped session response without task_id", async () => {
+  const click = queueClick({ sessions: { sessions: [{
+    id: primary.id,
+    queue_incarnation_id: primary.queue_incarnation_id,
+    is_primary: true,
+  }] } });
+  await click.ctx.onQueue(click.button);
+  assert.deepEqual(click.alerts, []);
+  assert.equal(click.sent[0].payload.session_id, primary.id);
+  assert.equal(click.sent[0].payload.session_incarnation_id, primary.queue_incarnation_id);
+  assert.deepEqual(click.edits, ["selectAll", "delete"]);
+});
+
 test("Queue rejection keeps the composer and restores the button", async () => {
   const click = queueClick({ queueError: "stale session incarnation" });
   await click.ctx.onQueue(click.button);
@@ -97,7 +110,6 @@ for (const [name, options, error] of [
     { sessions: { sessions: [{ ...primary, queue_incarnation_id: value }] } },
     /task session identity is unavailable/,
   ]),
-  ["wrong task", { sessions: { sessions: [{ ...primary, task_id: "another-task" }] } }, /task session identity is unavailable/],
   ["invalid session id", { sessions: { sessions: [{ ...primary, id: {} }] } }, /task session identity is unavailable/],
   ["invalid primary with valid secondary", { sessions: { sessions: [
     { ...primary, queue_incarnation_id: null },
