@@ -78,3 +78,42 @@ only `Crash Reports`, with no installed profile or extension manifest. The norma
 Chrome and Firefox profile locations are absent. This does not establish which
 userscript version is installed in the user's browser; the old-version diagnosis
 remains supported by reproduction rather than inspection of that browser.
+
+
+## Deployment, 2026-09-21
+
+Merged the reviewed feature into `/home/agent/prg/kandev-pacer` with `--no-ff`
+as `9ae5864`. Commit `05a25b3` moves only issue 7 to Completed. The merged
+userscript is version 1.1.4; all 28 Node tests and the syntax check pass from the
+main checkout.
+
+No systemd user service serves this userscript from the development tree. The
+configured `kandev-debug.service` runs Kandev itself, whose code is unchanged.
+No restart is needed for this browser-only change. No known `*.vempai.men`
+deployment was found. No live queue was modified for deployment verification.
+
+Browser activation is still outstanding: this host has no installed browser
+profile containing the userscript. The main checkout contains the release, but
+merging it does not update a userscript manager in a separate browser. Follow
+[the installation instructions](../queueing-user-prompts.md#queue-identity-after-094-dev)
+to replace the installed copy with version 1.1.4 and reload Kandev.
+
+### End-user verification
+
+Use a designated test task because pacer may release queued prompts automatically.
+
+1. Confirm version 1.1.4 in the browser's userscript manager and reload the task.
+   Type a harmless test prompt and click Queue. The prompt should appear once in
+   Kandev's queue, without an identity error, and the composer should clear after
+   acceptance. Queue selection still targets the task's primary session.
+2. For failed-lookup behavior, type another test prompt, use browser developer
+   tools to set the Network tab to Offline, and click Queue. Expect a Queue failed
+   alert, unchanged composer text, no added queue entry, and an enabled Queue
+   button. Restore the network before continuing. The script does not retry the
+   failed click automatically.
+3. Repeat the successful test with a file or saved-prompt mention. Inspect the
+   queued content for the existing context block; serialization is unchanged.
+
+The automated fixture tests additionally cover missing, malformed and wrong-task
+identity, preserving the composer on server rejection, and the primary-session
+fallback order. These tests require no live task mutation.
