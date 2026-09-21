@@ -1406,6 +1406,13 @@ def dump_order(pacer):
         # in order, and is skipped every tick.
         queued = "" if is_wip_admitted(task) else "  (queued: step WIP limit full)"
         print(f"{index:3}. {label(task)}{queued}")
+        step = task.get("workflow_step_id", "")
+        if step not in board.work_steps and step not in board.queue_steps:
+            print(
+                f"     step {board.name_of(step)!r} does not auto-launch, even when "
+                "waiting for input; move to a paced work step or explicitly queue "
+                "a prompt on an idle session"
+            )
     if board.skipped:
         report_out_of_scope(board, {task["id"] for task in tasks}, placed)
 
