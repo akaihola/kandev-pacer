@@ -302,6 +302,7 @@ def test_invalid_or_stale_pebble_snapshot_fails_closed(tmp_path, monkeypatch, co
 
 
 def test_direct_quota_source_remains_the_default(monkeypatch):
+    monkeypatch.delenv("PACER_QUOTA_SOURCE", raising=False)
     assert Settings().quota_source == "direct"
     monkeypatch.setattr(settings, "quota_source", "direct")
     monkeypatch.setattr(provider, "usage", lambda **kwargs: {"agents": ["direct"]})
@@ -309,7 +310,8 @@ def test_direct_quota_source_remains_the_default(monkeypatch):
 
 
 def test_pebble_quota_source_is_selected(monkeypatch):
-    monkeypatch.setattr(settings, "quota_source", "pebble")
+    monkeypatch.setenv("PACER_QUOTA_SOURCE", "pebble")
+    monkeypatch.setattr(settings, "quota_source", Settings().quota_source)
     envelope = {"agents": [{"usage": {"provider": "anthropic"}}]}
     monkeypatch.setattr(provider, "pebble_fetch", lambda now: envelope)
     assert provider._read_source("anthropic", False, NOW) == envelope
