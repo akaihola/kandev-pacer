@@ -128,3 +128,23 @@ byte sizes, actual costs, cache attribution, same-day rearchive, equal timestamp
 backfill batches, dry-run, commit recovery and preservation of the vault's index.
 See [verification evidence](session-observations-verification.md) for real runs and
 remaining source limitations.
+
+## Verify split output
+
+For a newly archived task that has no observation yet, run from `~/prg/kandev-pacer`:
+
+```bash
+uv run --frozen kandev-learn TASK_ID
+```
+
+Open the printed Markdown path. Each session should show its initial user prompt
+and final answer, with long quotes ending in `...` within 1,000 characters. Follow
+its JSON link to see the complete structured record and untruncated text.
+System/developer messages and tool results must not appear in those quotes.
+Run the same command again to check that existing files are preserved.
+
+Run `uv run --frozen kandev-learn digest --since YYYY-MM-DD` for a date covering both
+old and new observations to check that both formats contribute to the totals.
+`uv run --frozen kandev-learn sweep --dry-run` previews the next batch without writes.
+Existing Markdown observations keep their old format; use a new observation when
+checking the split output.
