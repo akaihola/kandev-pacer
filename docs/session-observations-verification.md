@@ -176,3 +176,27 @@ journalctl --user -u kandev-learn.service -n 30 --no-pager
 
 The timer lists a 15-minute schedule. Its first sweep establishes the archive
 boundary; subsequently archiving a task produces a new record on a later sweep.
+
+## Split-output deployment, 2026-09-21
+
+Merged with `--no-ff` as `d1ce12c`, after rebasing onto current main. The tracker
+conflict was resolved from main's text with only this issue moved. Implementation
+is in `82f4af3`, null-message extraction repair in `0888ef6`, and end-user checks
+in `0230fb9`. See [Verify split output](session-observations.md#verify-split-output).
+
+The active `kandev-learn.service` runs `uv run --frozen kandev-learn sweep` from
+`~/prg/kandev-pacer`. Restarted it at 09:53:25 EEST; it finished at 09:53:26 with
+`Result=success` and `ExecMainStatus=0`. The 15-minute `kandev-learn.timer` remains
+active. No new JSON observations were produced by that run, so split-format output
+was verified with fixtures rather than claimed from a new production observation.
+No unit changes or Nix activation were needed.
+
+After rebase, all 66 focused tests passed, as did formatting, diff-scoped lint/type
+checks and whitespace checks. The full default-settings suite in review had
+437 passes, 20 skips and the existing quota-default failure in
+`test_direct_quota_source_remains_the_default`, previously reproduced on main.
+Local server settings must be isolated when running the full suite.
+
+Both worktrees were clean after merging. Only this issue was moved to Completed.
+The unrelated Fable issue already appears under Scheduled and Completed in main;
+that duplicate was preserved to keep every other issue unchanged.
