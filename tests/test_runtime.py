@@ -1064,6 +1064,7 @@ def test_heartbeat_retries_once_when_an_open_provider_becomes_idle(
         "total",
         "booking",
         "drain",
+        "fallback",
         "active",
         "disabled",
         "threshold",
@@ -1096,13 +1097,18 @@ def test_heartbeat_idle_retry_respects_existing_guards(
         tasks = [_task("queued", "rv", profile="codex")]
         sessions = {"queued": _sess("s-queued", "WAITING_FOR_INPUT")}
         queues = {"s-queued": 1}
+    elif guard == "fallback":
+        monkeypatch.setattr(settings, "fallback_after", 1)
+        tasks = [_task("fallback", "ip", profile="codex")]
+        sessions = {"fallback": _sess("s-fallback", "WAITING_FOR_INPUT")}
     elif guard == "disabled":
         monkeypatch.setattr(settings, "heartbeat_webhook_url", "")
     else:
         monkeypatch.setattr(settings, "heartbeat_min_launchable", 0)
     tick(pacer, board, tasks, sessions, queues)
     assert len(heartbeat) == 1
-    assert actions(board) == (["message.queue.drain"] if guard == "drain" else [])
+    expected = {"drain": ["message.queue.drain"], "fallback": ["session.launch"]}
+    assert actions(board) == expected.get(guard, [])
 
 
 def test_heartbeat_idle_retry_checks_later_open_providers(

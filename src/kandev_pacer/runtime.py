@@ -708,6 +708,8 @@ class Pacer:
             and self._heartbeat_idle_retry
             and config.heartbeat_min_launchable > 0
             and not self._spent
+            # Fallback and unconfirmed actions can book a turn without raising _spent.
+            and not any(booking.at >= now for booking in self.booked.values())
             and not self.total_full(snapshot)
         ):
             for name in open_providers:
