@@ -99,6 +99,8 @@ def content_text(content):
 
 def message_text(agent, entry):
     message = entry.get("payload", {}) if agent == "codex" else entry.get("message", {})
+    if not isinstance(message, dict):
+        return None, ""
     role = message.get("role") or entry.get("type")
     if agent == "codex":
         if message.get("type") == "output_text":
@@ -113,6 +115,8 @@ def message_text(agent, entry):
     content = message.get("content", message.get("text", ""))
     if isinstance(content, str):
         return role, content
+    if not isinstance(content, list):
+        return role, ""
     return role, "\n".join(
         block if isinstance(block, str) else block.get("text", "")
         for block in content
@@ -120,6 +124,7 @@ def message_text(agent, entry):
         or (
             isinstance(block, dict)
             and block.get("type") in {"text", "input_text", "output_text"}
+            and isinstance(block.get("text"), str)
         )
     )
 
@@ -596,7 +601,9 @@ def collect_transcripts(home, session, timeout=45):
                     tool["id"] = identity + ":" + tool["id"]
                     result["tools"].append(tool)
                 for e in entries:
-                    msg = e.get("message", {})
+                    msg = e.get("message")
+                    if not isinstance(msg, dict):
+                        msg = {}
                     if msg.get("model"):
                         result["models"].append(msg["model"])
                     if (

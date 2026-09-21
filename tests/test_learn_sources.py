@@ -423,3 +423,40 @@ def test_hermes_messages_follow_session_time_not_database_order(tmp_path, monkey
         ("user", "late user"),
         ("assistant", "late assistant"),
     ]
+
+
+@pytest.mark.parametrize("agent", ["claude", "codex", "pi", "hermes", "opencode"])
+def test_message_text_ignores_empty_envelopes(agent):
+    key = "payload" if agent == "codex" else "message"
+    assert sources.message_text(agent, {key: None}) == (None, "")
+    for content in [None, [{"type": "text", "text": None}]]:
+        entry = {key: {"type": "message", "role": "assistant", "content": content}}
+        assert sources.message_text(agent, entry) == ("assistant", "")
+
+
+def test_collection_skips_empty_messages_before_final_answer(tmp_path, monkeypatch):
+    path = tmp_path / ".claude/projects/-gone/session.jsonl"
+    path.parent.mkdir(parents=True)
+    messages = [
+        None,
+        {"role": "user", "content": "prompt"},
+        {"role": "assistant", "content": None},
+        {"role": "assistant", "content": "final answer"},
+    ]
+    path.write_text(
+        "\n".join(
+            json.dumps({"timestamp": "2026-09-01T00:00:01Z", "message": message})
+            for message in messages
+        )
+    )
+    monkeypatch.setattr(sources, "ccusage", lambda *_: [])
+    result = sources.collect_transcripts(
+        tmp_path,
+        {
+            "agent": "claude",
+            "workspace_path": "/gone",
+            "start": "2026-09-01",
+            "end": "2026-09-02",
+        },
+    )
+    assert result["messages"] == [("user", "prompt"), ("assistant", "final answer")]
