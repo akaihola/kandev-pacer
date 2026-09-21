@@ -54,3 +54,27 @@ No installed browser copy was changed, and no live prompt was added or drained.
   `None` instead of `"direct"`. The identical test fails on an untouched `main`
   archive. Its validator lacks a return for valid values; quota code is outside
   this task's scope and remains unchanged.
+
+### AI review, 2026-09-21
+
+Rebased onto main `90278cf` to retain its newly scheduled test/lint issue.
+Verified the tracker equals main byte-for-byte after moving only `[7]` to
+In Progress. The moved issue occurs exactly once. Normalizing wrapped bullets
+reveals one existing duplicate in both main and this branch: "Show Fable in
+scoped gate logs even when it is the only class, and diagnose why waiting Fable
+tasks are not launchable" appears under Scheduled and Completed. The requested
+tracker-wide uniqueness proof is therefore blocked by main's existing state.
+Removing that duplicate would violate the requirement to change only this issue.
+
+Repeated the old-script reproduction and the current-script check against the
+same fixture. All 28 Node tests and 222 focused Python tests pass, covering
+userscript, API client, selection and runtime behavior. Both live read-only
+contract checks, darker, graylint and JavaScript syntax checks pass. The unrelated
+quota-default failure still reproduces; its source and test match main exactly.
+No additional in-scope code defect was found.
+
+Browser deployment remains unverified. The host's Chromium configuration contains
+only `Crash Reports`, with no installed profile or extension manifest. The normal
+Chrome and Firefox profile locations are absent. This does not establish which
+userscript version is installed in the user's browser; the old-version diagnosis
+remains supported by reproduction rather than inspection of that browser.
