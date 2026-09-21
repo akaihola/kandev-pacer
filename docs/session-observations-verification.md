@@ -200,3 +200,28 @@ Local server settings must be isolated when running the full suite.
 Both worktrees were clean after merging. Only this issue was moved to Completed.
 The unrelated Fable issue already appears under Scheduled and Completed in main;
 that duplicate was preserved to keep every other issue unchanged.
+
+
+## Identity diagnostics deployment, 2026-09-21
+
+Merged into main with `--no-ff` as `b1e4995`, after rebasing onto `90278cf`.
+Implementation is in `b388656`; recovery instructions and end-user checks were
+added in `721a029`. See [Identity conflicts and recovery](session-observations.md#identity-conflicts-and-recovery).
+
+Restarted the development-tree `kandev-learn.service` at 11:36:33 EEST. It finished
+at 11:36:34 with `Result=success` and `ExecMainStatus=0`; its timer remains active.
+This verifies the scheduled entry point starts successfully, not that either
+originally reported observation was repaired. No production observation was
+manually changed. No configuration or dependency changes were needed.
+
+All 84 focused tests passed after the final rebase. Formatting, branch lint/type
+checks and whitespace checks passed during review. The isolated full suite had
+474 passes, 20 skips and the existing quota-default failure, also reproduced on
+unchanged main. The validator for quota_source lacks a return for valid input;
+that unrelated repair is scheduled separately.
+
+Both worktrees were clean immediately after merge. The selected issue is moved
+from In Progress to Completed in the deployment commit. Its original source entry
+was absent from main, so the implementation added it rather than claiming a
+move-only feature diff. All unrelated tracker text is preserved, including main's
+existing Fable duplicate under Scheduled and Completed. No new duplicate was added.

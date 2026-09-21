@@ -16,6 +16,8 @@ Rules for TASKS.md usage are at the bottom of the file.
 
 ## In Progress
 
+## Completed
+
 - [*] It's hard to understand what this output means:
 
     ```
@@ -24,8 +26,6 @@ Rules for TASKS.md usage are at the bottom of the file.
     ❯ set -a; source ~/.config/secrets/kandev-pacer.env; set +a; uv run --frozen kandev-learn 6e871e6b-45b5-44e4-86b6-ea4fa71e499e
     kandev-learn: observation identity conflict
     ```
-
-## Completed
 
 - [*] `kandev-learn sweep` now stores the JSON as frontmatter in the session observation
   Markdown file. Store the JSON in a separate file alongside the Markdown instead, but
