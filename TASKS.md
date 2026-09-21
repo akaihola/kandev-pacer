@@ -16,6 +16,8 @@ Rules for TASKS.md usage are at the bottom of the file.
 
 ## In Progress
 
+- [7] Fix userscript Queue button session identifiers after the 0.94-dev upgrade.
+
 ## Completed
 
 - [*] It's hard to understand what this output means:
@@ -45,8 +47,6 @@ Rules for TASKS.md usage are at the bottom of the file.
 
 - [5] Decide the observation consumer's audience, home, output, cadence and write boundary.
   Completed decision map and implementation handoff.
-
-- [7] Fix userscript Queue button session identifiers after the 0.94-dev upgrade.
 
 - [8] Fall back to a configured agent profile when a provider gate stays closed.
 
