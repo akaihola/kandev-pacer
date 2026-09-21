@@ -13,10 +13,10 @@ Rules for TASKS.md usage are at the bottom of the file.
 
 ## In Progress
 
+## Completed
+
 - [*] Fix all test and linter failures, e.g. the `PACER_QUOTA_SOURCE` default test
   failure if it still occurs.
-
-## Completed
 
 - [7] Fix userscript Queue button session identifiers after the 0.94-dev upgrade.
 
