@@ -8,6 +8,9 @@ Rules for TASKS.md usage are at the bottom of the file.
 
 ## Scheduled
 
+- [*] Fix all test and linter failures, e.g. the `PACER_QUOTA_SOURCE` default test
+  failure if it still occurs.
+
 - [*] Show Fable in scoped gate logs even when it is the only class, and diagnose why
   waiting Fable tasks are not launchable.
 
