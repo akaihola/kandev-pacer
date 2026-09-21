@@ -261,6 +261,8 @@ class Pacer:
         # that produced nothing; one whose task the pacer has since launched (and, as a
         # rule, finished) has earned the next call as soon as the board runs dry again.
         self._launched_since_heartbeat = False
+        # A proactive refill may retry once if running work ends before cooldown.
+        self._heartbeat_idle_retry = False
         self._gate_closed_at = {}
 
     # --- the event log ---
@@ -660,13 +662,14 @@ class Pacer:
         self.maybe_heartbeat(verdicts, snapshot)
         return any_open
 
-    def launchable_of(self, provider_name, snapshot):
-        """How many of a provider's tasks a launch could go to right now, all classes."""
+    def launchable_of(self, provider_name, snapshot, scopes=None):
+        """Count eligible tasks, optionally restricted to the given scope classes."""
         skip = self.skip_keys(snapshot.now)
         return sum(
             1
             for task in snapshot.tasks
             if snapshot.task_providers.get(task["id"]) == provider_name
+            and (scopes is None or snapshot.task_scopes.get(task["id"], ()) in scopes)
             and is_launchable(task, snapshot.sessions[task["id"]], self.board, skip)
         )
 
@@ -677,8 +680,9 @@ class Pacer:
         under heartbeat_min_launchable: quota is available and the board is about to
         idle. A closed gate with no work needs no new work. Not more often than
         heartbeat_min_interval since the last attempt unless a task was launched in
-        between -- the cooldown is for attempts that produced nothing -- and not while a
-        `[Auto] Heartbeat` task already has a turn running -- that run is the one looking.
+        between. A successful proactive attempt while work was running may also retry
+        once when an open provider becomes idle. Repeated idle attempts stay throttled.
+        Skip while a `[Auto] Heartbeat` task has a turn running: it is already looking.
         A failed call is a warning, not a tick error: the board paces without it.
         """
         config = self.config
@@ -694,6 +698,37 @@ class Pacer:
             ),
             None,
         )
+        now = snapshot.now
+        remaining = 0
+        if self._last_heartbeat_at is not None and not self._launched_since_heartbeat:
+            remaining = config.heartbeat_min_interval - (now - self._last_heartbeat_at)
+        idle_retry = False
+        if (
+            remaining > 0
+            and self._heartbeat_idle_retry
+            and config.heartbeat_min_launchable > 0
+            and not self._spent
+            # Fallback and unconfirmed actions can book a turn without raising _spent.
+            and not any(booking.at >= now for booking in self.booked.values())
+            and not self.total_full(snapshot)
+        ):
+            for name in open_providers:
+                scopes = {
+                    group.scopes
+                    for group, verdict in verdicts.items()
+                    if group.provider == name and verdict.is_open
+                }
+                if (
+                    not self.running_of(name, snapshot)
+                    and not self.launchable_of(name, snapshot, scopes)
+                    and not any(
+                        snapshot.task_providers.get(key.task) == name
+                        for key in self.booked
+                    )
+                ):
+                    dry = (name, 0)
+                    idle_retry = True
+                    break
         if dry is None:
             return
         if not config.heartbeat_webhook_url:
@@ -702,12 +737,9 @@ class Pacer:
                 "PACER_HEARTBEAT_WEBHOOK_SECRET to enable refilling"
             )
             return
-        now = snapshot.now
-        if self._last_heartbeat_at is not None and not self._launched_since_heartbeat:
-            remaining = config.heartbeat_min_interval - (now - self._last_heartbeat_at)
-            if remaining > 0:
-                log.info("heartbeat: cooldown, retry in %.0fs", remaining)
-                return
+        if remaining > 0 and not idle_retry:
+            log.info("heartbeat: cooldown, retry in %.0fs", remaining)
+            return
         if any(
             task.get("title") == HEARTBEAT_TITLE
             and any(
@@ -719,8 +751,14 @@ class Pacer:
             log.info("heartbeat: already running")
             return
         provider_name, launchable = dry
+        proactive = (
+            not idle_retry
+            and not self._launched_since_heartbeat
+            and self.running_of(provider_name, snapshot) > 0
+        )
         self._last_heartbeat_at = now
         self._launched_since_heartbeat = False
+        self._heartbeat_idle_retry = False
         try:
             status = client.post_webhook(
                 config.heartbeat_webhook_url,
@@ -732,6 +770,7 @@ class Pacer:
             status = str(error)
         line = f"heartbeat: {provider_name} has {launchable} launchable -> webhook {status}"
         accepted = isinstance(status, int) and 200 <= status < 300
+        self._heartbeat_idle_retry = accepted and proactive
         (log.info if accepted else log.warning)(line)
         self.log_event({
             "t": round(now, 3), "kind": "heartbeat", "provider": provider_name,

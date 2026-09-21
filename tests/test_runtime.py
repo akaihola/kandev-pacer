@@ -23,6 +23,7 @@ from kandev_pacer.config import (
     Settings,
     settings,
 )
+from kandev_pacer.quota import Verdict
 from kandev_pacer.runtime import (
     ERROR_RESTATE,
     Pacer,
@@ -31,7 +32,7 @@ from kandev_pacer.runtime import (
     dump_order,
     queued_counts,
 )
-from kandev_pacer.selection import Booking, fail_backoff
+from kandev_pacer.selection import ActionKey, Booking, fail_backoff
 from kandev_pacer.workflow import Board
 
 
@@ -983,6 +984,228 @@ def test_heartbeat_holds_for_the_minimum_interval(pacer, board, heartbeat, monke
     tick(pacer, board, [], {}, {})
     assert len(heartbeat) == 1
     monkeypatch.setattr(pacer, "_last_heartbeat_at", pacer._last_heartbeat_at - 1800)
+    tick(pacer, board, [], {}, {})
+    assert len(heartbeat) == 2
+
+
+@pytest.fixture
+def heartbeat_before_idle(pacer, board, heartbeat, monkeypatch):
+    """A successful proactive refill, 126 seconds before existing work finishes."""
+    now = 1_754_000_000.0
+    monkeypatch.setattr(runtime.time, "time", lambda: now)
+    monkeypatch.setattr(settings, "providers_raw", "anthropic openai")
+    monkeypatch.setattr(settings, "concurrency", 3)
+    board.agents_map = {
+        "fable": {
+            "agent": "claude-acp",
+            "billing_type": "subscription",
+            "model": "Fable",
+        },
+        "codex": {"agent": "codex-acp", "billing_type": "subscription"},
+    }
+    board.usage_windows = [
+        {
+            "label": "7-day (Fable)",
+            "utilization_pct": 10,
+            "reset_at": "2025-08-07T00:00:00Z",
+            "scope": "Fable",
+        }
+    ]
+    verdicts = {
+        "anthropic": Verdict("open", 0.082, ""),
+        "openai": Verdict("paused", -0.007, "headroom=-0.007 PAUSED", now + 126 + 4442),
+    }
+    monkeypatch.setattr(
+        pacer, "verdict_for", lambda group, snapshot: verdicts[group.provider]
+    )
+    task = _task("busy", "ip", "Existing work", profile="fable")
+    tick(pacer, board, [task], {"busy": _sess("s-busy", "RUNNING")}, {})
+    assert len(heartbeat) == 1
+    now += 126
+    return verdicts
+
+
+def test_heartbeat_retries_once_when_an_open_provider_becomes_idle(
+    pacer, board, heartbeat, heartbeat_before_idle, caplog
+):
+    assert (
+        settings.heartbeat_min_interval
+        - (runtime.time.time() - pacer._last_heartbeat_at)
+        == 1674
+    )
+    with caplog.at_level(logging.INFO, logger="kandev-pacer"):
+        tick(pacer, board, [], {}, {})
+    assert (
+        "[anthropic (Fable)] headroom=+0.082 open, nothing to launch (0/3 running)"
+        in caplog.text
+    )
+    assert (
+        "[openai] headroom=-0.007 PAUSED (0 running), resumes in ~1h 14m 02s"
+        in caplog.text
+    )
+    assert actions(board) == []
+    assert len(heartbeat) == 2
+    assert heartbeat[-1][2] == {
+        "source": "kandev-pacer",
+        "provider": "anthropic",
+        "launchable": 0,
+    }
+    tick(pacer, board, [], {}, {})
+    assert len(heartbeat) == 2
+
+
+@pytest.mark.parametrize(
+    "guard",
+    [
+        "closed",
+        "blind",
+        "busy",
+        "full",
+        "total",
+        "booking",
+        "drain",
+        "fallback",
+        "active",
+        "disabled",
+        "threshold",
+    ],
+)
+def test_heartbeat_idle_retry_respects_existing_guards(
+    pacer, board, heartbeat, heartbeat_before_idle, monkeypatch, guard
+):
+    tasks, sessions, queues = [], {}, {}
+    if guard in {"closed", "blind"}:
+        gate = "paused" if guard == "closed" else "blind"
+        heartbeat_before_idle["anthropic"] = Verdict(gate, 1.0, "WITHHOLDING")
+    elif guard in {"busy", "full", "total", "active"}:
+        profile = "codex" if guard in {"total", "active"} else "fable"
+        title = "[Auto] Heartbeat" if guard == "active" else "Existing work"
+        tasks = [_task("busy", "ip", title, profile=profile)]
+        sessions = {"busy": _sess("s-busy", "RUNNING")}
+        if guard == "total":
+            monkeypatch.setattr(settings, "concurrency_total", 1)
+        elif guard == "full":
+            monkeypatch.setattr(settings, "concurrency", 1)
+    elif guard == "booking":
+        tasks = [_task("booked", "ip", profile="fable")]
+        sessions = {"booked": _sess("s-booked", "WAITING_FOR_INPUT")}
+        pacer.booked[ActionKey("booked", "ip", "s-booked")] = Booking(
+            runtime.time.time()
+        )
+    elif guard == "drain":
+        heartbeat_before_idle["openai"] = Verdict("open", 0.1, "")
+        tasks = [_task("queued", "rv", profile="codex")]
+        sessions = {"queued": _sess("s-queued", "WAITING_FOR_INPUT")}
+        queues = {"s-queued": 1}
+    elif guard == "fallback":
+        monkeypatch.setattr(settings, "fallback_after", 1)
+        tasks = [_task("fallback", "ip", profile="codex")]
+        sessions = {"fallback": _sess("s-fallback", "WAITING_FOR_INPUT")}
+    elif guard == "disabled":
+        monkeypatch.setattr(settings, "heartbeat_webhook_url", "")
+    else:
+        monkeypatch.setattr(settings, "heartbeat_min_launchable", 0)
+    tick(pacer, board, tasks, sessions, queues)
+    assert len(heartbeat) == 1
+    expected = {"drain": ["message.queue.drain"], "fallback": ["session.launch"]}
+    assert actions(board) == expected.get(guard, [])
+
+
+def test_heartbeat_idle_retry_checks_later_open_providers(
+    pacer, board, heartbeat, heartbeat_before_idle
+):
+    heartbeat_before_idle["openai"] = Verdict("open", 0.1, "")
+    task = _task("busy", "ip", profile="fable")
+    tick(pacer, board, [task], {"busy": _sess("s-busy", "RUNNING")}, {})
+    assert len(heartbeat) == 2
+    assert heartbeat[-1][2]["provider"] == "openai"
+    tick(pacer, board, [task], {"busy": _sess("s-busy", "RUNNING")}, {})
+    assert len(heartbeat) == 2
+
+
+def test_heartbeat_idle_retry_ignores_work_in_closed_scope_classes(
+    pacer, board, heartbeat, heartbeat_before_idle, monkeypatch
+):
+    board.agents_map["opus"] = {
+        "agent": "claude-acp",
+        "billing_type": "subscription",
+        "model": "opus",
+    }
+
+    def verdict(group, snapshot):
+        if group.provider == "anthropic" and not group.scopes:
+            return Verdict("open", 0.1, "")
+        return Verdict("paused", -0.1, "PAUSED")
+
+    monkeypatch.setattr(pacer, "verdict_for", verdict)
+    tasks = [_task("general", "dn", profile="opus")]
+    tasks += [_task(f"f{i}", "ip", profile="fable") for i in range(2)]
+    sessions = {f"f{i}": _sess(f"s{i}", "WAITING_FOR_INPUT") for i in range(2)}
+    tick(pacer, board, tasks, sessions, {})
+    assert actions(board) == []
+    assert len(heartbeat) == 2
+    assert heartbeat[-1][2] == {
+        "source": "kandev-pacer",
+        "provider": "anthropic",
+        "launchable": 0,
+    }
+
+
+@pytest.mark.parametrize("status", [409, "error"])
+def test_heartbeat_failed_idle_retry_is_throttled(
+    pacer, board, heartbeat, heartbeat_before_idle, monkeypatch, status
+):
+    attempts = []
+
+    def post(*args):
+        attempts.append(args)
+        if status == "error":
+            raise client.WriteFailed("unavailable")
+        return status
+
+    monkeypatch.setattr(client, "post_webhook", post)
+    tick(pacer, board, [], {}, {})
+    tick(pacer, board, [], {}, {})
+    assert len(attempts) == 1
+    now = runtime.time.time()
+    monkeypatch.setattr(runtime.time, "time", lambda: now + 1800)
+    tick(pacer, board, [], {}, {})
+    assert len(attempts) == 2
+
+
+@pytest.mark.parametrize("status", [409, "error"])
+def test_heartbeat_failed_proactive_attempt_does_not_arm_idle_retry(
+    pacer, board, heartbeat, monkeypatch, status
+):
+    attempts = []
+
+    def post(*args):
+        attempts.append(args)
+        if status == "error":
+            raise client.WriteFailed("unavailable")
+        return status
+
+    monkeypatch.setattr(client, "post_webhook", post)
+    task = _task("busy", "ip")
+    tick(pacer, board, [task], {"busy": _sess("s-busy", "RUNNING")}, {})
+    tick(pacer, board, [], {}, {})
+    assert len(attempts) == 1
+
+
+def test_heartbeat_launch_earned_refill_does_not_arm_idle_retry(
+    pacer, board, heartbeat, heartbeat_before_idle
+):
+    tasks = [
+        _task("busy", "ip", profile="fable"),
+        _task("ready", "ip", profile="fable"),
+    ]
+    sessions = {
+        "busy": _sess("s-busy", "RUNNING"),
+        "ready": _sess("s-ready", "WAITING_FOR_INPUT"),
+    }
+    tick(pacer, board, tasks, sessions, {})
+    assert actions(board) == ["session.launch"]
+    assert len(heartbeat) == 2
     tick(pacer, board, [], {}, {})
     assert len(heartbeat) == 2
 
