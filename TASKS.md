@@ -16,6 +16,15 @@ Rules for TASKS.md usage are at the bottom of the file.
 
 ## In Progress
 
+- [*] It's hard to understand what this output means:
+
+    ```
+    ❯ set -a; source ~/.config/secrets/kandev-pacer.env; set +a; uv run --frozen kandev-learn b224e8f2-59b4-4d58-9115-bfdefdbc2c60
+    kandev-learn: observation identity conflict
+    ❯ set -a; source ~/.config/secrets/kandev-pacer.env; set +a; uv run --frozen kandev-learn 6e871e6b-45b5-44e4-86b6-ea4fa71e499e
+    kandev-learn: observation identity conflict
+    ```
+
 ## Completed
 
 - [*] `kandev-learn sweep` now stores the JSON as frontmatter in the session observation
