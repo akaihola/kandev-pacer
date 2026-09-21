@@ -20,6 +20,121 @@ function local(value) {
   return JSON.parse(JSON.stringify(value));
 }
 
+// Identity fields from GET /api/v1/tasks/:id/sessions on gogo, 2026-09-21.
+const sessionFixture = JSON.parse(readFileSync(new URL("./fixtures/queue/sessions.json", import.meta.url)));
+const primary = sessionFixture.sessions[0];
+
+function queueClick({ sessions = sessionFixture, taskStatus = 200, sessionsStatus = 200, queueError } = {}) {
+  const sent = [], fetched = [], alerts = [], edits = [];
+  let closed = false;
+  const editor = { innerText: "keep this prompt", querySelector: () => null, focus() {} };
+  const button = { disabled: false, closest: () => ({ querySelector: () => editor }) };
+  const ctx = load({
+    location: { origin: "https://kandev.example.test:8449", pathname: `/tasks/${primary.task_id}` },
+    document: { querySelectorAll: () => [], body: {}, execCommand: (command) => edits.push(command) },
+    alert: (message) => alerts.push(message),
+    fetch: async (url) => {
+      fetched.push(url);
+      const isSessions = url.endsWith("/sessions");
+      const status = isSessions ? sessionsStatus : taskStatus;
+      return { ok: status === 200, status, json: async () => isSessions ? sessions : { id: primary.task_id } };
+    },
+    WebSocket: class {
+      constructor(url) {
+        assert.equal(url, "wss://kandev.example.test:8449/ws");
+        queueMicrotask(() => this.onopen());
+      }
+      send(message) {
+        sent.push(JSON.parse(message));
+        queueMicrotask(() => this.onmessage({ data: JSON.stringify({
+          id: "us-queue", type: queueError ? "error" : "response", payload: { message: queueError },
+        }) }));
+      }
+      close() { closed = true; }
+    },
+  });
+  return { ctx, button, sent, fetched, alerts, edits, get closed() { return closed; } };
+}
+
+test("Queue click maps the live REST identity and clears only after admission", async () => {
+  const click = queueClick();
+  await click.ctx.onQueue(click.button);
+  assert.deepEqual(click.alerts, []);
+  assert.deepEqual(click.fetched.sort(), [
+    `/api/v1/tasks/${primary.task_id}`, `/api/v1/tasks/${primary.task_id}/sessions`,
+  ]);
+  assert.deepEqual(click.sent, [{
+    id: "us-queue", type: "request", action: "message.queue.add",
+    payload: {
+      task_id: primary.task_id, session_id: primary.id,
+      session_incarnation_id: primary.queue_incarnation_id, content: "keep this prompt",
+    },
+  }]);
+  assert.deepEqual(click.edits, ["selectAll", "delete"]);
+  assert.equal(click.button.disabled, false);
+  assert.equal(click.closed, true);
+});
+
+test("Queue rejection keeps the composer and restores the button", async () => {
+  const click = queueClick({ queueError: "stale session incarnation" });
+  await click.ctx.onQueue(click.button);
+  assert.deepEqual(click.alerts, ["Queue failed: stale session incarnation"]);
+  assert.deepEqual(click.edits, []);
+  assert.equal(click.sent.length, 1);
+  assert.equal(click.closed, true);
+  assert.equal(click.button.disabled, false);
+});
+
+for (const [name, options, error] of [
+  ["task HTTP error", { taskStatus: 404 }, /task lookup failed \(HTTP 404\)/],
+  ["sessions HTTP error", { sessionsStatus: 503 }, /session lookup failed \(HTTP 503\)/],
+  ["missing sessions", { sessions: {} }, /invalid task sessions response/],
+  ["malformed sessions", { sessions: { sessions: {} } }, /invalid task sessions response/],
+  ["null session", { sessions: { sessions: [null] } }, /task session identity is unavailable/],
+  ["no sessions", { sessions: { sessions: [] } }, /task session identity is unavailable/],
+  ...[undefined, "", " ", 7, {}].map((value) => [
+    `invalid incarnation ${JSON.stringify(value)}`,
+    { sessions: { sessions: [{ ...primary, queue_incarnation_id: value }] } },
+    /task session identity is unavailable/,
+  ]),
+  ["wrong task", { sessions: { sessions: [{ ...primary, task_id: "another-task" }] } }, /task session identity is unavailable/],
+  ["invalid session id", { sessions: { sessions: [{ ...primary, id: {} }] } }, /task session identity is unavailable/],
+  ["invalid primary with valid secondary", { sessions: { sessions: [
+    { ...primary, queue_incarnation_id: null },
+    { ...primary, id: "secondary", is_primary: false },
+  ] } }, /task session identity is unavailable/],
+]) {
+  test(`Queue refuses ${name} without changing queue or composer`, async () => {
+    const click = queueClick(options);
+    await click.ctx.onQueue(click.button);
+    assert.equal(click.alerts.length, 1);
+    assert.match(click.alerts[0], error);
+    assert.deepEqual(click.sent, []);
+    assert.deepEqual(click.edits, []);
+    assert.equal(click.button.disabled, false);
+  });
+}
+
+for (const wrapped of [false, true]) {
+  for (const primaryId of ["older", undefined]) {
+    test(`session selection preserves task primary and first-session fallback, wrapped=${wrapped}, primary=${primaryId}`, async () => {
+      const ctx = load({
+        fetch: async (url) => ({
+          ok: true,
+          json: async () => {
+            const task = { primary_session_id: primaryId };
+            return url.endsWith("/sessions") ? { sessions: [
+              { ...primary, id: "newer", is_primary: false },
+              { ...primary, id: "older", is_primary: false },
+            ] } : wrapped ? { task } : task;
+          },
+        }),
+      });
+      assert.equal((await ctx.queueTarget(primary.task_id)).sessionId, primaryId ?? "newer");
+    });
+  }
+}
+
 function load(overrides = {}) {
   const context = {
     document: { querySelectorAll: () => [], body: {} },
@@ -179,8 +294,9 @@ test("queues with the current primary session incarnation", async () => {
       close() {}
     },
     fetch: async (url) => ({
+      ok: true,
       json: async () => url.endsWith("/sessions")
-        ? { sessions: [{ id: "stale", queue_incarnation_id: "old", is_primary: false }, { id: "current", queue_incarnation_id: "inc-7", is_primary: true }] }
+        ? { sessions: [{ id: "stale", task_id: "task-7", queue_incarnation_id: "old", is_primary: false }, { id: "current", task_id: "task-7", queue_incarnation_id: "inc-7", is_primary: true }] }
         : { task: { id: "task-7", primary_session_id: "stale" } },
     }),
   });
@@ -242,7 +358,7 @@ test("refuses innerText when the document is unreadable and a chip is present", 
 
 test("missing queue incarnation rejects before admission", async () => {
   const ctx = load({
-    fetch: async () => ({ json: async () => ({ sessions: [{ id: "s", is_primary: true }] }) }),
+    fetch: async () => ({ ok: true, json: async () => ({ sessions: [{ id: "s", task_id: "t", is_primary: true }] }) }),
   });
   await assert.rejects(ctx.queueTarget("t"), /task session identity is unavailable/);
 });

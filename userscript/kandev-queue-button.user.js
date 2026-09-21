@@ -3,7 +3,7 @@
 // @description  Adds a "Queue" button beside the composer's submit button. Parks the
 //               typed prompt on the session's message queue instead of starting a turn,
 //               so kandev-pacer decides when the quota gets spent.
-// @version      1.1.3
+// @version      1.1.4
 // @include      /^[^:]*?:\/\/[^\/]*?:(38429|8449)\/.*?$/
 // @grant        none
 // @run-at       document-idle
@@ -299,18 +299,23 @@ function queueMessage(taskId, sessionId, sessionIncarnationId, payload) {
 
 // The queue API now validates all three identities. Read the current session
 // incarnation instead of relying on the task's cached primary_session_id.
+// REST calls it queue_incarnation_id; only the WS payload uses session_incarnation_id.
 async function queueTarget(taskId) {
   const [taskRes, sessionsRes] = await Promise.all([
     fetch(`/api/v1/tasks/${taskId}`),
     fetch(`/api/v1/tasks/${taskId}/sessions`),
   ]);
+  if (!taskRes.ok) throw new Error(`task lookup failed (HTTP ${taskRes.status})`);
+  if (!sessionsRes.ok) throw new Error(`session lookup failed (HTTP ${sessionsRes.status})`);
   const task = await taskRes.json();
-  const sessions = (await sessionsRes.json()).sessions ?? [];
-  const primaryId = (task.task ?? task).primary_session_id;
-  const session = sessions.find((candidate) => candidate.is_primary) ??
-    sessions.find((candidate) => candidate.id === primaryId) ?? sessions[0];
-  if (!session?.id || !session.queue_incarnation_id)
-    throw new Error("task session identity is unavailable");
+  const sessions = (await sessionsRes.json())?.sessions;
+  if (!Array.isArray(sessions)) throw new Error("invalid task sessions response");
+  const primaryId = (task?.task ?? task)?.primary_session_id;
+  const session = sessions.find((candidate) => candidate?.is_primary === true) ??
+    sessions.find((candidate) => candidate?.id === primaryId) ?? sessions[0];
+  if (session?.task_id !== taskId ||
+      ![session?.id, session?.queue_incarnation_id].every((id) => typeof id === "string" && id.trim()))
+    throw new Error("task session identity is unavailable: expected id, task_id and queue_incarnation_id from the sessions API");
   return { sessionId: session.id, sessionIncarnationId: session.queue_incarnation_id };
 }
 

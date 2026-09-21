@@ -301,3 +301,11 @@ Deploy both the Python repair and the updated installed userscript. Restart the
 actual pacer process with its existing configuration and credentials, then verify
 queue reads from the replacement process. A merge alone does not update a running
 Python process. Test prompt admission and release only on a designated test task.
+
+For the Queue button, replace the installed script in the browser's userscript
+manager with `userscript/kandev-queue-button.user.js`, confirm version `1.1.4`, save,
+and reload the Kandev page. Updating this repository does not update the browser's
+installed copy. Version `1.1.2` reads the wrong REST field and reports
+`task session identity is unavailable` even when the API returns a valid identity.
+Version `1.1.3` fixed that mapping; `1.1.4` also rejects failed HTTP lookups and
+invalid identities before queue admission, preserving the composer text.

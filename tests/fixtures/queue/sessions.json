@@ -1,0 +1,11 @@
+{
+  "sessions": [
+    {
+      "id": "b41aae69-ef4c-4b8b-abd8-9e6ca05768ac",
+      "task_id": "09727f05-20ca-49e0-a2f7-21a9cffa68e6",
+      "queue_incarnation_id": "9d935446-5f47-43aa-a161-ceb71c6d4c37",
+      "is_primary": true
+    }
+  ],
+  "total": 1
+}
