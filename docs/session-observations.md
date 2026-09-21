@@ -148,3 +148,50 @@ old and new observations to check that both formats contribute to the totals.
 `uv run --frozen kandev-learn sweep --dry-run` previews the next batch without writes.
 Existing Markdown observations keep their old format; use a new observation when
 checking the split output.
+
+## Identity conflicts and recovery
+
+A conflict now names the observation metadata file, database, expected task ID and
+archive timestamp, and stored values. The command exits with status 1 without
+overwriting the conflicting record. Sweep keeps its pending work for a retry.
+
+Identity checks use the full stored timestamp. Older frontmatter may contain only
+milliseconds without a timezone. That shortened value cannot prove which archive
+event it belongs to, so collection rejects it with a precision explanation. Legacy
+records with an exact identity still work, and digest can still read old records.
+New JSON sidecars retain the original identity; filename and display precision stay
+unchanged.
+
+First verify the named database and vault. If the observation is confirmed stale,
+move both existing files named in the error, Markdown and JSON, to a backup outside
+the observations tree. Move whichever files exist; legacy observations may have no
+JSON sidecar. Rerun the same command with the same options. Keep the backup until you
+have compared the regenerated record. Do not edit identity fields or clear sweep
+state. If the stored record represents another valid archive event, retain it and
+export the requested task with `--vault /path/to/separate-vault` instead.
+
+### Verify the diagnostics
+
+From `~/prg/kandev-pacer`, retry an affected task:
+
+```bash
+uv run --frozen kandev-learn b224e8f2-59b4-4d58-9115-bfdefdbc2c60
+```
+
+If its conflict remains, stderr should include the expected and stored identities,
+both observation paths, the database path and recovery instructions. Check the exit
+status with `echo $?`; it should be 1. A task whose conflict has already been resolved
+prints its Markdown path and exits 0 instead.
+
+After following the backup instructions, rerun the command to regenerate the record.
+Check that its JSON contains the full `archived_at` from the database. Run it once
+more and verify that it returns the same path without changing either file. For a
+blocked sweep, rerun `uv run --frozen kandev-learn sweep` after resolving the named
+conflict; pending tasks should continue without resetting state.
+
+These fixture checks exercise collisions, preservation on failure, backup recovery,
+and exact retries without touching the real database or vault:
+
+```bash
+uv run --frozen pytest tests/test_learn.py -k 'identity or invalid_metadata'
+```
