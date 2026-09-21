@@ -174,3 +174,36 @@ These validate the unchanged code baseline, not the proposed recovery behavior.
 the unchanged [15] bullet from both versions confirms that no other text differs.
 The pre-existing Fable issue appears under both Scheduled and Completed in main;
 it was deliberately left untouched to keep this task's tracker change to [15].
+
+## AI implementation review, 2026-09-21
+
+Result: blocker confirmed; the feature is not complete or approved for deployment.
+The branch contains the status move and evidence only. The recovery command,
+opt-in settings, process management, fresh-quota integration, README/provider
+updates and new recovery tests remain unimplemented.
+
+At `2026-09-21T16:57:48Z`, a read-only check found the shared credential's expiry
+had advanced to `2026-09-22T00:33:18.333Z`. It was still unexpired. This confirms
+that the earlier expiry time is no longer a usable test opportunity. It does not
+identify the writer, prove renewal from an expired state, or validate a command
+started by the pacer. The review did not invoke Claude, make a model request,
+or change credentials. The proof-first gate remains unmet.
+
+The restored description and research report were compared byte-for-byte with
+stash tree `7dd86c8`; both match. The tracker audit normalized wrapped bullets
+and inspected all issue sections. Issue [15] occurs exactly once, under In
+Progress. Removing its unchanged bullet from both tracker versions leaves
+byte-identical text. The only duplicate found in both main and the branch is:
+
+- `Show Fable in scoped gate logs even when it is the only class, and diagnose
+  why waiting Fable tasks are not launchable.` Under Scheduled and Completed.
+
+Therefore the requested whole-tracker uniqueness proof cannot pass against this
+baseline. Removing that unrelated duplicate would violate the requirement that
+every other issue retain main's text. This review leaves it unchanged and records
+the conflict rather than claiming a passing audit. No duplicate was introduced
+by this branch.
+
+Review rerun: all 246 focused provider, configuration, runtime, quota and
+two-subscription tests passed. `git diff --check` passed after the review note.
+These checks cover the existing implementation, not the missing recovery feature.
