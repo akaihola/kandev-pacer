@@ -13,12 +13,12 @@ Rules for TASKS.md usage are at the bottom of the file.
 
 ## In Progress
 
+## Completed
+
 - [*] `kandev-learn sweep` now stores the JSON as frontmatter in the session observation
   Markdown file. Store the JSON in a separate file alongside the Markdown instead, but
   extract the initial user prompt (excluding system prompts, tools etc.) and the final
   answer (both truncated if long) in the Markdown file as well.
-
-## Completed
 
 - [*] I see this:
 
