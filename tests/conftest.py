@@ -13,14 +13,40 @@ The pacer talks to kandev two ways, and this fakes each at its own seam:
   frames to a real `_ws_call`. That keeps the wire handling under test.
 """
 import json
+import os
 import time
 from collections import deque
+from pathlib import Path
 
 import pytest
 import websocket
 
-from kandev_pacer import client, provider
-from kandev_pacer.config import settings
+_operator_settings = pytest.MonkeyPatch()
+
+
+def _load_test_modules():
+    # Settings load during import, before fixtures can isolate the offline suite.
+    if not os.environ.get("PACER_LIVE_KANDEV"):
+        for key in tuple(os.environ):
+            if key.startswith(("PACER_", "KANDEV_")):
+                _operator_settings.delenv(key)
+        default_config = Path.home() / ".config" / "kandev-pacer" / "config.toml"
+        is_file = Path.is_file
+        _operator_settings.setattr(
+            Path, "is_file", lambda path: path != default_config and is_file(path)
+        )
+
+    from kandev_pacer import client, provider
+    from kandev_pacer.config import settings
+
+    return client, provider, settings
+
+
+client, provider, settings = _load_test_modules()
+
+
+def pytest_unconfigure():
+    _operator_settings.undo()
 
 # 10% consumed against a half-elapsed window -> headroom positive, gate open.
 USAGE_PCT = 10
