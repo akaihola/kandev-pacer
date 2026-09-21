@@ -8,13 +8,13 @@ Rules for TASKS.md usage are at the bottom of the file.
 
 ## Scheduled
 
-- [15] Recover expired Claude credentials through Claude Code, then check fresh quota
-  before resuming tasks.
-
 - [*] Show Fable in scoped gate logs even when it is the only class, and diagnose why
   waiting Fable tasks are not launchable.
 
 ## In Progress
+
+- [15] Recover expired Claude credentials through Claude Code, then check fresh quota
+  before resuming tasks.
 
 ## Completed
 

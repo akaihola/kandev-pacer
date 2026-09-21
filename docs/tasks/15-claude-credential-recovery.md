@@ -94,3 +94,116 @@ required checks. Automated tests must not renew a real login or contact a model.
 
 Rollback is to disable the recovery setting. The pacer then returns to its existing
 behavior of withholding work when quota cannot be read. Do not roll credentials back.
+
+## Implementation gate check, 2026-09-21
+
+Implementation is blocked before adding recovery code. No expired credential was
+available to demonstrate renewal, and no recovery command has been proven. The
+checks below establish deployment facts, not successful recovery.
+
+### Task record recovered
+
+The main checkout at `77b998d` had neither issue [15] nor its description. The
+preserved stash `a81b24c` contains the original Scheduled bullet; its untracked
+tree `7dd86c8` contains this description and the research report. Main commit
+`9add66f` restores only those items. The stash remains intact. The feature branch
+was rebased onto main and moved only [15] to In Progress in `9aa14cd`.
+
+### Redacted deployment evidence
+
+Checks ran on gogo as `agent`. Host process inspection required execution outside
+the agent sandbox; sandbox process listings did not show the deployed services.
+
+| Check | Observed result |
+| --- | --- |
+| Standalone executable | `/home/agent/.local/bin/claude`, resolves to version `2.1.278` |
+| Kandev adapter's executable | `@anthropic-ai/claude-agent-sdk-linux-x64/claude` in the installed npm adapter tree, version `2.1.257` |
+| Other running Claude | Standalone version `2.1.269` also present |
+| Running pacer source | `PACER_QUOTA_SOURCE=pebble` |
+| Running pacer credential override | `PACER_CREDENTIALS` unset |
+| Shared credential directory | `HOME=/home/agent`, `CLAUDE_CONFIG_DIR` unset in inspected pacer/Claude processes |
+| Pacer TOML | No credential-path or quota-source override |
+| Credential store | `/home/agent/.claude/.credentials.json`, OAuth access and refresh fields present; contents not recorded |
+| Check time | `2026-09-21T15:23:23Z` |
+| Recorded access-token expiry | `2026-09-21T16:00:35.179Z`, still valid, about 37 minutes remaining |
+| `claude auth --help` | Offers login, logout and status; does not document a refresh-only command |
+| `claude auth status --help` | Describes authentication status and JSON/text output, not renewal |
+| `/home/agent/.local/bin/claude auth status` | Exit 0 in 1.68 seconds; access token and expiry unchanged; token still unexpired |
+
+Version/help/status commands used a 10-second timeout, disconnected stdin, `/tmp`
+as their working directory, and a separate process group. Status stdout/stderr
+went to `/dev/null`. Each group was cleaned up and its direct child reaped. No
+model request was made. No token, account details, credential copy, or raw status
+output was saved. Pacer code did not write credentials.
+
+### Why the proof cannot pass yet
+
+An unexpired token and a successful status command cannot demonstrate renewal.
+Active Claude sessions use the same store and may renew it before expiry. Editing
+the expiry, copying the refresh token, stopping other sessions, or logging out
+would alter a working shared login and is outside this experiment. A model request
+with the current token would consume usage without proving expired-token recovery.
+No post-recovery quota read or expiry-spanning idle observation is claimed.
+
+The next implementation attempt needs a naturally expired credential in this
+deployment's store and the bounded command experiment described above. Start with
+a non-model operation. If that fails, validate the supported isolation flags before
+trying the documented minimal model fallback. Record before/after expiry and a
+fresh quota result before choosing the production command. Do not treat the npm
+adapter version as interchangeable with the standalone version.
+
+The active Pebble deployment remains a separate constraint. Direct-reader recovery
+must not run on its snapshot failures. Do not silently switch its source or claim
+this deployment is repaired by a direct-reader change.
+
+No provider, configuration, runtime or README behavior changes were made. The
+task remains In Progress and automatic recovery remains unimplemented.
+
+### Checks for the blocked implementation handoff
+
+Using `uv run --frozen --offline`:
+
+- Focused provider, configuration, runtime, quota and two-subscription tests:
+  246 passed.
+- Full `pytest -q`: 483 passed, 20 skipped. Live tests remained disabled.
+- `darker --check`, `graylint`, `ruff check src tests` and `ty check src tests`:
+  passed.
+
+These validate the unchanged code baseline, not the proposed recovery behavior.
+`git diff --check` passed. Comparing the complete tracker to main after removing
+the unchanged [15] bullet from both versions confirms that no other text differs.
+The pre-existing Fable issue appears under both Scheduled and Completed in main;
+it was deliberately left untouched to keep this task's tracker change to [15].
+
+## AI implementation review, 2026-09-21
+
+Result: blocker confirmed; the feature is not complete or approved for deployment.
+The branch contains the status move and evidence only. The recovery command,
+opt-in settings, process management, fresh-quota integration, README/provider
+updates and new recovery tests remain unimplemented.
+
+At `2026-09-21T16:57:48Z`, a read-only check found the shared credential's expiry
+had advanced to `2026-09-22T00:33:18.333Z`. It was still unexpired. This confirms
+that the earlier expiry time is no longer a usable test opportunity. It does not
+identify the writer, prove renewal from an expired state, or validate a command
+started by the pacer. The review did not invoke Claude, make a model request,
+or change credentials. The proof-first gate remains unmet.
+
+The restored description and research report were compared byte-for-byte with
+stash tree `7dd86c8`; both match. The tracker audit normalized wrapped bullets
+and inspected all issue sections. Issue [15] occurs exactly once, under In
+Progress. Removing its unchanged bullet from both tracker versions leaves
+byte-identical text. The only duplicate found in both main and the branch is:
+
+- `Show Fable in scoped gate logs even when it is the only class, and diagnose
+  why waiting Fable tasks are not launchable.` Under Scheduled and Completed.
+
+Therefore the requested whole-tracker uniqueness proof cannot pass against this
+baseline. Removing that unrelated duplicate would violate the requirement that
+every other issue retain main's text. This review leaves it unchanged and records
+the conflict rather than claiming a passing audit. No duplicate was introduced
+by this branch.
+
+Review rerun: all 246 focused provider, configuration, runtime, quota and
+two-subscription tests passed. `git diff --check` passed after the review note.
+These checks cover the existing implementation, not the missing recovery feature.
