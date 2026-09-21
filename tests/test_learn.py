@@ -655,7 +655,8 @@ def test_legacy_identity_and_mixed_digest(sweep_args, observation, capsys):
     path = learn.record_path(args.vault, "task", observation["archived_at"])
     legacy = learn.formatted_record(observation)
     learn.publish(path, "---\n" + json.dumps(legacy) + "\n---\n")
-    assert learn.write_task(args, "task") == path
+    with pytest.raises(ValueError, match="precision"):
+        learn.write_task(args, "task")
     assert not path.with_suffix(".json").exists()
     new_record = {**observation, "task": "second"}
     second = learn.record_path(args.vault, "second", observation["archived_at"])
@@ -695,3 +696,159 @@ def test_prompt_display_limit_boundary(observation, length):
     assert formatted["sessions"][0]["initial_prompt"] == expected
     assert formatted["sessions"][0]["final_response"] == expected
     assert observation["sessions"][0]["initial_prompt"] == text
+
+
+@pytest.mark.parametrize("action", ["task", "sweep", "backfill"])
+@pytest.mark.parametrize(
+    "stored",
+    [
+        {"task": "other", "archived_at": "2026-09-01T00:00:00.123456Z"},
+        {"task": "task", "archived_at": "2026-09-01T00:00:00.123999Z"},
+        {"task": "task"},
+        {"task": "task", "archived_at": 42},
+    ],
+)
+def test_identity_cli_diagnostic(sweep_args, capsys, action, stored):
+    args = sweep_args
+    at = "2026-09-01T00:00:00.123456Z"
+    if action != "backfill":
+        learn.sweep(args)
+    add(args, "task", at)
+    if action == "backfill":
+        learn.sweep(args)
+    before_state = state(args)
+    path = fake_write(args, "task", at)
+    sidecar = path.with_suffix(".json")
+    sidecar.write_text(json.dumps(stored))
+    before = (path.read_bytes(), sidecar.read_bytes())
+    head = subprocess.check_output(["git", "-C", str(args.vault), "rev-parse", "HEAD"])
+    argv = [
+        "sweep" if action == "backfill" else action,
+        "--db",
+        str(args.db),
+        "--vault",
+        str(args.vault),
+        "--state",
+        str(args.state),
+    ]
+    if action == "backfill":
+        argv.append("--backfill")
+    capsys.readouterr()
+    assert learn.main(argv) == 1
+    error = capsys.readouterr().err
+    for expected in (
+        "observation identity conflict",
+        str(path),
+        str(sidecar),
+        str(args.db),
+        "Expected",
+        "task='task'",
+        repr(at),
+        "Stored",
+        repr(stored.get("task")),
+        repr(stored.get("archived_at")),
+        "--db",
+        "--vault",
+        "outside",
+        "both",
+        "same command",
+    ):
+        assert expected in error
+    assert "Traceback" not in error
+    assert before == (path.read_bytes(), sidecar.read_bytes())
+    assert head == subprocess.check_output(
+        ["git", "-C", str(args.vault), "rev-parse", "HEAD"]
+    )
+    after = state(args)
+    for key in ("watermark", "boundary", "backfill_done"):
+        assert after.get(key) == before_state.get(key)
+    if action != "task":
+        assert after["backfill_pending" if action == "backfill" else "pending"]
+
+
+def test_legacy_same_millisecond_is_ambiguous(sweep_args, observation):
+    args = sweep_args
+    at = observation["archived_at"]
+    path = learn.record_path(args.vault, "task", at)
+    learn.publish(
+        path, "---\n" + json.dumps(learn.formatted_record(observation)) + "\n---\n"
+    )
+    other = "2026-09-01T00:00:00.123999Z"
+    assert learn.record_path(args.vault, "task", other) == path
+    before = path.read_bytes()
+    for expected in (at, other):
+        with pytest.raises(ValueError, match="precision"):
+            learn.checked_record(path, "task", expected)
+    assert path.read_bytes() == before
+
+
+def test_identity_backup_recovery_and_exact_retry(sweep_args, observation, monkeypatch):
+    args = sweep_args
+    args.source_timeout = 1
+    at = observation["archived_at"]
+    add(args, "task", at)
+    path = fake_write(args, "task", at)
+    sidecar = path.with_suffix(".json")
+    sidecar.write_text(json.dumps({**observation, "task": "other"}))
+    with pytest.raises(ValueError, match="move both"):
+        learn.write_task(args, "task")
+    backup = args.home / "backup"
+    backup.mkdir()
+    for file in (path, sidecar):
+        file.rename(backup / file.name)
+    monkeypatch.setattr(learn, "collect_task", lambda *_: observation)
+    assert learn.write_task(args, "task") == path
+    before = (path.read_bytes(), sidecar.read_bytes())
+    monkeypatch.setattr(
+        learn, "collect_task", lambda *_: pytest.fail("retry collected")
+    )
+    assert learn.write_task(args, "task") == path
+    learn.sweep(args)
+    args.backfill = True
+    learn.sweep(args)
+    assert before == (path.read_bytes(), sidecar.read_bytes())
+    assert json.loads(sidecar.read_text()) == observation
+    assert len(list(args.vault.rglob("*.md"))) == 1
+    assert len(list(args.vault.rglob("*.json"))) == 1
+    assert json.loads((backup / sidecar.name).read_text())["task"] == "other"
+
+
+def test_exact_legacy_identity_retry(sweep_args, observation):
+    args = sweep_args
+    at = observation["archived_at"]
+    add(args, "task", at)
+    path = learn.record_path(args.vault, "task", at)
+    learn.publish(path, "---\n" + json.dumps(observation) + "\n---\n")
+    before = path.read_bytes()
+    assert learn.write_task(args, "task") == path
+    assert path.read_bytes() == before
+    assert not path.with_suffix(".json").exists()
+
+
+@pytest.mark.parametrize("content", ["{broken", "[]", "{}"])
+def test_invalid_metadata_diagnostic(sweep_args, capsys, content):
+    args = sweep_args
+    add(args, "task", "2026-09-01")
+    path = fake_write(args, "task", "2026-09-01")
+    sidecar = path.with_suffix(".json")
+    sidecar.write_text(content)
+    assert (
+        learn.main(
+            [
+                "task",
+                "--db",
+                str(args.db),
+                "--vault",
+                str(args.vault),
+                "--state",
+                str(args.state),
+            ]
+        )
+        == 1
+    )
+    error = capsys.readouterr().err
+    assert str(sidecar) in error
+    assert "Expected task='task', archived_at='2026-09-01'" in error
+    assert "move both" in error
+    assert "Traceback" not in error
+    assert sidecar.read_text() == content

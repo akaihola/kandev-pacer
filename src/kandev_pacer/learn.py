@@ -741,18 +741,53 @@ def read_record(path):
     if not isinstance(record, dict) or any(
         not isinstance(record.get(key), str) for key in ("task", "archived_at")
     ):
-        raise ValueError("invalid observation identity")
+        actual = (
+            f"task={record.get('task')!r}, archived_at={record.get('archived_at')!r}"
+            if isinstance(record, dict)
+            else "identity unavailable: expected a JSON object"
+        )
+        raise ValueError(f"missing or invalid identity fields. Stored {actual}")
     return record
 
 
-def checked_record(path, task_id, archived_at):
-    record = read_record(path)
-    allowed = {archived_at}
-    if not path.with_suffix(".json").exists():
-        allowed.add(format_timestamp(archived_at))
-    if record.get("task") != task_id or record.get("archived_at") not in allowed:
-        raise ValueError("observation identity conflict")
-    return record
+def checked_record(path, task_id, archived_at, db=None):
+    sidecar = path.with_suffix(".json")
+    source = sidecar if sidecar.exists() else path
+    try:
+        record = read_record(path)
+    except ValueError as exc:
+        reason = str(exc)
+    else:
+        if (record["task"], record["archived_at"]) == (task_id, archived_at):
+            return record
+        fields = [
+            key
+            for key, expected in (("task", task_id), ("archived_at", archived_at))
+            if record[key] != expected
+        ]
+        reason = (
+            f"{', '.join(fields)} differs. "
+            f"Stored task={record['task']!r}, archived_at={record['archived_at']!r}."
+        )
+        if source == path and record["archived_at"] == format_timestamp(archived_at):
+            reason += (
+                " Legacy timestamp formatting lost precision and timezone information; "
+                "the original archive identity cannot be established."
+            )
+    raise ValueError(
+        f"observation identity conflict in {source}\n"
+        f"Expected task={task_id!r}, archived_at={archived_at!r}"
+        + (f" from database {db}" if db is not None else "")
+        + f"\n{reason}\n"
+        "Verify --db and --vault, then inspect the stored identity. "
+        "No conflicting observation was overwritten.\n"
+        f"If confirmed stale/generated, move both existing files {path} and {sidecar} "
+        "to a backup outside the observations tree, then rerun the same command "
+        "with the same options. Moving only Markdown leaves the JSON conflict.\n"
+        "If the stored record is another valid archive event, retain it and export "
+        f"task {task_id!r} using a separate --vault destination. "
+        "Do not edit identity fields or reset sweep state."
+    )
 
 
 def write_task(args, task_id, expected=None):
@@ -768,11 +803,11 @@ def write_task(args, task_id, expected=None):
         return None
     path = record_path(args.vault, task_id, row[0])
     if path.exists():
-        checked_record(path, task_id, row[0])
+        checked_record(path, task_id, row[0], args.db)
         return path
     sidecar = path.with_suffix(".json")
     if sidecar.exists():
-        record = checked_record(path, task_id, row[0])
+        record = checked_record(path, task_id, row[0], args.db)
     else:
         record = collect_task(args.db, task_id, args.home, args.source_timeout)
     if record["archived_at"] != row[0]:
@@ -784,7 +819,7 @@ def write_task(args, task_id, expected=None):
     if not current or current[0] != record["archived_at"]:
         return None
     publish(sidecar, json.dumps(record, ensure_ascii=False, indent=2) + "\n")
-    record = checked_record(path, task_id, row[0])
+    record = checked_record(path, task_id, row[0], args.db)
     publish(path, render_record(record))
     return path
 
@@ -929,7 +964,7 @@ def sweep(args):
     for task_id, at in selected:
         path = record_path(args.vault, task_id, at)
         if path.exists():
-            checked_record(path, task_id, at)
+            checked_record(path, task_id, at, args.db)
         else:
             path = write_task(args, task_id, at)
         if path:
