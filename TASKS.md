@@ -13,12 +13,12 @@ Rules for TASKS.md usage are at the bottom of the file.
 
 ## In Progress
 
-- [7] Fix userscript Queue button session identifiers after the 0.94-dev upgrade.
-
 - [15] Recover expired Claude credentials through Claude Code, then check fresh quota
   before resuming tasks.
 
 ## Completed
+
+- [7] Fix userscript Queue button session identifiers after the 0.94-dev upgrade.
 
 - [*] Fix all test and linter failures, e.g. the `PACER_QUOTA_SOURCE` default test
   failure if it still occurs.
