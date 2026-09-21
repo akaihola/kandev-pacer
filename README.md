@@ -369,6 +369,11 @@ warning in a file you edited does not become your problem. All of it is configur
 `pyproject.toml` — the formatter aims for 88 columns, the linter only errors past 100,
 and graylint runs `ruff` and `ty` together.
 
+Offline tests ignore inherited `PACER_*`/`KANDEV_*` variables and the operator's
+default `~/.config/kandev-pacer/config.toml`. Tests still exercise explicit config
+files and environment overrides. The separate `PACER_LIVE_KANDEV=1` invocation
+keeps operator settings and credentials; its live contract tests otherwise skip.
+
 Coverage is one flag away and worth running when adding tests:
 `uv run pytest --cov=kandev_pacer --cov-report=term-missing`.
 

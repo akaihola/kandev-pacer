@@ -1,6 +1,23 @@
 import pytest
 
-from kandev_pacer.config import load_settings
+from kandev_pacer.config import Settings, load_settings
+
+
+def test_quota_source_defaults_to_direct(monkeypatch):
+    monkeypatch.delenv("PACER_QUOTA_SOURCE", raising=False)
+    assert Settings().quota_source == "direct"
+
+
+@pytest.mark.parametrize("source", ["direct", "pebble"])
+def test_quota_source_environment(monkeypatch, source):
+    monkeypatch.setenv("PACER_QUOTA_SOURCE", source)
+    assert Settings().quota_source == source
+
+
+def test_quota_source_rejects_unknown_values(monkeypatch):
+    monkeypatch.setenv("PACER_QUOTA_SOURCE", "unknown")
+    with pytest.raises(ValueError, match="PACER_QUOTA_SOURCE"):
+        Settings()
 
 
 def secret_file(tmp_path, text, mode=0o600):

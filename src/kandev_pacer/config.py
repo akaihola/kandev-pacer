@@ -218,9 +218,11 @@ class Settings(BaseSettings):
 
     @field_validator("quota_source", mode="after")
     @classmethod
-    def _known_quota_source(cls, value):
+    def _known_quota_source(cls, value: str) -> str:
         if value not in {"direct", "pebble"}:
             raise ValueError("PACER_QUOTA_SOURCE must be 'direct' or 'pebble'")
+        return value
+
     @field_validator("interactive_hours", mode="after")
     @classmethod
     def _valid_interactive_hours(cls, value):
