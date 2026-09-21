@@ -8,6 +8,17 @@ Rules for TASKS.md usage are at the bottom of the file.
 
 ## Scheduled
 
+- [*] I see this:
+
+    ```
+    [anthropic (Fable)] headroom=+0.082 open, nothing to launch (0/3 running)
+    [openai] headroom=-0.007 PAUSED (0 running), resumes in ~1h 14m 02s (~22:34), next tick in 30s
+    heartbeat: cooldown, retry in 1674s
+    ```
+
+    In this situation, shouldn't heartbeat be executed immediately because Fable has
+    nothing to launch?
+
 - [*] Show Fable in scoped gate logs even when it is the only class, and diagnose why
   waiting Fable tasks are not launchable.
 
