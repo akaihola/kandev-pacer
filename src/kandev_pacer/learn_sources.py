@@ -98,25 +98,30 @@ def content_text(content):
 
 
 def message_text(agent, entry):
-    if agent == "codex":
-        payload = entry.get("payload", {})
-        if payload.get("type") == "output_text":
-            return "assistant", payload.get("text", "")
-        if payload.get("type") == "message":
-            parts = payload.get("content", [])
-            return payload.get("role"), "\n".join(
-                p.get("text", "") for p in parts if isinstance(p, dict)
-            )
-        return None, ""
-    message = entry.get("message", {})
+    message = entry.get("payload", {}) if agent == "codex" else entry.get("message", {})
     role = message.get("role") or entry.get("type")
-    parts = []
-    for block in message.get("content", []) if isinstance(message, dict) else []:
-        if isinstance(block, str):
-            parts.append(block)
-        elif block.get("type") == "text":
-            parts.append(block.get("text", ""))
-    return role, "\n".join(parts)
+    if agent == "codex":
+        if message.get("type") == "output_text":
+            role = "assistant"
+        elif message.get("type") != "message":
+            return None, ""
+    if role not in {"user", "assistant"} or message.get("channel") not in {
+        None,
+        "final",
+    }:
+        return None, ""
+    content = message.get("content", message.get("text", ""))
+    if isinstance(content, str):
+        return role, content
+    return role, "\n".join(
+        block if isinstance(block, str) else block.get("text", "")
+        for block in content
+        if isinstance(block, str)
+        or (
+            isinstance(block, dict)
+            and block.get("type") in {"text", "input_text", "output_text"}
+        )
+    )
 
 
 def tool_events(agent, entries):
@@ -224,18 +229,20 @@ def opencode_entries(export):
         info = message.get("info", {})
         if info.get("modelID"):
             models.add(info["modelID"])
+        entries.append(
+            {
+                "timestamp": info.get("time", {}).get("created"),
+                "message": {
+                    "role": info.get("role"),
+                    "content": [
+                        part
+                        for part in message.get("parts", [])
+                        if part.get("type") == "text"
+                    ],
+                },
+            }
+        )
         for part in message.get("parts", []):
-            if part.get("type") == "text":
-                entries.append(
-                    {
-                        "timestamp": info.get("time", {}).get("created"),
-                        "message": {
-                            "role": info.get("role"),
-                            "content": [{"type": "text", "text": part.get("text", "")}],
-                        },
-                    }
-                )
-                continue
             if part.get("type") != "tool":
                 continue
             state = part.get("state", {})
@@ -409,6 +416,7 @@ def collect_transcripts(home, session, timeout=45):
     if not path:
         result["notes"].append(f"no data for {agent}")
         return result
+    messages = []
     try:
         with deadline(timeout):
             candidates = []
@@ -487,6 +495,16 @@ def collect_transcripts(home, session, timeout=45):
                             f"SELECT * FROM {table} WHERE {column}=?", (path,)
                         )
                     ]
+                rows.sort(
+                    key=lambda row: (
+                        timestamp(
+                            row["time_created"]
+                            if agent == "opencode"
+                            else row["started_at"]
+                        ),
+                        row["id"],
+                    )
+                )
                 for row in rows:
                     begin = timestamp(
                         row["time_created"]
@@ -568,7 +586,11 @@ def collect_transcripts(home, session, timeout=45):
                         candidates.append((row["id"], entries, None))
                         if full_window:
                             result["aggregate_ids"].append(row["id"])
-            for identity, entries, file in candidates:
+            for identity, entries, file in (
+                sorted(candidates, key=lambda candidate: candidate[0])
+                if agent != "hermes"
+                else candidates
+            ):
                 result["ids"].append(identity)
                 for tool in tool_events(agent, entries):
                     tool["id"] = identity + ":" + tool["id"]
@@ -586,12 +608,14 @@ def collect_transcripts(home, session, timeout=45):
                             {"at": e["timestamp"], **msg["usage"]}
                         )
                     role, text = message_text(agent, e)
-                    if text:
-                        messages = result.setdefault("messages", [])
-                        if messages and messages[-1][0] == role:
-                            messages[-1] = (role, messages[-1][1] + text)
-                        else:
-                            messages.append((role, text))
+                    if text.strip():
+                        messages.append(
+                            (
+                                timestamp(e["timestamp"]) if e.get("timestamp") else 0,
+                                role,
+                                text,
+                            )
+                        )
                 if file and agent in ("claude", "codex"):
                     requests = (
                         cache_waste.claude_requests(file)
@@ -611,6 +635,9 @@ def collect_transcripts(home, session, timeout=45):
         subprocess.TimeoutExpired,
     ) as exc:
         result["notes"].append(f"no data for {agent}: {type(exc).__name__}")
+    result["messages"] = [
+        (role, text) for _, role, text in sorted(messages, key=lambda item: item[0])
+    ]
     if not result["ids"]:
         result["notes"].append("no transcript")
     else:

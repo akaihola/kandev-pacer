@@ -18,6 +18,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from textwrap import dedent
 from typing import Any
+from urllib.parse import quote
 
 from .learn_sources import (
     METRICS,
@@ -525,22 +526,26 @@ def collect_task(db_path, task_id, home, timeout=45):
 
 
 def render_record(record):
+    json_name = (
+        record_path(Path("."), record["task"], record["archived_at"])
+        .with_suffix(".json")
+        .name
+    )
     record = formatted_record(record)
     names = record.get("step_names", {})
 
     def step_name(step_id):
         return names.get(step_id) or step_id
 
-    # JSON is a YAML 1.2 document; no extra parser dependency is needed.
     sections = [
-        "---\n" + json.dumps(record, ensure_ascii=False, indent=2) + "\n---\n",
         "# Session observations",
+        f"Structured observation: [JSON]({quote(json_name)}).",
         f"Observation file ID: `{record['task']}` (task ID).",
         dedent("""\
         Durations are seconds. Output sizes are UTF-8 bytes. Costs are recorded USD.
         Token categories retain source semantics; reasoning can be included in output.
         Cache gap rows show elapsed time and cache counts, not a confirmed miss cause.
-        Tables derive from the source-labeled measurements in the frontmatter.
+        Tables derive from the source-labeled measurements in the adjacent JSON file.
         """),
     ]
     sections.extend(record["notes"])
@@ -548,6 +553,16 @@ def render_record(record):
         sections.extend(
             [
                 f"## Session {s['id']}",
+                "### Initial user prompt",
+                "\n".join(
+                    "> " + line
+                    for line in (s.get("initial_prompt") or "No data.").splitlines()
+                ),
+                "### Final answer",
+                "\n".join(
+                    "> " + line
+                    for line in (s.get("final_response") or "No data.").splitlines()
+                ),
                 "### Totals",
                 table(
                     [*METRICS, "availability"],
@@ -714,7 +729,30 @@ def publish(path, content):
 
 
 def read_record(path):
-    return json.loads(path.read_text().split("\n---\n", 1)[0].removeprefix("---\n"))
+    sidecar = path.with_suffix(".json")
+    if sidecar.exists():
+        text = sidecar.read_text()
+    else:
+        text = path.read_text()
+        if not text.startswith("---\n") or "\n---\n" not in text:
+            raise ValueError("observation JSON is missing")
+        text = text.split("\n---\n", 1)[0].removeprefix("---\n")
+    record = json.loads(text)
+    if not isinstance(record, dict) or any(
+        not isinstance(record.get(key), str) for key in ("task", "archived_at")
+    ):
+        raise ValueError("invalid observation identity")
+    return record
+
+
+def checked_record(path, task_id, archived_at):
+    record = read_record(path)
+    allowed = {archived_at}
+    if not path.with_suffix(".json").exists():
+        allowed.add(format_timestamp(archived_at))
+    if record.get("task") != task_id or record.get("archived_at") not in allowed:
+        raise ValueError("observation identity conflict")
+    return record
 
 
 def write_task(args, task_id, expected=None):
@@ -730,11 +768,13 @@ def write_task(args, task_id, expected=None):
         return None
     path = record_path(args.vault, task_id, row[0])
     if path.exists():
-        record = read_record(path)
-        if (record["task"], record["archived_at"]) != (task_id, row[0]):
-            raise ValueError("observation identity conflict")
+        checked_record(path, task_id, row[0])
         return path
-    record = collect_task(args.db, task_id, args.home, args.source_timeout)
+    sidecar = path.with_suffix(".json")
+    if sidecar.exists():
+        record = checked_record(path, task_id, row[0])
+    else:
+        record = collect_task(args.db, task_id, args.home, args.source_timeout)
     if record["archived_at"] != row[0]:
         return None
     with contextlib.closing(read_db(args.db)) as db:
@@ -743,6 +783,8 @@ def write_task(args, task_id, expected=None):
         ).fetchone()
     if not current or current[0] != record["archived_at"]:
         return None
+    publish(sidecar, json.dumps(record, ensure_ascii=False, indent=2) + "\n")
+    record = checked_record(path, task_id, row[0])
     publish(path, render_record(record))
     return path
 
@@ -887,13 +929,13 @@ def sweep(args):
     for task_id, at in selected:
         path = record_path(args.vault, task_id, at)
         if path.exists():
-            record = read_record(path)
-            if (record.get("task"), record.get("archived_at")) != (task_id, at):
-                raise ValueError("observation identity conflict")
+            checked_record(path, task_id, at)
         else:
             path = write_task(args, task_id, at)
         if path:
             paths.append(path)
+            if path.with_suffix(".json").exists():
+                paths.append(path.with_suffix(".json"))
     commit_records(args.vault, paths, args.state / "commit.json")
     if args.backfill:
         state["backfill_done"] = [*state.get("backfill_done", []), *selected]

@@ -47,8 +47,9 @@ def add(args, task, at):
 def fake_write(args, task_id, at):
     path = learn.record_path(args.vault, task_id, at)
     learn.publish(
-        path, "---\n" + json.dumps({"task": task_id, "archived_at": at}) + "\n---\n"
+        path.with_suffix(".json"), json.dumps({"task": task_id, "archived_at": at})
     )
+    learn.publish(path, "# Session observations\n")
     return path
 
 
@@ -117,7 +118,7 @@ def test_commit_preserves_user_index_and_disables_hooks(sweep_args):
     hook.write_text("#!/bin/sh\ntouch hook-ran\n")
     hook.chmod(0o755)
     path = fake_write(args, "task", "2026-09-01")
-    learn.commit_records(args.vault, [path])
+    learn.commit_records(args.vault, [path, path.with_suffix(".json")])
     assert user_file.read_text() == "unstaged"
     assert (
         subprocess.check_output(["git", "-C", str(args.vault), "show", ":unrelated"])
@@ -264,9 +265,9 @@ def test_recover_after_head_update(sweep_args, monkeypatch):
 
     monkeypatch.setattr(learn, "command", fail_reset)
     with pytest.raises(RuntimeError):
-        learn.commit_records(sweep_args.vault, [path])
+        learn.commit_records(sweep_args.vault, [path, path.with_suffix(".json")])
     monkeypatch.setattr(learn, "command", original)
-    learn.commit_records(sweep_args.vault, [path])
+    learn.commit_records(sweep_args.vault, [path, path.with_suffix(".json")])
     assert (
         subprocess.check_output(
             ["git", "-C", str(sweep_args.vault), "status", "--porcelain"]
@@ -376,6 +377,7 @@ def test_render_record_scopes_session_ids_to_session_sections(tmp_path):
     )
     assert "Observation file ID: `task-uuid` (task ID)." in output
     assert output.count("## Session session-") == 2
+    assert output.count("> No data.") == 4
     assert "| session |" not in output
     assert "| session-1 |" not in output
     assert "| session-2 |" not in output
@@ -409,9 +411,9 @@ def test_retry_after_concurrent_head_change(sweep_args, monkeypatch):
 
     monkeypatch.setattr(learn, "command", advance_head)
     with pytest.raises(RuntimeError):
-        learn.commit_records(sweep_args.vault, [path])
+        learn.commit_records(sweep_args.vault, [path, path.with_suffix(".json")])
     monkeypatch.setattr(learn, "command", original)
-    learn.commit_records(sweep_args.vault, [path])
+    learn.commit_records(sweep_args.vault, [path, path.with_suffix(".json")])
     history = subprocess.check_output(
         ["git", "-C", str(sweep_args.vault), "log", "--format=%s"]
     ).decode()
@@ -472,10 +474,18 @@ def test_collect_preserves_usage_sources_and_command_types(tmp_path, monkeypatch
             "requests": {},
             "tools": [{"id": "one", "called": True, "input": {"command": ["pwd"]}}],
             "ccusage": [{"inputTokens": 100}],
+            "messages": [
+                ("user", "first"),
+                ("assistant", "earlier"),
+                ("user", "later"),
+                ("assistant", "final"),
+            ],
         },
     )
     record = learn.collect_task(db_path, "task", tmp_path)
     session = record["sessions"][0]
+    assert session["initial_prompt"] == "first"
+    assert session["final_response"] == "final"
     assert session["totals"]["input"]["value"] == 100
     assert session["steps"][0]["totals"]["input"]["value"] == 10
     assert session["unattributed_usage"]["input"]["value"] == 0
@@ -507,3 +517,181 @@ def test_boundary_turn_is_counted_once():
         [],
     )
     assert [step["turns"] for step in steps] == [0, 1]
+
+
+@pytest.fixture
+def observation():
+    return {
+        "task": "task",
+        "archived_at": "2026-09-01T00:00:00.123456Z",
+        "notes": [],
+        "diffs": [],
+        "sessions": [
+            {
+                "id": "session",
+                "initial_prompt": "first line\n" + "é" * 1200,
+                "final_response": "answer\n" + "r" * 1200,
+                "start": "2026-09-01T00:00:00Z",
+                "end": "2026-09-01T00:00:02Z",
+                "notes": [],
+                "steps": [],
+                "tools": [],
+                "gaps": [],
+                "signals": [],
+                "blockers": {},
+                "transcript_ids": ["one"],
+                "tool_calls": learn.measure(0, "fixture"),
+                "totals": {
+                    k: learn.measure(1.234567, "fixture") for k in learn.METRICS
+                },
+            }
+        ],
+    }
+
+
+def test_split_write_and_cli(sweep_args, observation, monkeypatch, capsys):
+    args = sweep_args
+    add(args, "task", observation["archived_at"])
+    monkeypatch.setattr(learn, "collect_task", lambda *_: observation)
+    assert (
+        learn.main(
+            [
+                "task",
+                "--db",
+                str(args.db),
+                "--vault",
+                str(args.vault),
+                "--state",
+                str(args.state),
+            ]
+        )
+        == 0
+    )
+    path = learn.record_path(args.vault, "task", observation["archived_at"])
+    assert str(path) in capsys.readouterr().out
+    assert json.loads(path.with_suffix(".json").read_text()) == observation
+    assert learn.read_record(path) == observation
+    markdown = path.read_text()
+    assert markdown.startswith("# Session observations")
+    assert "[JSON](2026-09-01T00-00-00.123%20task.json)" in markdown
+    assert '"totals"' not in markdown
+    for key, heading in [
+        ("initial_prompt", "Initial user prompt"),
+        ("final_response", "Final answer"),
+    ]:
+        excerpt = markdown.split(f"### {heading}\n\n", 1)[1].split("\n\n###", 1)[0]
+        text = "\n".join(line.removeprefix("> ") for line in excerpt.splitlines())
+        assert text == observation["sessions"][0][key][:997] + "..."
+        assert len(text) == learn.TEXT_LIMIT
+
+
+def test_split_sweep_recovers_publication_and_commit(
+    sweep_args, observation, monkeypatch
+):
+    args = sweep_args
+    args.source_timeout = 1
+    learn.sweep(args)
+    add(args, "task", observation["archived_at"])
+    monkeypatch.setattr(learn, "collect_task", lambda *_: observation)
+    publish = learn.publish
+
+    def interrupted(path, content):
+        if path.suffix == ".md":
+            raise OSError("interrupted")
+        publish(path, content)
+
+    monkeypatch.setattr(learn, "publish", interrupted)
+    with pytest.raises(OSError, match="interrupted"):
+        learn.sweep(args)
+    assert state(args)["pending"]
+    path = learn.record_path(args.vault, "task", observation["archived_at"])
+    assert path.with_suffix(".json").exists() and not path.exists()
+    monkeypatch.setattr(learn, "publish", publish)
+    monkeypatch.setattr(learn, "collect_task", lambda *_: pytest.fail("recollected"))
+    commit = learn.commit_records
+
+    def failed_commit(*_):
+        raise RuntimeError("commit")
+
+    monkeypatch.setattr(learn, "commit_records", failed_commit)
+    with pytest.raises(RuntimeError, match="commit"):
+        learn.sweep(args)
+    before = (path.read_bytes(), path.with_suffix(".json").read_bytes())
+    monkeypatch.setattr(learn, "commit_records", commit)
+    learn.sweep(args)
+    assert not state(args)["pending"]
+    assert before == (path.read_bytes(), path.with_suffix(".json").read_bytes())
+    committed = (
+        subprocess.check_output(
+            ["git", "-C", str(args.vault), "ls-tree", "-r", "--name-only", "HEAD"]
+        )
+        .decode()
+        .splitlines()
+    )
+    assert committed == sorted(
+        str(p.relative_to(args.vault)) for p in [path, path.with_suffix(".json")]
+    )
+
+
+@pytest.mark.parametrize(
+    "sidecar", [None, "broken", "[]", '{"task":"wrong","archived_at":"2026-09-01"}']
+)
+def test_split_rejects_missing_corrupt_or_conflicting_json(sweep_args, sidecar):
+    args = sweep_args
+    learn.sweep(args)
+    add(args, "task", "2026-09-01")
+    path = learn.record_path(args.vault, "task", "2026-09-01")
+    learn.publish(path, "# Session observations\n")
+    if sidecar is not None:
+        learn.publish(path.with_suffix(".json"), sidecar)
+    with pytest.raises(ValueError):
+        learn.sweep(args)
+    assert state(args)["pending"]
+
+
+def test_legacy_identity_and_mixed_digest(sweep_args, observation, capsys):
+    args = sweep_args
+    add(args, "task", observation["archived_at"])
+    path = learn.record_path(args.vault, "task", observation["archived_at"])
+    legacy = learn.formatted_record(observation)
+    learn.publish(path, "---\n" + json.dumps(legacy) + "\n---\n")
+    assert learn.write_task(args, "task") == path
+    assert not path.with_suffix(".json").exists()
+    new_record = {**observation, "task": "second"}
+    second = learn.record_path(args.vault, "second", observation["archived_at"])
+    learn.publish(second.with_suffix(".json"), json.dumps(new_record))
+    learn.publish(second, learn.render_record(new_record))
+    learn.digest(Namespace(vault=args.vault, since="2026-09-01"))
+    assert "2 sessions with data" in capsys.readouterr().out
+    with pytest.raises(ValueError, match="identity conflict"):
+        learn.checked_record(second, "second", "2026-09-01T00:00:00.123999Z")
+    with pytest.raises(ValueError, match="identity conflict"):
+        learn.checked_record(path, "task", "2026-09-01T00:00:00.124Z")
+
+
+def test_archive_changes_during_json_recovery(sweep_args, observation, monkeypatch):
+    args = sweep_args
+    add(args, "task", observation["archived_at"])
+    path = learn.record_path(args.vault, "task", observation["archived_at"])
+    learn.publish(path.with_suffix(".json"), json.dumps(observation))
+    read = learn.read_record
+
+    def changed(path):
+        with sqlite3.connect(args.db) as db:
+            db.execute("UPDATE tasks SET archived_at='2026-09-02'")
+        return read(path)
+
+    monkeypatch.setattr(learn, "read_record", changed)
+    assert learn.write_task(args, "task") is None
+    assert not path.exists()
+
+
+@pytest.mark.parametrize("length", [0, 999, 1000, 1001])
+def test_prompt_display_limit_boundary(observation, length):
+    text = "é" * length
+    observation["sessions"][0].update(initial_prompt=text, final_response=text)
+    expected = text if length <= learn.TEXT_LIMIT else text[:997] + "..."
+    formatted = learn.formatted_record(observation)
+    assert formatted["sessions"][0]["initial_prompt"] == expected
+    assert formatted["sessions"][0]["final_response"] == expected
+    assert observation["sessions"][0]["initial_prompt"] == text

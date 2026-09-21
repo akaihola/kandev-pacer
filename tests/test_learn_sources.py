@@ -32,7 +32,13 @@ def test_message_text_extracts_prompt_and_response():
     ) == ("assistant", "done")
     assert sources.message_text(
         "codex",
-        {"payload": {"type": "message", "role": "user", "content": [{"text": "start"}]}},
+        {
+            "payload": {
+                "type": "message",
+                "role": "user",
+                "content": [{"type": "input_text", "text": "start"}],
+            }
+        },
     ) == ("user", "start")
 
 
@@ -290,3 +296,130 @@ def test_multiple_hermes_sessions_with_missing_export(tmp_path, monkeypatch):
     assert result["hermes"]["tool_call_count"] == 6
     assert result["ids"] == ["one"]
     assert len(result["tools"]) == 2
+
+
+@pytest.mark.parametrize("agent", ["claude", "codex", "pi", "hermes", "opencode"])
+def test_message_text_filters_nonconversation_data(agent):
+    def entry(role, content, **extra):
+        message = {"type": "message", "role": role, "content": content, **extra}
+        return {"payload" if agent == "codex" else "message": message}
+
+    assert sources.message_text(agent, entry("user", "hello\nworld")) == (
+        "user",
+        "hello\nworld",
+    )
+    for role in ["system", "developer", "tool", "toolResult"]:
+        assert sources.message_text(agent, entry(role, "secret")) == (None, "")
+    for channel in ["analysis", "commentary"]:
+        assert sources.message_text(
+            agent, entry("assistant", "internal", channel=channel)
+        ) == (None, "")
+    parts = [
+        {"type": kind, "text": "secret", "content": "secret"}
+        for kind in [
+            "tool_use",
+            "tool_result",
+            "thinking",
+            "image",
+            "function_call_output",
+        ]
+    ]
+    parts += [{"type": "text", "text": "answer"}, {"type": "text", "text": "continued"}]
+    assert sources.message_text(agent, entry("assistant", parts)) == (
+        "assistant",
+        "answer\ncontinued",
+    )
+
+
+def test_opencode_keeps_message_boundaries():
+    entries, _ = sources.opencode_entries(
+        {
+            "messages": [
+                {
+                    "info": {"role": "assistant"},
+                    "parts": [{"type": "text", "text": text} for text in parts],
+                }
+                for parts in [["first", "second"], ["final"]]
+            ]
+        }
+    )
+    assert [sources.message_text("opencode", e) for e in entries] == [
+        ("assistant", "first\nsecond"),
+        ("assistant", "final"),
+    ]
+
+
+def test_collection_orders_transcripts_without_merging_messages(tmp_path, monkeypatch):
+    directory = tmp_path / ".claude/projects/-gone"
+    directory.mkdir(parents=True)
+    for name, messages in [
+        ("a", [(3, "assistant", "old answer"), (4, "assistant", "final")]),
+        ("z", [(1, "user", "first"), (2, "user", "second")]),
+    ]:
+        entries = [
+            {
+                "timestamp": f"2026-09-01T00:00:0{second}Z",
+                "type": role,
+                "message": {"role": role, "content": text},
+            }
+            for second, role, text in messages
+        ]
+        (directory / f"{name}.jsonl").write_text(
+            "\n".join(json.dumps(e) for e in entries)
+        )
+    monkeypatch.setattr(sources, "ccusage", lambda *_: [])
+    result = sources.collect_transcripts(
+        tmp_path,
+        {
+            "agent": "claude",
+            "workspace_path": "/gone",
+            "start": "2026-09-01",
+            "end": "2026-09-02",
+        },
+    )
+    assert result["messages"] == [
+        ("user", "first"),
+        ("user", "second"),
+        ("assistant", "old answer"),
+        ("assistant", "final"),
+    ]
+
+
+def test_hermes_messages_follow_session_time_not_database_order(tmp_path, monkeypatch):
+    import sqlite3
+
+    path = tmp_path / ".hermes/profiles/tyko/state.db"
+    path.parent.mkdir(parents=True)
+    with sqlite3.connect(path) as db:
+        db.execute("CREATE TABLE sessions (id, cwd, started_at, ended_at)")
+        db.executemany(
+            "INSERT INTO sessions VALUES (?, '/gone', ?, ?)",
+            [
+                ("late", 1788220803, 1788220804),
+                ("early", 1788220801, 1788220802),
+            ],
+        )
+
+    def export(_home, _agent, identity, *_):
+        return "\n".join(
+            json.dumps({"message": {"role": role, "content": f"{identity} {role}"}})
+            for role in ["user", "assistant"]
+        )
+
+    monkeypatch.setattr(sources, "export_session", export)
+    monkeypatch.setattr(sources, "ccusage", lambda *_: [])
+    result = sources.collect_transcripts(
+        tmp_path,
+        {
+            "agent": "hermes",
+            "workspace_path": "/gone",
+            "start": "2026-09-01",
+            "end": "2026-09-02",
+        },
+    )
+    assert result["messages"] == [
+        ("user", "early user"),
+        ("assistant", "early assistant"),
+        ("user", "late user"),
+        ("assistant", "late assistant"),
+    ]

@@ -15,19 +15,24 @@ Records live under
 `~/my-knowledge/pages/PKB/Kandev Session Observations/YYYY-MM/`.
 The filename uses the archive timestamp to milliseconds in UTC, without a timezone,
 with punctuation made filename-safe, followed by the task ID. Existing files,
-including partial records, are never replaced. Observation timestamps use the same
-format. Durations use milliseconds and costs use USD to 1/1000 dollar.
+including partial records, are never replaced. Markdown timestamps use the same
+format. Markdown durations use milliseconds and costs use USD to 1/1000 dollar;
+the adjacent `.json` file retains the full collected values and original field names.
 Each record repeats the filename's final UUID near the top as `Observation file ID`
-and labels it as the archived task ID; this is the same value as frontmatter `task`.
-Frontmatter is JSON, a YAML 1.2 subset, and includes numeric sources and coverage.
-The digest reads that frontmatter and prints a single table with totals.
+and labels it as the archived task ID; this is the same value as JSON `task`.
+Markdown links to the adjacent JSON file, which includes numeric sources and coverage.
+The digest reads JSON and prints a single table with totals. It also reads legacy
+Markdown observations with JSON frontmatter. Existing observations are not migrated.
+Scripts consuming new observations should read the same filename with a `.json` suffix.
 
 One observation file can contain multiple Kandev sessions. The Markdown body
 introduces each session once with a `## Session <id>` heading; session-specific
 tables below that heading omit the repeated ID. Task-level tables remain outside
 those sections.
-Each session records its first user prompt and final assistant response, each
-truncated deterministically to 1,000 characters.
+Each session quotes its first user prompt and final assistant response in Markdown,
+each truncated deterministically to 1,000 characters including `...` when needed.
+System/developer messages, tools, reasoning and explicit commentary are excluded.
+JSON retains the untruncated prompt and answer. Missing text is shown as `No data.`
 
 ## Sources and units
 
@@ -87,6 +92,10 @@ coverage across equal-timestamp batches. Unarchive/rearchive produces a new reco
 
 `--backfill --batch-size N` explicitly processes older archives in batches with a
 separate progress list. Do not use it during ordinary verification.
+
+JSON is published before Markdown. A retry finishes Markdown from saved JSON without
+recollecting the session. Missing or corrupt JSON for a new observation fails the run
+and retains pending state. Both files are included in the observation commit.
 
 Runs serialize on `collector.lock`. Pending identities survive failures. Vault
 commits hold `flock` on `~/my-knowledge/.git/kandev-learn.lock`, use a temporary
