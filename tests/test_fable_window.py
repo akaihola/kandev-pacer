@@ -216,6 +216,21 @@ def test_waiting_fable_on_unpaced_step_only_drains_explicit_prompt(
     )
 
 
+def test_waiting_fable_with_unreadable_queue_names_the_hold(solo, board, caplog):
+    """The 09-22 records: open, nothing, launchable=1 -- a failed queue read held it."""
+    _fable_board(board, fable_pct=10)
+    task = _task("tf", "ip", "Waiting Fable", profile="p-fable")
+    with caplog.at_level("INFO", logger="kandev-pacer"):
+        run(solo, board, [task], {"tf": _sess("sBoom", "WAITING_FOR_INPUT")}, {})
+    assert launches(board) == []
+    assert any(
+        message.startswith("[anthropic (Fable)] headroom=")
+        and "nothing to launch" in message
+        and "1 held: queue unreadable" in message
+        for message in caplog.messages
+    )
+
+
 def test_a_bound_fable_window_does_not_withhold_general_work(solo, board):
     """The 08-14 regression: Fable bound, general open -> a non-Fable task must launch."""
     _fable_board(board)

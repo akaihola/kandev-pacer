@@ -301,7 +301,9 @@ exclusions and steps that do not auto-launch. Waiting for input at such a step d
 make a task launchable; move it to a paced work step or explicitly queue a prompt on an
 idle session. Step configuration determines eligibility, not the step's name.
 Restart a running pacer after enrollment changes; it scans workflows only at startup.
-For other exclusions, check session state and withheld/failed/stalled log records.
+`N held: queue unreadable` on that line means kandev's prompt-queue read failed for N
+waiting tasks; they stay withheld, so a queued prompt cannot leak out unpaced, until a
+later tick reads their queue. For other exclusions, check session state and withheld/failed/stalled log records.
 [`docs/fable-window.md`] documents the verified quota rules and the design.
 
 ## Pausing and the prompt cache

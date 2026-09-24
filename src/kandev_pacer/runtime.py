@@ -955,12 +955,29 @@ class Pacer:
                     if self.failed
                     else ""
                 )
+                skip = self.skip_keys(now)
                 for group in open_groups:
+                    # select_action withholds a task whose queue read failed, so it would
+                    # otherwise count as launchable with no reason on this line.
+                    unread = sum(
+                        1
+                        for task in snapshot.tasks
+                        if snapshot.task_providers.get(task["id"]) == provider_name
+                        and snapshot.task_scopes.get(task["id"], ()) == group.scopes
+                        and any(
+                            session["id"] in queued and queued[session["id"]] is None
+                            for session in snapshot.sessions[task["id"]]
+                        )
+                        and is_launchable(
+                            task, snapshot.sessions[task["id"]], self.board, skip
+                        )
+                    )
+                    unread_note = f", {unread} held: queue unreadable" if unread else ""
                     report(
                         group,
                         "open",
                         Outcome("nothing", "nothing to launch"),
-                        f" ({running}/{cap} running{held})",
+                        f" ({running}/{cap} running{held}{unread_note})",
                     )
                 return True
             # A drain books against the session that holds the queue, not the task's
