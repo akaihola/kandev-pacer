@@ -10,9 +10,6 @@ Rules for TASKS.md usage are at the bottom of the file.
 
 ## In Progress
 
-- [*] Show Fable in scoped gate logs even when it is the only class, and diagnose why
-  waiting Fable tasks are not launchable.
-
 - [*] The `Queue` button injected by the userscript into task sessions doesn't work. It
   always pops up this error: `Queue failed: task session identity is unavailable`.
 
@@ -20,6 +17,9 @@ Rules for TASKS.md usage are at the bottom of the file.
   before resuming tasks.
 
 ## Completed
+
+- [*] Show Fable in scoped gate logs even when it is the only class, and diagnose why
+  waiting Fable tasks are not launchable.
 
 - [7] Fix userscript Queue button session identifiers after the 0.94-dev upgrade.
 
