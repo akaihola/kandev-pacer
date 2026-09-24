@@ -189,6 +189,48 @@ def test_a_sole_open_fable_class_launches(solo, board, caplog):
     )
 
 
+@pytest.mark.parametrize("queued", [0, 1])
+def test_waiting_fable_on_unpaced_step_only_drains_explicit_prompt(
+    solo, board, caplog, queued
+):
+    _fable_board(board, fable_pct=10)
+    task = _task("tf", "rv", "Waiting Fable", profile="p-fable")
+    with caplog.at_level("INFO", logger="kandev-pacer"):
+        run(
+            solo,
+            board,
+            [task],
+            {"tf": _sess("sf", "WAITING_FOR_INPUT")},
+            {"sf": queued},
+        )
+    actions = [
+        action
+        for action, _ in board.ws_log
+        if action in {"session.launch", "message.queue.drain"}
+    ]
+    assert actions == (["message.queue.drain"] if queued else [])
+    outcome = "drained queued prompt" if queued else "nothing to launch"
+    assert any(
+        message.startswith("[anthropic (Fable)] headroom=") and outcome in message
+        for message in caplog.messages
+    )
+
+
+def test_waiting_fable_with_unreadable_queue_names_the_hold(solo, board, caplog):
+    """The 09-22 records: open, nothing, launchable=1 -- a failed queue read held it."""
+    _fable_board(board, fable_pct=10)
+    task = _task("tf", "ip", "Waiting Fable", profile="p-fable")
+    with caplog.at_level("INFO", logger="kandev-pacer"):
+        run(solo, board, [task], {"tf": _sess("sBoom", "WAITING_FOR_INPUT")}, {})
+    assert launches(board) == []
+    assert any(
+        message.startswith("[anthropic (Fable)] headroom=")
+        and "nothing to launch" in message
+        and "1 held: queue unreadable" in message
+        for message in caplog.messages
+    )
+
+
 def test_a_bound_fable_window_does_not_withhold_general_work(solo, board):
     """The 08-14 regression: Fable bound, general open -> a non-Fable task must launch."""
     _fable_board(board)

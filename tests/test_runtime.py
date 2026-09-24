@@ -393,8 +393,8 @@ def test_dump_order_names_a_dragged_task_that_will_never_launch(pacer, board, ca
 
     The sidebar shows it first either way, so nothing on screen says it cannot run.
     """
-    unpaced = ({"id": "wf-off", "name": "Not Enrolled"}, "not enrolled: ...")
-    pacer.board = replace(pacer.board, skipped=[unpaced])
+    unpaced = Board.scan([({"id": "wf-off", "name": "Not Enrolled"}, [])])
+    pacer.board = replace(pacer.board, skipped=unpaced.skipped)
     stranded = {"id": "t-off", "title": "Stranded", "workflow_step_id": "ip"}
     board.load([_task("a", "ip", "In Scope")], {}, {})
     board.tasks_elsewhere = [stranded]
@@ -405,7 +405,25 @@ def test_dump_order_names_a_dragged_task_that_will_never_launch(pacer, board, ca
     out = capsys.readouterr().out
     assert "not paced: 1 workflow(s) out of scope" in out
     assert "Not Enrolled: not enrolled" in out
+    assert "run make-paced to enroll it" in out
     assert "! placed by hand but not paced: 'Stranded' (in 'Not Enrolled')" in out
+
+
+@pytest.mark.parametrize("admitted", [True, False])
+@pytest.mark.parametrize("step", ["rv", "ip", "bk"])
+def test_dump_order_explains_step_restriction(pacer, board, capsys, step, admitted):
+    task = {**_task("t1", step, "Waiting"), "wip_admitted": admitted}
+    board.load([task], {}, {})
+    dump_order(pacer)
+    out = capsys.readouterr().out
+    assert ("queued: step WIP limit full" in out) == (not admitted)
+    assert ("does not auto-launch" in out) == (step == "rv")
+    if step == "rv":
+        assert f"step {pacer.board.name_of(step)!r}" in out
+        assert "even when waiting for input" in out
+        assert "move to a paced work step" in out
+        assert "explicitly queue a prompt on an idle session" in out
+    assert actions(board) == []
 
 
 # --- the gate shut: what the pacer exists to do ---

@@ -8,10 +8,10 @@ Rules for TASKS.md usage are at the bottom of the file.
 
 ## Scheduled
 
+## In Progress
+
 - [*] Show Fable in scoped gate logs even when it is the only class, and diagnose why
   waiting Fable tasks are not launchable.
-
-## In Progress
 
 - [*] The `Queue` button injected by the userscript into task sessions doesn't work. It
   always pops up this error: `Queue failed: task session identity is unavailable`.
@@ -103,9 +103,6 @@ Rules for TASKS.md usage are at the bottom of the file.
 - [*] Waive the heartbeat cooldown once a task has been launched since the last attempt,
   so a full backlog does not leave the board dry for half of every cycle.
     - Depends on: [2]
-
-- [*] Show Fable in scoped gate logs even when it is the only class, and diagnose why
-  waiting Fable tasks are not launchable.
 
 - [2] Call the Heartbeat webhook when an open provider gate is running out of work.
 

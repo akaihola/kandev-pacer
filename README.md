@@ -296,8 +296,14 @@ stricter, never looser. The two classes still share the provider's concurrency c
 one launch per tick, and queue order picks among the tasks whose class is open.
 Text logs name the scoped gate `[anthropic (Fable)]`, even when it is the only class.
 `open, nothing to launch` means quota allows work but no task is eligible to launch or
-drain a queued prompt. Check `kandev-pacer --dump-order` for workflow enrollment and WIP
-exclusions, then the task's step, session state and withheld/failed/stalled log records.
+drain a queued prompt. Check `kandev-pacer --dump-order` for workflow enrollment, WIP
+exclusions and steps that do not auto-launch. Waiting for input at such a step does not
+make a task launchable; move it to a paced work step or explicitly queue a prompt on an
+idle session. Step configuration determines eligibility, not the step's name.
+Restart a running pacer after enrollment changes; it scans workflows only at startup.
+`N held: queue unreadable` on that line means kandev's prompt-queue read failed for N
+waiting tasks; they stay withheld, so a queued prompt cannot leak out unpaced, until a
+later tick reads their queue. For other exclusions, check session state and withheld/failed/stalled log records.
 [`docs/fable-window.md`] documents the verified quota rules and the design.
 
 ## Pausing and the prompt cache
