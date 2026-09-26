@@ -1763,3 +1763,281 @@ def test_fallback_skips_unreadable_or_pending_queue_for_other_work(
     assert not any(a == "message.queue.drain" for a, _ in board.ws_log)
     assert pacer.failed == {}
     assert not any(k.task == "t1" for k in pacer.stalled)
+
+
+# --- backend session-capacity deferrals ---
+
+
+@pytest.mark.parametrize("mode", ["queued", "legacy"])
+def test_capacity_deferral_holds_beyond_booking_ttl(
+    pacer, board, monkeypatch, capacity_launch, caplog, mode
+):
+    clock = [1000.0]
+    monkeypatch.setattr(runtime.time, "time", lambda: clock[0])
+    task = _task("t1", "bk")
+    board.load([task], {}, {})
+    capacity_launch(mode)
+    with caplog.at_level(logging.INFO, logger="kandev-pacer"):
+        pacer.tick()
+        assert len(actions(board)) == 1
+        assert pacer.stalled == {} and pacer.failed == {} and pacer.booked == {}
+        assert not pacer._launched_since_heartbeat
+        clock[0] += settings.booking_ttl * 3
+        board.sessions["t1"] = _sess("new-session", "WAITING_FOR_INPUT")
+        board.queues["new-session"] = 1
+        pacer.tick()
+        # A restarted pacer reconstructs the persisted hold without local state.
+        Pacer(pacer.board).tick()
+    assert len(actions(board)) == 1
+    assert board.queues["new-session"] == 1
+    assert "capacity deferred" in caplog.text
+    assert "flagged" not in caplog.text
+
+
+def test_capacity_deferral_preserves_prior_stall_and_failure_history(
+    pacer, board, capacity_launch
+):
+    task = _task("t1", "ip")
+    sessions = _sess("s1", "WAITING_FOR_INPUT")
+    board.load([task], {"t1": sessions}, {})
+    key = ActionKey("t1", "ip", "s1")
+    stall = {"count": 1, "fingerprint": None, "flagged": False}
+    failure = {"at": 0, "attempts": 1, "flagged": False}
+    pacer.stalled[key] = stall.copy()
+    pacer.failed[key] = failure.copy()
+    capacity_launch()
+    pacer.tick()
+    assert pacer.stalled[key] == stall
+    assert pacer.failed[key] == failure
+    assert len(actions(board)) == 1
+
+
+@pytest.mark.parametrize("mode", ["legacy", "other"])
+def test_capacity_error_without_confirmed_marker_keeps_failure_backoff(
+    pacer, board, capacity_launch, mode
+):
+    board.load([_task("t1", "ip")], {}, {})
+    capacity_launch(mode, persist=False)
+    pacer.tick()
+    pacer.tick()
+    assert len(actions(board)) == 1
+    assert next(iter(pacer.failed.values()))["attempts"] == 1
+    assert not pacer.deferred
+
+
+def test_unrelated_error_with_marker_is_not_reclassified(pacer, board, capacity_launch):
+    board.load([_task("t1", "ip")], {}, {})
+    capacity_launch("other")
+    pacer.tick()
+    assert next(iter(pacer.failed.values()))["attempts"] == 1
+    assert not pacer.deferred
+
+
+@pytest.mark.parametrize(
+    "transition", ["queued_without_marker", "marker_removed", "read_failed"]
+)
+def test_capacity_uncertainty_expires_once_and_retries_in_order(
+    pacer, board, monkeypatch, capacity_launch, transition
+):
+    clock = [1000.0]
+    monkeypatch.setattr(runtime.time, "time", lambda: clock[0])
+    task = _task("t1", "ip")
+    board.load([task], {}, {})
+    capacity_launch(
+        "legacy" if transition == "read_failed" else "queued",
+        persist=transition != "queued_without_marker",
+    )
+    read = client.task_of
+    if transition == "read_failed":
+
+        def unavailable_after_send(task_id):
+            if actions(board):
+                raise client.ReadFailed("confirmation unavailable")
+            return read(task_id)
+
+        monkeypatch.setattr(client, "task_of", unavailable_after_send)
+    pacer.tick()
+    assert pacer.failed == {} and pacer.stalled == {}
+    monkeypatch.setattr(client, "task_of", read)
+    if transition != "queued_without_marker":
+        task["metadata"].pop("deferred_launch")
+    clock[0] += 1
+    pacer.tick()
+    deadline = pacer.deferred["t1"].deadline
+    clock[0] += 1
+    pacer.tick()
+    assert pacer.deferred["t1"].deadline == deadline
+    assert len(actions(board)) == 1
+    # Closed quota must still prevent retry after the capacity hold ends.
+    board.usage_pct = 95
+    clock[0] = deadline + 1
+    pacer.tick()
+    assert "t1" not in pacer.deferred
+    assert len(actions(board)) == 1
+    board.usage_pct = 10
+    other = _task("first", "ip")
+    board.tasks.append(other)
+    # A queued user prompt always precedes the released workflow launch.
+    board.sessions["first"] = _sess("other-session", "WAITING_FOR_INPUT")
+    board.queues["other-session"] = 1
+    pacer.tick()
+    assert actions(board)[-1] == "message.queue.drain"
+    pacer.tick()
+    assert board.ws_log[-1][1]["task_id"] == "t1"
+
+
+@pytest.mark.parametrize("new_session", [False, True])
+def test_capacity_replay_occupancy_is_not_counted_twice(
+    pacer, board, monkeypatch, capacity_launch, new_session
+):
+    monkeypatch.setattr(settings, "concurrency", 2)
+    monkeypatch.setattr(settings, "concurrency_total", 2)
+    task = _task("t1", "ip")
+    sessions = [] if new_session else _sess("s1", "WAITING_FOR_INPUT")
+    board.load([task], {"t1": sessions}, {})
+    capacity_launch("legacy")
+    pacer.tick()
+    task["metadata"].pop("deferred_launch")
+    board.sessions["t1"] = _sess("replay" if new_session else "s1", "RUNNING")
+    board.tasks.append(_task("t2", "ip"))
+    pacer.tick()
+    assert "t1" not in pacer.deferred
+    assert board.ws_log[-1][1]["task_id"] == "t2"
+
+
+def test_capacity_hold_counts_separately_from_another_running_session(
+    pacer, board, monkeypatch
+):
+    monkeypatch.setattr(settings, "concurrency", 2)
+    task = _task("t1", "ip")
+    task["metadata"] = {"deferred_launch": {"ceiling_deferred": True}}
+    primary = {**_sess("primary", "WAITING_FOR_INPUT")[0], "is_primary": True}
+    child = _sess("child", "RUNNING")[0]
+    board.load([task, _task("t2", "ip")], {"t1": [primary, child]}, {})
+    pacer.tick()
+    assert not actions(board)
+    assert pacer.deferred_of(pacer.read()) == 1
+    task["metadata"].pop("deferred_launch")
+    pacer.tick()
+    assert not actions(board)
+    assert "t1" in pacer.deferred
+
+
+@pytest.mark.parametrize("kind", ["launch", "drain"])
+def test_capacity_marker_on_final_read_prevents_dispatch(
+    pacer, board, monkeypatch, kind
+):
+    task = _task("t1", "ip")
+    sessions = _sess("s1", "WAITING_FOR_INPUT")
+    board.load([task], {"t1": sessions}, {"s1": 1} if kind == "drain" else {})
+    read = client.task_of
+
+    def deferred(task_id):
+        fresh = dict(read(task_id))
+        fresh["metadata"] = {"deferred_launch": {"ceiling_deferred": True}}
+        return fresh
+
+    monkeypatch.setattr(client, "task_of", deferred)
+    pacer.tick()
+    assert not actions(board)
+    assert pacer.failed == {} and pacer.stalled == {}
+    assert "t1" in pacer.deferred
+
+
+def test_capacity_hold_cancels_expired_signal_without_blocking(pacer, board):
+    task = _task("t1", "ip")
+    task["metadata"] = {"deferred_launch": {"ceiling_deferred": True}}
+    board.load([task], {"t1": _sess("s1", "WAITING_FOR_INPUT")}, {})
+    key = ActionKey("t1", "ip", "s1")
+    pacer.pending_signals[key] = (0, 5)
+    pacer.tick()
+    assert not actions(board)
+    assert not pacer.pending_signals
+    assert not pacer.stalled
+
+
+def test_failed_board_read_does_not_release_capacity_hold(pacer, board, monkeypatch):
+    task = _task("t1", "ip")
+    task["metadata"] = {"deferred_launch": {"ceiling_deferred": True}}
+    board.load([task], {}, {})
+    pacer.tick()
+
+    def unreadable(scope):
+        raise client.ReadFailed("board unavailable")
+
+    with monkeypatch.context() as patch:
+        patch.setattr(client, "paced_tasks", unreadable)
+        with pytest.raises(client.ReadFailed):
+            pacer.tick()
+    assert "t1" in pacer.deferred
+    board.tasks = []
+    pacer.tick()
+    assert not pacer.deferred
+
+
+def test_capacity_backlog_prevents_heartbeat_idle_retry(
+    pacer, board, heartbeat, monkeypatch
+):
+    monkeypatch.setattr(settings, "heartbeat_min_launchable", 1)
+    task = _task("t1", "ip")
+    task["metadata"] = {"deferred_launch": {"ceiling_deferred": True}}
+    board.load([task], {}, {})
+    pacer.tick()
+    assert not heartbeat
+    pacer._last_heartbeat_at = runtime.time.time()
+    pacer._heartbeat_idle_retry = True
+    pacer.tick()
+    assert not heartbeat
+    assert pacer._heartbeat_idle_retry
+
+
+def test_deferred_parent_keeps_child_in_manual_queue_position(
+    pacer, board, monkeypatch
+):
+    monkeypatch.setattr(settings, "concurrency", 2)
+    parent = _task("parent", "ip")
+    parent["metadata"] = {"deferred_launch": {"ceiling_deferred": True}}
+    child = {**_task("child", "ip"), "parent_id": "parent"}
+    board.load([parent, _task("other", "ip"), child], {}, {})
+    board.sidebar = {
+        "sidebar_task_prefs": {"ordered_task_ids": ["parent", "other"]},
+    }
+    pacer.tick()
+    assert board.ws_log[-1][1]["task_id"] == "child"
+
+
+def test_closed_scope_deferral_does_not_prevent_other_scope_idle_retry(
+    pacer, board, heartbeat, heartbeat_before_idle, monkeypatch
+):
+    monkeypatch.setattr(settings, "concurrency", 3)
+    board.agents_map["opus"] = {
+        "agent": "claude-acp",
+        "billing_type": "subscription",
+        "model": "opus",
+    }
+
+    def verdict(group, snapshot):
+        if group.provider == "anthropic" and not group.scopes:
+            return Verdict("open", 0.1, "")
+        return Verdict("paused", -0.1, "PAUSED")
+
+    monkeypatch.setattr(pacer, "verdict_for", verdict)
+    task = _task("f1", "ip", profile="fable")
+    task["metadata"]["deferred_launch"] = {"ceiling_deferred": True}
+    board.load([task, _task("general", "dn", profile="opus")], {}, {})
+    pacer.tick()
+    assert len(heartbeat) == 2
+
+
+def test_running_primary_before_capacity_hold_is_not_its_replay(
+    pacer, board, monkeypatch
+):
+    monkeypatch.setattr(settings, "concurrency", 2)
+    task = _task("t1", "ip")
+    task["metadata"] = {"deferred_launch": {"ceiling_deferred": True}}
+    board.load([task, _task("t2", "ip")], {"t1": _sess("existing", "RUNNING")}, {})
+    pacer.tick()
+    assert not actions(board)
+    task["metadata"].pop("deferred_launch")
+    pacer.tick()
+    assert not actions(board)

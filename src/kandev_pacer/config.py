@@ -58,7 +58,7 @@ class Settings(BaseSettings):
     )
     pebble_max_age: float = Field(900, alias="PACER_PEBBLE_MAX_AGE", ge=0)
 
-    # How many turns may be in flight at once, per provider. `concurrency_total` caps the sum
+    # Running turns plus backend capacity deferrals, per provider. `concurrency_total` caps the sum
     # across providers -- the machine running the worktrees is the one genuinely shared thing.
     concurrency: int = Field(1, alias="PACER_CONCURRENCY", ge=1)
     # None means no ceiling on the sum; each provider is limited only by its own cap.
@@ -82,7 +82,8 @@ class Settings(BaseSettings):
     # with nothing printed, which is what made a restarted pacer look hung.
     refusal_window: float = Field(10.0, alias="PACER_REFUSAL_WINDOW", gt=0)
     # How long kandev may take to make an accepted launch visible on the board. A reservation
-    # has to outlive that or the pacer launches the same task twice.
+    # has to outlive that or the pacer launches the same task twice. Persisted capacity
+    # deferrals stay held regardless of this timeout until the backend removes the marker.
     launch_latency: float = Field(90.0, alias="PACER_LAUNCH_LATENCY", ge=0)
 
     # Unset means "three ticks at the configured interval"; see the fail_backoff property.

@@ -374,3 +374,45 @@ def board(monkeypatch):
     monkeypatch.setattr(provider, "codex_usage", fake.codex_usage)
     monkeypatch.setattr(websocket, "create_connection", fake.connect)
     return fake
+
+
+@pytest.fixture
+def capacity_launch(board, monkeypatch):
+    """Replay the documented queued response or legacy ceiling error on the wire."""
+    original = board.reply
+
+    def install(mode="queued", persist=True, task_id="t1"):
+        def reply(message):
+            frames = original(message)
+            if (
+                message["action"] != "session.launch"
+                or message["payload"]["task_id"] != task_id
+            ):
+                return frames
+            if persist:
+                task = next(t for t in board.tasks if t["id"] == task_id)
+                task["workflow_step_id"] = "ip"
+                task.setdefault("metadata", {})["deferred_launch"] = {
+                    "ceiling_deferred": True
+                }
+            payload = {
+                "activation_disposition": "queued",
+                "activation_reason": "session_capacity",
+            }
+            kind = "response"
+            if mode != "queued":
+                kind = "error"
+                payload = {
+                    "message": (
+                        "session ceiling deferred the workflow step launch"
+                        if mode == "legacy"
+                        else "another capacity error"
+                    )
+                }
+            return frames[:1] + [
+                _frame(message["id"], kind, message["action"], payload)
+            ]
+
+        monkeypatch.setattr(board, "reply", reply)
+
+    return install

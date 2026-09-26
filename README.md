@@ -176,6 +176,28 @@ paced board has a session running. Each attempt writes one `heartbeat` record to
 with the HTTP status or the error; a failed call is a warning, and the board keeps pacing
 without it.
 
+## Session capacity deferrals
+
+When Kandev queues a workflow launch for session capacity, pacer holds that task
+until fresh backend state releases it. It sends no duplicate launch or queued
+prompt drain, and capacity waiting does not add failures or stalled turns or flag
+the task BLOCKED. Genuine launch refusals keep their existing backoff.
+
+Each pending launch reserves one slot under `PACER_CONCURRENCY` and
+`PACER_CONCURRENCY_TOTAL`. It counts as pending work for heartbeat refill, but not
+as launchable work or a launch that waives the heartbeat cooldown. Tick logs show
+`deferred` separately from running sessions and retained failure history.
+
+The persisted `metadata.deferred_launch.ceiling_deferred` marker survives pacer
+restarts and is not limited by the booking timeout. If the marker disappears before
+a replayed session becomes visible, pacer waits the existing booking timeout once,
+then reconsiders the task using normal quota gates and queue order. A queued reply
+without visible metadata, or an unreadable confirmation of the legacy capacity
+error, uses the same bounded wait. No new configuration is needed.
+
+Kandev owns replay timing. Pacer cannot recheck quota immediately before a
+backend replay; that would require a backend admission change.
+
 ## Logging
 
 The stdout lines say what the pacer is doing now. The JSONL log at `PACER_LOG` says what it

@@ -72,6 +72,13 @@ def is_wip_admitted(task):
     return admitted is None or bool(admitted)
 
 
+def is_capacity_deferred(task):
+    """Only the backend's session-ceiling marker represents a capacity hold."""
+    metadata = task.get("metadata")
+    deferred = metadata.get("deferred_launch") if isinstance(metadata, dict) else None
+    return isinstance(deferred, dict) and deferred.get("ceiling_deferred") is True
+
+
 def is_launchable(task, sessions, board, skip):
     """Whether starting a turn on this task now is both allowed and meaningful."""
     step = task.get("workflow_step_id", "")
@@ -82,7 +89,7 @@ def is_launchable(task, sessions, board, skip):
     # A card kandev queued because the step's WIP limit was full sits on that step with
     # no session -- indistinguishable, from everything below, from a card waiting to be
     # launched. Launching it would defeat the limit kandev is holding it behind.
-    if not is_wip_admitted(task):
+    if not is_wip_admitted(task) or is_capacity_deferred(task):
         return False
     state = selected["state"] if selected else None
     # A sessionless task counts on a work step too, not only in the queue. kandev moves a
@@ -107,6 +114,8 @@ def drain_session(task, sessions, queued, skip=frozenset()):
     its slots launching tasks further down the order. Among the idle sessions that do
     have a queue, the newest wins.
     """
+    if is_capacity_deferred(task):
+        return None
     step = task.get("workflow_step_id", "")
     holding = [
         session
