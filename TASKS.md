@@ -9,6 +9,11 @@ Rules for TASKS.md usage are at the bottom of the file.
 - [*] Kandev task dd6897a9-b54e-4ad4-b9b5-b2372292f4b1 stated: "Capacity-deferral
   handling remains separate follow-up work." If that hasn't been implemented, do it.
 
+- [16] Learn from session observation records: a lowest-priority Kandev task the
+  Heartbeat creates when unread records exist, writing observations and proposed
+  solution prompts to the right repository's unreviewed section.
+  - Depends on: [5]
+
 ## Scheduled
 
 ## In Progress
@@ -129,6 +134,7 @@ Rules for TASKS.md usage are at the bottom of the file.
 [13]: docs/tasks/13-primary-session-selection.md
 [14]: docs/tasks/14-workflow-step-api.md
 [15]: docs/tasks/15-claude-credential-recovery.md
+[16]: docs/tasks/16-observation-consumer.md
 [*]: TASKS.md
 
 ## Accepted
