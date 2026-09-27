@@ -3,6 +3,7 @@
 Everything under test here is a pure function over plain dictionaries. No network.
 """
 
+import pytest
 from conftest import CLEAN
 from conftest import sess as _sess
 from conftest import task as _task
@@ -736,3 +737,22 @@ def test_unknown_queue_blocks_launch_but_not_known_prompt():
     queued["s2"] = 1
     chosen = select_action(tasks, sessions, queued, board, set())
     assert (chosen.kind, chosen.session) == ("drain", "s2")
+
+
+@pytest.mark.parametrize(
+    "metadata,expected",
+    [
+        (None, False),
+        ([], False),
+        ({}, False),
+        ({"deferred_launch": "invalid"}, False),
+        ({"deferred_launch": {"ceiling_deferred": False}}, False),
+        ({"deferred_launch": {"ceiling_deferred": "true"}}, False),
+        ({"deferred_launch": {"workflow_step_id": "ip"}}, False),
+        ({"deferred_launch": {"ceiling_deferred": True}}, True),
+    ],
+)
+def test_only_explicit_capacity_marker_holds_work(metadata, expected):
+    from kandev_pacer.selection import is_capacity_deferred
+
+    assert is_capacity_deferred({"metadata": metadata}) is expected

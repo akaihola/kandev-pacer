@@ -653,3 +653,135 @@ def test_unknown_queue_does_not_block_other_provider(duo, board):
     )
     assert launches(board) == ["t2"]
     assert duo.failed == {}
+
+
+@pytest.mark.parametrize("total", [None, 1])
+def test_capacity_deferral_reserves_provider_and_shared_slots(
+    duo, board, monkeypatch, capacity_launch, total
+):
+    monkeypatch.setattr(settings, "concurrency_total", total)
+    ta, (_, sa) = _ready("t1", "p-claude")
+    tc, (_, sc) = _ready("tc", "p-codex")
+    capacity_launch("legacy")
+    board.load([ta, tc], {"t1": sa, "tc": sc}, {})
+    duo.tick()
+    assert launches(board) == (["t1", "tc"] if total is None else ["t1"])
+    board.ws_log.clear()
+    # A persisted hold also consumes capacity on later ticks.
+    board.tasks.append(_task("ta2", "ip", profile="p-claude"))
+    duo.tick()
+    assert not launches(board)
+    assert not duo.failed
+
+
+def test_unknown_provider_deferral_still_uses_total_capacity(duo, board, monkeypatch):
+    monkeypatch.setattr(settings, "concurrency_total", 1)
+    unknown = _task("t1", "ip", profile="missing")
+    unknown["metadata"]["deferred_launch"] = {"ceiling_deferred": True}
+    tc, (_, sc) = _ready("tc", "p-codex")
+    run(duo, board, [unknown, tc], {"tc": sc}, {})
+    assert not launches(board)
+
+
+def test_fallback_deferral_is_attributed_to_destination(
+    duo, board, monkeypatch, capacity_launch
+):
+    monkeypatch.setattr(settings, "fallback_after", 1)
+    monkeypatch.setattr(settings, "fallback_profiles_raw", "Claude=Codex")
+    board.agents_map["p-claude"]["name"] = "Claude"
+    board.agents_map["p-codex"]["name"] = "Codex"
+    board.usage_pct = 95
+    duo._gate_closed_at["anthropic"] = 0
+    source = _task("t1", "bk", profile="p-claude")
+    other, (_, session) = _ready("tc", "p-codex")
+    board.load([source, other], {"tc": session}, {})
+    capacity_launch("legacy")
+    duo.tick()
+    payload = next(p for action, p in board.ws_log if action == "session.launch")
+    assert payload["agent_profile_id"] == "p-codex"
+    assert payload["workflow_step_id"] == "ip"
+    assert duo.deferred["t1"].group.provider == "openai"
+    assert launches(board) == ["t1"]
+    board.tasks.append(_task("t2", "bk", profile="p-claude"))
+    duo.tick()
+    assert launches(board) == ["t1"]
+
+
+def test_heartbeat_can_refill_unaffected_provider_with_capacity_hold(
+    duo, board, monkeypatch
+):
+    monkeypatch.setattr(settings, "heartbeat_min_launchable", 1)
+    monkeypatch.setattr(settings, "heartbeat_webhook_url", "http://kandev/hook")
+    monkeypatch.setattr(settings, "heartbeat_webhook_secret", "test")
+    posted = []
+    monkeypatch.setattr(
+        client, "post_webhook", lambda url, secret, body: posted.append(body) or 200
+    )
+    task = _task("t1", "ip", profile="p-claude")
+    task["metadata"]["deferred_launch"] = {"ceiling_deferred": True}
+    board.load([task], {}, {})
+    duo.tick()
+    assert [body["provider"] for body in posted] == ["openai"]
+
+
+@pytest.mark.parametrize("signal_check", [False, True])
+@pytest.mark.parametrize("deferred", [False, True])
+def test_fresh_admission_reserves_capacity_before_other_provider(
+    duo, board, monkeypatch, signal_check, deferred
+):
+    from kandev_pacer.selection import ActionKey
+
+    monkeypatch.setattr(settings, "concurrency_total", 1)
+    task = _task("t1", "bk", profile="p-claude")
+    other, (_, other_sessions) = _ready("tc", "p-codex")
+    board.load(
+        [task, other],
+        {"t1": _sess("s1", "WAITING_FOR_INPUT"), "tc": other_sessions},
+        {},
+    )
+    read = client.task_of
+
+    def admitted(task_id):
+        fresh = read(task_id)
+        if task_id != "t1":
+            return fresh
+        metadata = dict(fresh["metadata"])
+        if deferred:
+            metadata["deferred_launch"] = {"ceiling_deferred": True}
+        return {**fresh, "workflow_step_id": "ip", "metadata": metadata}
+
+    monkeypatch.setattr(client, "task_of", admitted)
+    if signal_check:
+        # The closed source gate prevents a later launch check from hiding a
+        # missing reservation in the pending-signal reconciliation path.
+        board.usage_pct = 95
+        duo.pending_signals[ActionKey("t1", "bk", "s1")] = (0, 5)
+    duo.tick()
+    assert launches(board) == ([] if deferred else ["tc"])
+    assert not duo.failed
+    assert not duo.pending_signals
+
+
+def test_fresh_capacity_hold_uses_admitted_profile(duo, board, monkeypatch):
+    task = _task("t1", "bk", profile="p-claude")
+    other, (_, sessions) = _ready("tc", "p-codex")
+    board.load([task, other], {"tc": sessions}, {})
+    read = client.task_of
+
+    def admitted(task_id):
+        fresh = read(task_id)
+        if task_id != "t1":
+            return fresh
+        return {
+            **fresh,
+            "workflow_step_id": "ip",
+            "metadata": {
+                "agent_profile_id": "p-codex",
+                "deferred_launch": {"ceiling_deferred": True},
+            },
+        }
+
+    monkeypatch.setattr(client, "task_of", admitted)
+    duo.tick()
+    assert launches(board) == []
+    assert duo.deferred["t1"].group.provider == "openai"

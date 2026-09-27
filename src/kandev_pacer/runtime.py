@@ -50,14 +50,17 @@ from .selection import (
     action_key,
     backed_off,
     fail_backoff,
+    is_capacity_deferred,
     is_launchable,
     is_wip_admitted,
     launch_profile,
+    launch_session,
     launch_target,
     matched_scopes,
     note_stall,
     ordered_tasks,
     pick_intent,
+    profile_provider,
     prune_booked,
     prune_failures,
     prune_stalls,
@@ -215,6 +218,30 @@ class Outcome:
     launched: dict | None = None   # the launch detail, when a turn was actually spent
 
 
+@dataclass
+class DeferredLaunch:
+    """A backend-owned launch, or its bounded wait for visible session state."""
+
+    key: ActionKey
+    sessions: frozenset[str]
+    already_running: frozenset[str]
+    group: GateGroup
+    # None while persisted; a deadline once the marker disappears before replay.
+    deadline: float | None = None
+
+    def running(self, sessions):
+        selected = launch_session(sessions)
+        return bool(
+            selected
+            and selected.get("state") in RUNNING_STATES
+            and selected["id"] not in self.already_running
+            and (
+                selected["id"] == self.key.session
+                or selected["id"] not in self.sessions
+            )
+        )
+
+
 # The task the Heartbeat automation runs as. One with a turn in flight is already looking
 # for work, so the webhook is not called again behind it.
 HEARTBEAT_TITLE = "[Auto] Heartbeat"
@@ -234,6 +261,7 @@ class Pacer:
         self.booked = {}     # key -> when the turn was spent
         self.failed = {}     # key -> {at, attempts, flagged}
         self.stalled = {}    # key -> {fingerprint, count, flagged}
+        self.deferred: dict[str, DeferredLaunch] = {}
         self.pending_signals = {}  # key -> (deadline, untouched turns)
         # Seconds run() waits after the current tick. Each tick sets it from what the
         # quota says is coming, so a long pause is not polled at a short gate's rate.
@@ -536,6 +564,64 @@ class Pacer:
             provider=group.provider,
         )
 
+    def hold_capacity(self, task, sessions, snapshot, group=None):
+        """Remember ownership without recording a failed or completed turn."""
+        task_id = task["id"]
+        if task_id not in self.deferred:
+            if group is None:
+                attribute = (
+                    self.attribute
+                    if len(self.config.providers) > 1
+                    else self.attribute_single
+                )
+                name = attribute(task, snapshot.agents)
+                group = GateGroup(
+                    name,
+                    matched_scopes(
+                        task_models(task, self.board, snapshot.agents),
+                        scope_names(snapshot.windows.get(name, [])),
+                    ),
+                )
+            self.deferred[task_id] = DeferredLaunch(
+                action_key(task, sessions),
+                frozenset(session["id"] for session in sessions),
+                frozenset(
+                    s["id"] for s in sessions if s.get("state") in RUNNING_STATES
+                ),
+                group,
+                None
+                if is_capacity_deferred(task)
+                else snapshot.now + self.config.booking_ttl,
+            )
+        elif is_capacity_deferred(task):
+            self.deferred[task_id].deadline = None
+
+    def reconcile_capacity(self, snapshot):
+        tasks = {task["id"]: task for task in snapshot.tasks}
+        for task in snapshot.tasks:
+            if is_capacity_deferred(task):
+                self.hold_capacity(task, snapshot.sessions[task["id"]], snapshot)
+        for task_id, held in list(self.deferred.items()):
+            task = tasks.get(task_id)
+            if task is not None and is_capacity_deferred(task):
+                continue
+            if task is None or held.running(snapshot.sessions[task_id]):
+                del self.deferred[task_id]
+            elif held.deadline is None:
+                # Marker removal can precede session visibility. Start this wait once.
+                held.deadline = snapshot.now + self.config.booking_ttl
+            elif snapshot.now >= held.deadline:
+                del self.deferred[task_id]
+
+    def deferred_of(self, snapshot, provider_name=None, scopes=None):
+        return sum(
+            1
+            for task_id, held in self.deferred.items()
+            if (provider_name is None or held.group.provider == provider_name)
+            and (scopes is None or held.group.scopes in scopes)
+            and not held.running(snapshot.sessions.get(task_id, []))
+        )
+
     def running_of(self, provider_name, snapshot):
         """Turns in flight for one provider, counted from the tasks attributed to it."""
         return sum(
@@ -549,7 +635,10 @@ class Pacer:
     def total_full(self, snapshot):
         """Whether the shared PACER_CONCURRENCY_TOTAL is reached, counting this tick's spends."""
         total = self.config.concurrency_total
-        return total is not None and snapshot.running + self._spent >= total
+        return (
+            total is not None
+            and snapshot.running + self._spent + self.deferred_of(snapshot) >= total
+        )
 
     def next_action(self, snapshot, queued, allowed):
         """The one Candidate for a provider to spend a turn on, or None.
@@ -559,6 +648,7 @@ class Pacer:
         single-class path with no filter, exactly as before providers went plural.
         """
         ordered = ordered_tasks(snapshot.tasks, snapshot.sidebar, self.board.step_ranks)
+        ordered = [task for task in ordered if task["id"] not in self.deferred]
         cache_deadlines = self.cache_deadlines(snapshot)
         if allowed is None:
             return select_action(
@@ -613,7 +703,8 @@ class Pacer:
     def tick(self):
         """Run one tick. Returns whether any gate was open, for the caller."""
         snapshot = self.read()
-        self.check_signals(snapshot.now)
+        self.reconcile_capacity(snapshot)
+        self.check_signals(snapshot.now, snapshot)
         self.booked = prune_booked(
             self.booked, snapshot.tasks, snapshot.sessions,
             snapshot.now, self.config.booking_ttl,
@@ -642,7 +733,9 @@ class Pacer:
         # some gate is open with room to act -- so a shut or full board reads none.
         needs_queue = any(
             verdicts[group].is_open
-            and self.running_of(group.provider, snapshot) < self.config.concurrency
+            and self.running_of(group.provider, snapshot)
+            + self.deferred_of(snapshot, group.provider)
+            < self.config.concurrency
             and not self.total_full(snapshot)
             for group in groups
         )
@@ -670,6 +763,7 @@ class Pacer:
             for task in snapshot.tasks
             if snapshot.task_providers.get(task["id"]) == provider_name
             and (scopes is None or snapshot.task_scopes.get(task["id"], ()) in scopes)
+            and task["id"] not in self.deferred
             and is_launchable(task, snapshot.sessions[task["id"]], self.board, skip)
         )
 
@@ -694,6 +788,7 @@ class Pacer:
                 (name, launchable)
                 for name in open_providers
                 if (launchable := self.launchable_of(name, snapshot))
+                + self.deferred_of(snapshot, name)
                 < config.heartbeat_min_launchable
             ),
             None,
@@ -720,6 +815,7 @@ class Pacer:
                 }
                 if (
                     not self.running_of(name, snapshot)
+                    and not self.deferred_of(snapshot, name, scopes)
                     and not self.launchable_of(name, snapshot, scopes)
                     and not any(
                         snapshot.task_providers.get(key.task) == name
@@ -815,6 +911,7 @@ class Pacer:
                 for task in snapshot.tasks
                 if snapshot.task_providers.get(task["id"]) == provider_name
                 and snapshot.task_scopes.get(task["id"], ()) == group.scopes
+                and task["id"] not in self.deferred
                 and is_launchable(
                     task, snapshot.sessions[task["id"]], self.board, self.skip_keys(now)
                 )
@@ -822,6 +919,9 @@ class Pacer:
 
         def report(group, gate, outcome, extra="", warn=False, quiet=False):
             verdict = verdicts[group]
+            deferred = self.deferred_of(snapshot, provider_name, {group.scopes})
+            if deferred:
+                extra += f", {deferred} capacity deferred"
             line = f"{tag_of(group)}{outcome.message}{extra}"
             if gate == "open":
                 line = (
@@ -832,8 +932,7 @@ class Pacer:
                 not quiet
             ):  # a standing source outage is counted silently between restates
                 (log.warning if warn else log.info)(line)
-            self.log_event(
-                tick_record(
+            record = tick_record(
                     now,
                     gate,
                     outcome.action,
@@ -854,7 +953,8 @@ class Pacer:
                     scope="+".join(group.scopes) or None,
                     fallback=bool(outcome.launched and outcome.launched.get("fallback")),
                 )
-            )
+            record["deferred"] = deferred
+            self.log_event(record)
             return gate == "open"
 
         open_groups = []
@@ -886,9 +986,15 @@ class Pacer:
                 and now - self._gate_closed_at[provider_name]
                 >= self.config.fallback_after
             ):
+                # Existing fallback behavior is unchanged without capacity holds.
+                if self.deferred and self.total_full(snapshot):
+                    return False
                 ordered = ordered_tasks(
-                    snapshot.tasks, snapshot.sidebar, self.board.step_ranks
+                    snapshot.tasks,
+                    snapshot.sidebar,
+                    self.board.step_ranks,
                 )
+                ordered = [task for task in ordered if task["id"] not in self.deferred]
                 # Fallback cannot drain while the normal gate is closed. Skip
                 # pending and unreadable queues so they do not starve other work.
                 fallback_queues = queued_counts(snapshot.sessions)
@@ -929,19 +1035,19 @@ class Pacer:
             return False
 
         cap = self.config.concurrency
-        if running >= cap:
+        if running + self.deferred_of(snapshot, provider_name) >= cap:
             for group in open_groups:
                 report(group, "open", Outcome("full", f"full ({running}/{cap})"))
             return True
         if self.total_full(snapshot):
+            committed = snapshot.running + self._spent + self.deferred_of(snapshot)
             for group in open_groups:
                 report(
                     group,
                     "open",
                     Outcome(
                         "full",
-                        f"full (total {snapshot.running + self._spent}/"
-                        f"{self.config.concurrency_total})",
+                        f"full (total {committed}/{self.config.concurrency_total})",
                     ),
                 )
             return True
@@ -1047,9 +1153,15 @@ class Pacer:
         # be worth confirming the task is still where we think it is.
         task = candidate.task
         fresh = client.task_of(task["id"])
+        if fresh is not None and is_capacity_deferred(fresh):
+            sessions = client.sessions_of(task["id"])
+            self.hold_capacity(fresh, sessions, snapshot)
+            return Outcome("deferred", f"{label(task)!r} waiting for session capacity")
         if fresh is None or fresh.get("workflow_step_id", "") != task.get("workflow_step_id", ""):
             return Outcome("skipped", f"{label(task)!r} moved since selection -> skip")
         sessions = client.sessions_of(task["id"])
+        if task["id"] in self.deferred:
+            return Outcome("deferred", f"{label(task)!r} waiting for session capacity")
         if candidate.kind == "drain":
             return self.drain(fresh, key, sessions, snapshot, candidate.session)
         # Recheck before launch, including fallback paths that skipped queue reads.
@@ -1116,6 +1228,7 @@ class Pacer:
         if action_key(task, sessions) != key:
             self.stalled.pop(key, None)
             return Outcome("skipped", f"{label(task)!r} changed session -> skip")
+        previous_stall = self.stalled.get(key)
         self.stalled[key] = note_stall(self.stalled, key, progress.fingerprint(sessions))
         if stalled_out(self.stalled, key, self.config.stall_after):
             return self.give_up(key, task, sessions)
@@ -1135,19 +1248,50 @@ class Pacer:
         if fallback and intent == "start":
             source = snapshot.agents.get(profile)
             target_name = self.config.fallback_profiles.get((source or {}).get("name"))
-            target = next(
+            fallback_profile = next(
                 (
                     pid for pid, info in snapshot.agents.items()
                     if info.get("name") == target_name
                 ),
                 None,
             )
-            if target:
-                profile = target
+            if fallback_profile:
+                profile = fallback_profile
             else:
                 return Outcome("skipped", f"fallback unavailable for {label(task)!r}")
+        group = GateGroup(
+            snapshot.task_providers.get(task["id"]),
+            snapshot.task_scopes.get(task["id"], ()),
+        )
+        if profile and (fallback or len(self.config.providers) > 1):
+            name = profile_provider(profile, snapshot.agents)
+            models = task_models(
+                {"metadata": {"agent_profile_id": profile}}, self.board, snapshot.agents
+            )
+            group = GateGroup(
+                name,
+                matched_scopes(models, scope_names(snapshot.windows.get(name, []))),
+            )
+        if (
+            fallback
+            and self.deferred
+            and (
+                self.running_of(group.provider, snapshot)
+                + self.deferred_of(snapshot, group.provider)
+                >= self.config.concurrency
+                or self.total_full(snapshot)
+            )
+        ):
+            if previous_stall is None:
+                self.stalled.pop(key, None)
+            else:
+                self.stalled[key] = previous_stall
+            return Outcome("full", "fallback waiting for committed capacity")
+        confirmation_unknown = False
         try:
-            client.ws_launch(task["id"], intent, session_id, target, agent_profile_id=profile)
+            response = client.ws_launch(
+                task["id"], intent, session_id, target, agent_profile_id=profile
+            )
         except client.RequestOutcomeUnknown as error:
             self.note_uncertain(
                 ActionKey(task["id"], task.get("workflow_step_id", ""), session_id),
@@ -1155,8 +1299,54 @@ class Pacer:
             )
             return Outcome("uncertain", f"{label(task)!r} launch unconfirmed", launched={})
         except Exception as error:
-            self.note_failure(key, task, str(error), snapshot.now)
-            return None
+            if (
+                str(error)
+                != "session.launch failed: session ceiling deferred the workflow step launch"
+            ):
+                self.note_failure(key, task, str(error), snapshot.now)
+                return None
+            try:
+                fresh = client.task_of(task["id"])
+            except client.ReadFailed:
+                confirmation_unknown = True
+                fresh = None
+                # The backend may own it; reconcile on the next successful read.
+            else:
+                if not fresh or not is_capacity_deferred(fresh):
+                    self.note_failure(key, task, str(error), snapshot.now)
+                    return None
+            task = fresh or task
+            response = {
+                "activation_disposition": "queued",
+                "activation_reason": "session_capacity",
+            }
+
+        if (
+            isinstance(response, dict)
+            and response.get("activation_disposition") == "queued"
+            and response.get("activation_reason") == "session_capacity"
+        ):
+            if previous_stall is None:
+                self.stalled.pop(key, None)
+            else:
+                self.stalled[key] = previous_stall
+            self.hold_capacity(task, sessions, snapshot, group)
+            action = "uncertain" if confirmation_unknown else "deferred"
+            self.log_event(
+                {
+                    "t": round(snapshot.now, 3),
+                    "kind": action,
+                    "persisted": is_capacity_deferred(task),
+                    "task": task["id"],
+                    "reason": "session_capacity",
+                }
+            )
+            message = (
+                "capacity deferral unconfirmed"
+                if confirmation_unknown
+                else "waiting for session capacity"
+            )
+            return Outcome(action, f"{label(task)!r} {message}")
 
         step = task.get("workflow_step_id", "")
         self.book(task["id"], step, session_id, snapshot.now)
@@ -1238,7 +1428,7 @@ class Pacer:
         )
         return None
 
-    def check_signals(self, now):
+    def check_signals(self, now, snapshot=None):
         """Observe movement before retrying work, even when the quota gate is closed."""
         for key, (deadline, turns) in list(self.pending_signals.items()):
             try:
@@ -1247,6 +1437,8 @@ class Pacer:
             except Exception as error:
                 self.stall_event(key, turns, "signal_check_failed", str(error))
                 continue
+            if snapshot is not None and task is not None and is_capacity_deferred(task):
+                self.hold_capacity(task, sessions, snapshot)
             if task is None or task.get("workflow_step_id", "") != key.step:
                 self.stall_event(
                     key,
@@ -1254,6 +1446,12 @@ class Pacer:
                     "advanced" if task else "signal_cancelled",
                     "task moved" if task else "task disappeared",
                 )
+            elif is_capacity_deferred(task) or key.task in self.deferred:
+                self.stall_event(
+                    key, turns, "signal_cancelled", "launch deferred for capacity"
+                )
+                del self.pending_signals[key]
+                continue
             elif action_key(task, sessions) != key:
                 self.stall_event(
                     key, turns, "signal_cancelled", "launch session changed"
