@@ -8,12 +8,12 @@ Rules for TASKS.md usage are at the bottom of the file.
 
 ## Scheduled
 
+## In Progress
+
 - [16] Learn from session observation records: a lowest-priority Kandev task the
   Heartbeat creates when unread records exist, writing observations and proposed
   solution prompts to the right repository's unreviewed section.
   - Depends on: [5]
-
-## In Progress
 
 - [*] The `Queue` button injected by the userscript into task sessions doesn't work. It
   always pops up this error: `Queue failed: task session identity is unavailable`.

@@ -756,3 +756,51 @@ def test_only_explicit_capacity_marker_holds_work(metadata, expected):
     from kandev_pacer.selection import is_capacity_deferred
 
     assert is_capacity_deferred({"metadata": metadata}) is expected
+
+
+def test_consumer_loses_to_normal_work_after_cache_and_manual_order():
+    from kandev_pacer.selection import OBSERVATION_CONSUMER_TITLE
+
+    consumer = dict(
+        _task("consumer", step="ip", prio="critical"), title=OBSERVATION_CONSUMER_TITLE
+    )
+    normal = [_task("first", step="bk", pos=0), _task("second", step="bk", pos=1)]
+    sidebar = _settings(ordered=["consumer", "first", "second"], pinned=["consumer"])
+    ordered = ordered_tasks([*normal, consumer], sidebar, RANKS)
+    assert ordered[0]["id"] == "consumer"
+    assert (
+        select_action(
+            ordered, {}, {}, BOARD, set(), cache_deadlines={"consumer": 1}
+        ).task["id"]
+        == "first"
+    )
+    assert (
+        select_action(
+            ordered, {}, {}, BOARD, set(), cache_deadlines={"consumer": 1, "second": 2}
+        ).task["id"]
+        == "second"
+    )
+    assert select_action([consumer], {}, {}, BOARD, set()).task == consumer
+
+
+def test_consumer_rule_preserves_drains_and_provider_eligibility():
+    from kandev_pacer.selection import OBSERVATION_CONSUMER_TITLE
+
+    consumer = dict(_task("consumer"), title=OBSERVATION_CONSUMER_TITLE)
+    normal = _task("normal")
+    sessions = {"consumer": [_sess("s", "WAITING_FOR_INPUT")]}
+    action = select_action([normal, consumer], sessions, {"s": 1}, BOARD, set())
+    assert (action.kind, action.task["id"]) == ("drain", "consumer")
+    action = select_action(
+        [normal, consumer],
+        {},
+        {},
+        BOARD,
+        set(),
+        allowed={"open"},
+        provider_of=lambda t, s: "open" if t["id"] == "consumer" else "closed",
+    )
+    assert action.task["id"] == "consumer"
+    # A normal task title mentioning observations is not the reserved consumer title.
+    normal["title"] = "Learn from session observation records"
+    assert select_action([normal, consumer], {}, {}, BOARD, set()).task == normal

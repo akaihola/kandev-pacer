@@ -18,6 +18,12 @@ from .config import (
     settings,
 )
 
+OBSERVATION_CONSUMER_TITLE = "[Auto] Learn from session observations"
+
+
+def is_observation_consumer(task):
+    return task.get("title") == OBSERVATION_CONSUMER_TITLE
+
 
 def priority_rank(task):
     return PRIORITY_RANK.get(
@@ -181,6 +187,7 @@ def select_action(
         warm = [task for task in launchable if cache_deadlines.get(task["id"]) is not None]
         cold = [task for task in launchable if cache_deadlines.get(task["id"]) is None]
         launchable = sorted(warm, key=lambda task: cache_deadlines[task["id"]]) + cold
+    launchable.sort(key=is_observation_consumer)
     if launchable:
         return Candidate("launch", launchable[0])
     return None

@@ -2041,3 +2041,21 @@ def test_running_primary_before_capacity_hold_is_not_its_replay(
     task["metadata"].pop("deferred_launch")
     pacer.tick()
     assert not actions(board)
+
+
+def test_dump_order_explains_consumer_last(pacer, board, capsys):
+    from kandev_pacer.selection import OBSERVATION_CONSUMER_TITLE
+
+    board.load(
+        [
+            _task("consumer", "ip", OBSERVATION_CONSUMER_TITLE, created="1"),
+            _task("normal", "bk", "Normal work", created="2"),
+        ],
+        {},
+        {},
+    )
+    dump_order(pacer)
+    text = capsys.readouterr().out
+    assert text.index("Normal work") < text.index(OBSERVATION_CONSUMER_TITLE)
+    assert "last among eligible launches of its provider" in text
+    assert "static order" in text
