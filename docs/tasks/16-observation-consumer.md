@@ -109,8 +109,8 @@ self-only input creates no task, preventing a consumer review loop. A future rea
 records their skip reasons. Record sidecars and legacy frontmatter remain unchanged.
 
 The companion change in `~/prg/kandev-config` adds Heartbeat section 6 and
-`prompts/observation-consumer.md`, committed as `1c0db21`. The latter sits outside the generated `workspaces/`
-tree, which `export.py` deletes and rebuilds. Heartbeat embeds the full prompt and frozen
+`prompts/observation-consumer.md`, committed as `1c0db21`. The latter sits outside the
+generated `workspaces/` tree, which `export.py` deletes and rebuilds. Heartbeat embeds the full prompt and frozen
 batch in a task bound to kandev-config on the writable Paced Kanban workflow. Proposals
 may go to other repositories according to the original task and the finding's scope.
 The agent reads each target's rules and writes only unreviewed proposal documentation.
@@ -142,3 +142,17 @@ one real batch creates one low-priority consumer, repeat while open creates none
 consumer commits a justified unreviewed proposal, and a fully consumed input creates
 none. With a capped backlog, the next completed batch may legitimately create one new
 consumer. Keep production proposal commits separate from this issue's tracker move.
+
+## Implementation review, 2026-09-27
+
+Two duplicate-suppression defects were reproduced and fixed. A change in the total
+task count between API pages now stops preparation: a removal can move an unseen
+consumer onto a page already read. A fully acknowledged pending batch is now retired
+even when its Kandev task has been deleted, so the helper cannot recreate consumed work.
+Uncertain or open tasks still retain their identity and suppress replacement creation.
+
+All 377 focused tests pass after these fixes, as do `darker --check` and `graylint`.
+Tracker verification found 29 issues, each under exactly one heading. Removing [16]
+from this branch and main leaves identical tracker text. The companion configuration
+commit was reviewed; production activation and the real-batch check remain deployment
+steps as described above.

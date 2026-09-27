@@ -230,7 +230,7 @@ def test_failed_ledger_commit_recovers_without_staging_other_files(review, monke
     with pytest.raises(RuntimeError, match="commit failed"):
         consumer.acknowledge(vault, state, args["external_id"], [name])
     monkeypatch.setattr(consumer, "commit_records", original)
-    assert prepare()["arguments"] == args
+    assert prepare()["status"] == "empty"
     assert name in consumer.ledger(vault, state)[1]
     assert git(vault, "diff", "--cached", "--name-only") == "unrelated"
     assert git(vault, "show", "--format=", "--name-only", "HEAD") == str(
@@ -350,3 +350,33 @@ def test_reject_state_reuse_for_another_vault(review, tmp_path):
         prepare()
     with pytest.raises(ValueError, match="another vault"):
         consumer.acknowledge(vault, state, args["external_id"], [name])
+
+
+def test_task_listing_shrinks_between_pages(review, monkeypatch):
+    vault, state, _, prepare = review
+    record(vault)
+    first = [{"id": str(n), "title": "ordinary", "state": "TODO"} for n in range(100)]
+    # A removal moves the last task onto the first page, which we already read.
+    monkeypatch.setattr(
+        consumer.client,
+        "get",
+        lambda path: {
+            "tasks": first if "page=1&" in path else [],
+            "total": 101 if "page=1&" in path else 100,
+        },
+    )
+    with pytest.raises(ValueError, match="changed while paging"):
+        prepare()
+    assert not (state / "pending.json").exists()
+
+
+def test_consumed_batch_is_not_recreated_after_task_deletion(review):
+    vault, state, api, prepare = review
+    name = record(vault)
+    args = prepare()["arguments"]
+    created(api)
+    consumer.acknowledge(vault, state, args["external_id"], [name])
+    api["lookup"] = None
+    assert prepare()["status"] == "empty"
+    assert prepare()["status"] == "empty"
+    assert not (state / "pending.json").exists()

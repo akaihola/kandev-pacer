@@ -93,6 +93,7 @@ def closed(task):
 def workspace_tasks(workspace):
     tasks: list[dict[str, Any]] = []
     page = 1
+    expected_total = None
     while True:
         response = client.get(
             f"/api/v1/workspaces/{quote(workspace, safe='')}/tasks?page={page}&page_size=100"
@@ -100,6 +101,9 @@ def workspace_tasks(workspace):
         rows, total = response["tasks"], response["total"]
         if not isinstance(rows, list) or not isinstance(total, int):
             raise ValueError("invalid task listing")
+        if expected_total is not None and total != expected_total:
+            raise ValueError("task listing changed while paging; retry")
+        expected_total = total
         if any(row["id"] in {t["id"] for t in tasks} for row in rows):
             raise ValueError("task listing changed while paging; retry")
         tasks.extend(rows)
@@ -194,14 +198,15 @@ def prepare(vault, state, workspace, workflow, agent, executor, prompt_path, hom
                 if not closed(task):
                     verify_task(task, pending["arguments"])
                     return {"status": "open", "task_id": task["id"]}
-                if not all(consumed(r["record"], names) for r in pending["records"]):
-                    return {
-                        "status": "blocked",
-                        "task_id": task["id"],
-                        "reason": "closed batch has unread records",
-                    }
+            if all(consumed(r["record"], names) for r in pending["records"]):
                 pending_path.unlink()
                 pending = None
+            elif task:
+                return {
+                    "status": "blocked",
+                    "task_id": task["id"],
+                    "reason": "closed batch has unread records",
+                }
         if open_consumers:
             return {"status": "open", "task_id": open_consumers[0]["id"]}
         if pending:
