@@ -52,6 +52,7 @@ from .selection import (
     fail_backoff,
     is_capacity_deferred,
     is_launchable,
+    is_observation_consumer,
     is_wip_admitted,
     launch_profile,
     launch_session,
@@ -1615,12 +1616,19 @@ def dump_order(pacer):
 
     tasks = client.paced_tasks(board.scope)
     ordered = ordered_tasks(tasks, sidebar, board.step_ranks)
+    ordered.sort(key=is_observation_consumer)
+    if any(is_observation_consumer(task) for task in ordered):
+        print(
+            "static order: excludes live cache deadlines, provider gates and user-prompt drains"
+        )
     for index, task in enumerate(ordered, start=1):
         # Same complaint as report_out_of_scope(): a card that will never launch looks
         # identical in the order to one that will. A WIP-queued card sits on its step,
         # in order, and is skipped every tick.
         queued = "" if is_wip_admitted(task) else "  (queued: step WIP limit full)"
         print(f"{index:3}. {label(task)}{queued}")
+        if is_observation_consumer(task):
+            print("     last among eligible launches of its provider")
         step = task.get("workflow_step_id", "")
         if step not in board.work_steps and step not in board.queue_steps:
             print(
