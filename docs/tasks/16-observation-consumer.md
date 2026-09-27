@@ -156,3 +156,46 @@ Tracker verification found 29 issues, each under exactly one heading. Removing [
 from this branch and main leaves identical tracker text. The companion configuration
 commit was reviewed; production activation and the real-batch check remain deployment
 steps as described above.
+
+## Deployment and live verification, 2026-09-27
+
+Merged the five feature commits with `--no-ff` as `e79b061`. The deployed tree passed
+all 377 focused tests listed above; `darker --check` and `graylint` passed again.
+Both pacer worktrees were clean after the merge.
+
+Restarted the pacer in its existing tmux pane from `/home/agent/prg/kandev-pacer`,
+keeping its private environment and pebble quota source. Restarted the development-tree
+`kandev-learn.service`; its result was success with exit status 0, and its timer remains
+active. After the helper and launch ordering were running, applied kandev-config commit
+`1c0db21` through `uv run apply.py --apply`. The tool verified the live rows and export
+against the repository; a second dry run reported no changes. Only Heartbeat's prompt
+changed. Apply created backup `manual-1790470029183729266.db` and undo file
+`~/.kandev/data/backups/kandev-config-undo-20260927T004709Z.json`.
+
+Exercised the deployed helper and MCP create path manually with the first real frozen
+batch of 20 records. This verifies the creation path, not an autonomous Heartbeat run.
+It created task `809760aa-9423-4d58-9230-144f88337b84`, bound to kandev-config in
+Paced Kanban, with external ID
+`observation-consumer:4ccc6d0ed531cf231ac2c9ab03b08ae3ac9824aca0296ddaf4fdb3b43547e315`.
+Two repeated preparations returned the same open task; API inspection found exactly
+one consumer and verified its `low` priority and repository binding. `--dump-order`
+put it last (position 70), with the expected explanation. Once the existing quota
+collector refreshed its stale snapshot, the pacer launched it through the normal gate.
+No quota bypass or forced launch was used.
+
+### Live verification blocker
+
+Consumer session `952942a3-377c-450a-943b-1ed33b06f26c` reported at
+2026-09-27 01:04:56 UTC that its sandbox could not start Bash and automatic approval
+review timed out twice on its required file read. It created no proposals or commits
+and acknowledged no filenames. Read-only checks confirmed `consumed.md` was absent;
+the task reached Review and retained low priority. A later helper preparation received
+HTTP 503 from the task-list API and stopped without creating a replacement.
+
+The deployment is active, but the real proposal/ledger check and autonomous Heartbeat
+acceptance run remain unverified. Keep [16] In Progress until those checks pass. The
+frozen batch and task identity remain intact; do not delete pending state or create a
+replacement to work around the access failure. Restore the consumer's execution access,
+resume the same task, then inspect its proposal commits and ledger entries. Re-run
+preparation while it is open to verify suppression. The fully consumed-input/no-new-task
+case passes focused fixtures; the production backlog still contains unread records.
