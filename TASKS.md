@@ -15,9 +15,6 @@ Rules for TASKS.md usage are at the bottom of the file.
 
 ## In Progress
 
-- [*] Kandev task dd6897a9-b54e-4ad4-b9b5-b2372292f4b1 stated: "Capacity-deferral
-  handling remains separate follow-up work." If that hasn't been implemented, do it.
-
 - [*] The `Queue` button injected by the userscript into task sessions doesn't work. It
   always pops up this error: `Queue failed: task session identity is unavailable`.
 
@@ -25,6 +22,9 @@ Rules for TASKS.md usage are at the bottom of the file.
   before resuming tasks.
 
 ## Completed
+
+- [*] Kandev task dd6897a9-b54e-4ad4-b9b5-b2372292f4b1 stated: "Capacity-deferral
+  handling remains separate follow-up work." If that hasn't been implemented, do it.
 
 - [*] Show Fable in scoped gate logs even when it is the only class, and diagnose why
   waiting Fable tasks are not launchable.
