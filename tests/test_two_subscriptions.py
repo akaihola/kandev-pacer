@@ -722,3 +722,66 @@ def test_heartbeat_can_refill_unaffected_provider_with_capacity_hold(
     board.load([task], {}, {})
     duo.tick()
     assert [body["provider"] for body in posted] == ["openai"]
+
+
+@pytest.mark.parametrize("signal_check", [False, True])
+@pytest.mark.parametrize("deferred", [False, True])
+def test_fresh_admission_reserves_capacity_before_other_provider(
+    duo, board, monkeypatch, signal_check, deferred
+):
+    from kandev_pacer.selection import ActionKey
+
+    monkeypatch.setattr(settings, "concurrency_total", 1)
+    task = _task("t1", "bk", profile="p-claude")
+    other, (_, other_sessions) = _ready("tc", "p-codex")
+    board.load(
+        [task, other],
+        {"t1": _sess("s1", "WAITING_FOR_INPUT"), "tc": other_sessions},
+        {},
+    )
+    read = client.task_of
+
+    def admitted(task_id):
+        fresh = read(task_id)
+        if task_id != "t1":
+            return fresh
+        metadata = dict(fresh["metadata"])
+        if deferred:
+            metadata["deferred_launch"] = {"ceiling_deferred": True}
+        return {**fresh, "workflow_step_id": "ip", "metadata": metadata}
+
+    monkeypatch.setattr(client, "task_of", admitted)
+    if signal_check:
+        # The closed source gate prevents a later launch check from hiding a
+        # missing reservation in the pending-signal reconciliation path.
+        board.usage_pct = 95
+        duo.pending_signals[ActionKey("t1", "bk", "s1")] = (0, 5)
+    duo.tick()
+    assert launches(board) == ([] if deferred else ["tc"])
+    assert not duo.failed
+    assert not duo.pending_signals
+
+
+def test_fresh_capacity_hold_uses_admitted_profile(duo, board, monkeypatch):
+    task = _task("t1", "bk", profile="p-claude")
+    other, (_, sessions) = _ready("tc", "p-codex")
+    board.load([task, other], {"tc": sessions}, {})
+    read = client.task_of
+
+    def admitted(task_id):
+        fresh = read(task_id)
+        if task_id != "t1":
+            return fresh
+        return {
+            **fresh,
+            "workflow_step_id": "ip",
+            "metadata": {
+                "agent_profile_id": "p-codex",
+                "deferred_launch": {"ceiling_deferred": True},
+            },
+        }
+
+    monkeypatch.setattr(client, "task_of", admitted)
+    duo.tick()
+    assert launches(board) == []
+    assert duo.deferred["t1"].group.provider == "openai"

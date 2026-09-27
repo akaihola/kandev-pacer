@@ -568,17 +568,27 @@ class Pacer:
         """Remember ownership without recording a failed or completed turn."""
         task_id = task["id"]
         if task_id not in self.deferred:
+            if group is None:
+                attribute = (
+                    self.attribute
+                    if len(self.config.providers) > 1
+                    else self.attribute_single
+                )
+                name = attribute(task, snapshot.agents)
+                group = GateGroup(
+                    name,
+                    matched_scopes(
+                        task_models(task, self.board, snapshot.agents),
+                        scope_names(snapshot.windows.get(name, [])),
+                    ),
+                )
             self.deferred[task_id] = DeferredLaunch(
                 action_key(task, sessions),
                 frozenset(session["id"] for session in sessions),
                 frozenset(
                     s["id"] for s in sessions if s.get("state") in RUNNING_STATES
                 ),
-                group
-                or GateGroup(
-                    snapshot.task_providers.get(task_id),
-                    snapshot.task_scopes.get(task_id, ()),
-                ),
+                group,
                 None
                 if is_capacity_deferred(task)
                 else snapshot.now + self.config.booking_ttl,
@@ -1143,11 +1153,13 @@ class Pacer:
         # be worth confirming the task is still where we think it is.
         task = candidate.task
         fresh = client.task_of(task["id"])
+        if fresh is not None and is_capacity_deferred(fresh):
+            sessions = client.sessions_of(task["id"])
+            self.hold_capacity(fresh, sessions, snapshot)
+            return Outcome("deferred", f"{label(task)!r} waiting for session capacity")
         if fresh is None or fresh.get("workflow_step_id", "") != task.get("workflow_step_id", ""):
             return Outcome("skipped", f"{label(task)!r} moved since selection -> skip")
         sessions = client.sessions_of(task["id"])
-        if is_capacity_deferred(fresh):
-            self.hold_capacity(fresh, sessions, snapshot)
         if task["id"] in self.deferred:
             return Outcome("deferred", f"{label(task)!r} waiting for session capacity")
         if candidate.kind == "drain":
@@ -1425,6 +1437,8 @@ class Pacer:
             except Exception as error:
                 self.stall_event(key, turns, "signal_check_failed", str(error))
                 continue
+            if snapshot is not None and task is not None and is_capacity_deferred(task):
+                self.hold_capacity(task, sessions, snapshot)
             if task is None or task.get("workflow_step_id", "") != key.step:
                 self.stall_event(
                     key,
@@ -1433,8 +1447,6 @@ class Pacer:
                     "task moved" if task else "task disappeared",
                 )
             elif is_capacity_deferred(task) or key.task in self.deferred:
-                if snapshot is not None and is_capacity_deferred(task):
-                    self.hold_capacity(task, sessions, snapshot)
                 self.stall_event(
                     key, turns, "signal_cancelled", "launch deferred for capacity"
                 )
