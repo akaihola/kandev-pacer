@@ -109,7 +109,7 @@ self-only input creates no task, preventing a consumer review loop. A future rea
 records their skip reasons. Record sidecars and legacy frontmatter remain unchanged.
 
 The companion change in `~/prg/kandev-config` adds Heartbeat section 6 and
-`prompts/observation-consumer.md`. The latter sits outside the generated `workspaces/`
+`prompts/observation-consumer.md`, committed as `1c0db21`. The latter sits outside the generated `workspaces/`
 tree, which `export.py` deletes and rebuilds. Heartbeat embeds the full prompt and frozen
 batch in a task bound to kandev-config on the writable Paced Kanban workflow. Proposals
 may go to other repositories according to the original task and the finding's scope.
@@ -117,7 +117,8 @@ The agent reads each target's rules and writes only unreviewed proposal document
 
 Checks run during implementation:
 
-- 337 focused tests passed across the consumer, selection, runtime, two-subscription,
+- 375 focused tests passed after rebasing onto main's capacity-deferral changes,
+  across the consumer, selection, runtime, two-subscription,
   Fable-window and collector suites. `uv run darker --check` and `uv run graylint` passed.
 - Real Git fixtures covered ledger failures before and after publication, preservation
   of unrelated staged files, partial acknowledgement and repeated runs.
@@ -131,6 +132,9 @@ Checks run during implementation:
   worktree's package. A temporary export preserved the separate consumer prompt.
 - The kandev-config apply dry run showed only the Heartbeat prompt addition. No live
   configuration was applied and no real observation was acknowledged in this step.
+- Rebase conflicts in the tracker and appended tests were resolved using main's
+  contents plus only this issue's move and new tests. Removing [16] from both tracker
+  versions leaves byte-for-byte identical text. Both repositories have clean worktrees.
 
 Deployment remains for the merge/deploy step. Deploy the pacer helper and ordering
 first, then apply the kandev-config prompt change with its repository procedure. Verify
