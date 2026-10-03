@@ -14,9 +14,6 @@ Rules for TASKS.md usage are at the bottom of the file.
 
 ## In Progress
 
-- [17] Stop `kandev-learn sweep` from parsing every Codex transcript in full before
-  checking which task it belongs to; one 1.17 GB rollout makes each sweep take 4+ GiB.
-
 - [16] Learn from session observation records: a lowest-priority Kandev task the
   Heartbeat creates when unread records exist, writing observations and proposed
   solution prompts to the right repository's unreviewed section.
@@ -29,6 +26,9 @@ Rules for TASKS.md usage are at the bottom of the file.
   before resuming tasks.
 
 ## Completed / Accepted
+
+- [ ] [17] Stop `kandev-learn sweep` from parsing every Codex transcript in full before
+  checking which task it belongs to; one 1.17 GB rollout makes each sweep take 4+ GiB.
 
 - [ ] [*] Kandev task dd6897a9-b54e-4ad4-b9b5-b2372292f4b1 stated: "Capacity-deferral
       handling remains separate follow-up work." If that hasn't been implemented, do it.
