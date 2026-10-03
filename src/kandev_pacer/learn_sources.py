@@ -7,6 +7,7 @@ import hashlib
 import json
 import os
 import re
+import shutil
 import signal
 import sqlite3
 import subprocess
@@ -289,7 +290,9 @@ def opencode_entries(export):
     return entries, sorted(models)
 
 
-def ccusage(home, ids, timeout, agent="claude", since=None):
+def ccusage(home, ids, timeout, agent="claude", since=None, files=()):
+    if not ids:
+        return []
     # Execute only a prepared, exact package. Never let npx install during a sweep.
     for package in sorted(
         (home / ".npm/_npx").glob("*/node_modules/ccusage/package.json")
@@ -309,18 +312,28 @@ def ccusage(home, ids, timeout, agent="claude", since=None):
                 )
                 is not None
             ]
-        report = json.loads(
-            command(
-                [
-                    *base,
-                    agent,
-                    "session",
-                    *options,
-                    *(["--since", since[:10]] if since else []),
-                ],
-                timeout,
+        with tempfile.TemporaryDirectory(prefix="kandev-learn-usage-") as temporary:
+            env = None
+            if agent == "codex":
+                # ccusage otherwise rereads unrelated rollouts before filtering dates.
+                for file in files:
+                    target = Path(temporary) / file.relative_to(home / ".codex")
+                    target.parent.mkdir(parents=True, exist_ok=True)
+                    shutil.copyfile(file, target)
+                env = {**os.environ, "CODEX_HOME": temporary}
+            report = json.loads(
+                command(
+                    [
+                        *base,
+                        agent,
+                        "session",
+                        *options,
+                        *(["--since", since[:10]] if since else []),
+                    ],
+                    timeout,
+                    env,
+                )
             )
-        )
         selected = [
             r
             for r in report.get("sessions", [])
@@ -646,7 +659,16 @@ def collect_transcripts(home, session, timeout=45):
         try:
             with deadline(timeout):
                 result["ccusage"] = ccusage(
-                    home, result["aggregate_ids"], timeout, agent, session["start"]
+                    home,
+                    result["aggregate_ids"],
+                    timeout,
+                    agent,
+                    session["start"],
+                    [
+                        file
+                        for identity, _, file in candidates
+                        if file and identity in result["aggregate_ids"]
+                    ],
                 )
         except (
             OSError,

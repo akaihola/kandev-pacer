@@ -170,7 +170,13 @@ def test_streamed_window(tmp_path, monkeypatch, agent, outside, full):
         return original_open(path, *args, **kwargs)
 
     monkeypatch.setattr(Path, "open", streaming_open)
-    monkeypatch.setattr(sources, "ccusage", lambda *_: [])
+    usage_files = []
+
+    def usage(*args):
+        usage_files.extend(args[-1])
+        return []
+
+    monkeypatch.setattr(sources, "ccusage", usage)
     identity = "owned" if agent == "codex" else "rollout"
     window = sources.transcript_window(file, agent, "/gone", 100, 200)
     assert window == (
@@ -188,6 +194,7 @@ def test_streamed_window(tmp_path, monkeypatch, agent, outside, full):
     )
     assert result["ids"] == [identity]
     assert result["aggregate_ids"] == ([identity] if full or agent == "claude" else [])
+    assert usage_files == ([file] if full or agent == "claude" else [])
 
 
 @pytest.mark.parametrize("agent", ["claude", "codex", "pi"])
@@ -267,6 +274,49 @@ def test_transcript_id_filter_precedes_loading(tmp_path, monkeypatch):
         },
     )
     assert result["ids"] == []
+
+
+@pytest.mark.parametrize("fail", [False, True])
+def test_codex_ccusage_sees_only_selected_files(tmp_path, monkeypatch, fail):
+    package = tmp_path / ".npm/_npx/prepared/node_modules/ccusage/package.json"
+    package.parent.mkdir(parents=True)
+    package.write_text(json.dumps({"version": sources.CCUSAGE_VERSION}))
+    selected = tmp_path / ".codex/sessions/2026/10/03/rollout-owned.jsonl"
+    selected.parent.mkdir(parents=True)
+    selected.write_text("selected")
+    selected.with_name("unrelated.jsonl").write_text("unrelated")
+    temporary = []
+
+    def command(args, timeout, env):
+        root = Path(env["CODEX_HOME"])
+        temporary.append(root)
+        files = list(root.rglob("*.jsonl"))
+        assert len(files) == 1
+        assert files[0].read_bytes() == selected.read_bytes()
+        assert files[0].relative_to(root) == selected.relative_to(tmp_path / ".codex")
+        assert args[-2:] == ["--since", "2026-10-03"]
+        if fail:
+            raise RuntimeError("ccusage failed")
+        return json.dumps({"sessions": [{"sessionId": "rollout-owned"}]})
+
+    monkeypatch.setattr(sources, "command", command)
+    if fail:
+        with pytest.raises(RuntimeError, match="ccusage failed"):
+            sources.ccusage(tmp_path, ["owned"], 45, "codex", "2026-10-03", [selected])
+    else:
+        assert sources.ccusage(
+            tmp_path, ["owned"], 45, "codex", "2026-10-03", [selected]
+        ) == [{"sessions": [{"sessionId": "rollout-owned"}]}]
+    assert len(temporary) == 1
+    assert not temporary[0].exists()
+
+
+def test_ccusage_without_aggregate_ids_does_not_scan(tmp_path, monkeypatch):
+    def unexpected(*args, **kwargs):
+        pytest.fail("scanned for usage without aggregate IDs")
+
+    monkeypatch.setattr(Path, "glob", unexpected)
+    assert sources.ccusage(tmp_path, [], 45, "codex") == []
 
 
 def test_hermes_metadata_survives_export_failure(tmp_path, monkeypatch):
