@@ -11,10 +11,11 @@ Rules for TASKS.md usage are at the bottom of the file.
 ## Ordered backlog
 
 ## Scheduled
-- [17] Stop `kandev-learn sweep` from parsing every Codex transcript in full before
-  checking which task it belongs to; one 1.17 GB rollout makes each sweep take 4+ GiB.
 
 ## In Progress
+
+- [17] Stop `kandev-learn sweep` from parsing every Codex transcript in full before
+  checking which task it belongs to; one 1.17 GB rollout makes each sweep take 4+ GiB.
 
 - [16] Learn from session observation records: a lowest-priority Kandev task the
   Heartbeat creates when unread records exist, writing observations and proposed
