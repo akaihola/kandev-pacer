@@ -1,4 +1,6 @@
+import contextlib
 import json
+import os
 import time
 from pathlib import Path
 
@@ -92,6 +94,179 @@ def test_session_window(tmp_path, monkeypatch):
     result = sources.collect_transcripts(tmp_path, session)
     assert len(result["tools"]) == 1
     assert result["tools"][0]["id"].endswith(":two")
+
+
+def test_codex_owner_rejected_before_next_line(tmp_path, monkeypatch):
+    file = tmp_path / ".codex/sessions/rollout.jsonl"
+    file.parent.mkdir(parents=True)
+    file.touch()
+    os.utime(file, (200, 200))
+    consumed = []
+
+    def lines():
+        consumed.append("session_meta")
+        yield json.dumps({"type": "session_meta", "payload": {"cwd": "/other"}})
+        pytest.fail("read beyond mismatched session_meta")
+
+    original_open = Path.open
+
+    def guarded_open(path, *args, **kwargs):
+        if path == file:
+            return contextlib.closing(lines())
+        return original_open(path, *args, **kwargs)
+
+    def unexpected(*args):
+        pytest.fail("downstream analysis of rejected transcript")
+
+    monkeypatch.setattr(Path, "open", guarded_open)
+    monkeypatch.setattr(sources.cache_waste, "codex_session", unexpected)
+    monkeypatch.setattr(sources, "ccusage", unexpected)
+    result = sources.collect_transcripts(
+        tmp_path,
+        {"agent": "codex", "workspace_path": "/gone", "start": 100, "end": 200},
+    )
+    assert consumed == ["session_meta"]
+    assert result["ids"] == []
+    assert result["notes"] == ["no transcript"]
+
+
+@pytest.mark.parametrize("agent", ["claude", "codex", "pi"])
+@pytest.mark.parametrize(
+    "outside, full",
+    [([], True), ([99], False), ([201], False), ([0], True), ([201, 150, 99], False)],
+)
+def test_streamed_window(tmp_path, monkeypatch, agent, outside, full):
+    directory = {
+        "claude": ".claude/projects/-gone",
+        "codex": ".codex/sessions",
+        "pi": ".pi/agent/sessions/--gone--",
+    }[agent]
+    file = tmp_path / directory / "rollout.jsonl"
+    file.parent.mkdir(parents=True)
+    entries = [{"timestamp": at} for at in [100, *outside, 200]]
+    if agent == "codex":
+        entries.insert(
+            0,
+            {
+                "type": "session_meta",
+                "timestamp": 100,
+                "payload": {"cwd": "/gone", "id": "owned"},
+            },
+        )
+    entries.extend([{}, {"timestamp": None}])
+    file.write_text("\n".join(json.dumps(e) for e in entries) + "\n\ninvalid\n[]\n")
+    os.utime(file, (200, 200))
+    original_open = Path.open
+
+    def streaming_open(path, *args, **kwargs):
+        if path == file:
+            # Only iteration is available; read()/readlines() would fail.
+            @contextlib.contextmanager
+            def stream():
+                with original_open(path, *args, **kwargs) as source:
+                    yield (line for line in source)
+
+            return stream()
+        return original_open(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "open", streaming_open)
+    monkeypatch.setattr(sources, "ccusage", lambda *_: [])
+    identity = "owned" if agent == "codex" else "rollout"
+    window = sources.transcript_window(file, agent, "/gone", 100, 200)
+    assert window == (
+        identity,
+        [
+            e
+            for e in entries
+            if e.get("timestamp") is not None and 100 <= e["timestamp"] <= 200
+        ],
+        full,
+    )
+    result = sources.collect_transcripts(
+        tmp_path,
+        {"agent": agent, "workspace_path": "/gone", "start": 100, "end": 200},
+    )
+    assert result["ids"] == [identity]
+    assert result["aggregate_ids"] == ([identity] if full or agent == "claude" else [])
+
+
+@pytest.mark.parametrize("agent", ["claude", "codex", "pi"])
+def test_transcript_mtime_before_start_never_opened(tmp_path, monkeypatch, agent):
+    file = tmp_path / "old.jsonl"
+    file.touch()
+    os.utime(file, (99, 99))
+
+    def unexpected(*args, **kwargs):
+        pytest.fail("opened a transcript older than the window")
+
+    monkeypatch.setattr(Path, "open", unexpected)
+    assert sources.transcript_window(file, agent, "/gone", 100, 200) is None
+
+
+@pytest.mark.parametrize("agent", ["claude", "codex", "pi"])
+def test_transcript_empty_window_and_mtime_boundary(tmp_path, agent):
+    file = tmp_path / "empty.jsonl"
+    file.write_text(
+        json.dumps(
+            {"type": "session_meta", "timestamp": 99, "payload": {"cwd": "/gone"}}
+        )
+    )
+    os.utime(file, (100, 100))
+    assert sources.transcript_window(file, agent, "/gone", 100, 200) == (
+        "empty",
+        [],
+        False,
+    )
+
+
+def test_codex_first_metadata_identity_and_missing_owner(tmp_path):
+    file = tmp_path / "rollout.jsonl"
+    entries = [
+        {"timestamp": 100},
+        {
+            "type": "session_meta",
+            "timestamp": 99,
+            "payload": {"cwd": "/gone", "id": "first"},
+        },
+        {
+            "type": "session_meta",
+            "timestamp": 201,
+            "payload": {"cwd": "/other", "id": "second"},
+        },
+    ]
+    file.write_text("\n".join(json.dumps(e) for e in entries))
+    os.utime(file, (200, 200))
+    assert sources.transcript_window(file, "codex", "/gone", 100, 200) == (
+        "first",
+        [entries[0]],
+        False,
+    )
+    file.write_text(json.dumps(entries[0]))
+    os.utime(file, (200, 200))
+    assert sources.transcript_window(file, "codex", "/gone", 100, 200) is None
+
+
+def test_transcript_id_filter_precedes_loading(tmp_path, monkeypatch):
+    file = tmp_path / ".codex/sessions/unrelated.jsonl"
+    file.parent.mkdir(parents=True)
+    file.touch()
+
+    def unexpected(*args):
+        pytest.fail("loaded a transcript excluded by ID")
+
+    monkeypatch.setattr(sources, "transcript_window", unexpected)
+    result = sources.collect_transcripts(
+        tmp_path,
+        {
+            "agent": "codex",
+            "workspace_path": "/gone",
+            "start": 100,
+            "end": 200,
+            "ambiguous_window": True,
+            "transcript_id": "expected",
+        },
+    )
+    assert result["ids"] == []
 
 
 def test_hermes_metadata_survives_export_failure(tmp_path, monkeypatch):

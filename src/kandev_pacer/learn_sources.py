@@ -400,6 +400,36 @@ def export_session(home, agent, session_id, path, timeout):
         )
 
 
+def transcript_window(file, agent, path, start, end):
+    if file.stat().st_mtime < start:
+        return None
+    identity, entries, full_window = file.stem, [], True
+    owned = agent != "codex"
+    with file.open(encoding="utf-8", errors="replace") as stream:
+        for line in stream:
+            try:
+                entry = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if not isinstance(entry, dict):
+                continue
+            if not owned and entry.get("type") == "session_meta":
+                metadata = entry.get("payload", {})
+                if metadata.get("cwd") != path:
+                    return None
+                identity = metadata.get("id") or identity
+                owned = True
+            at = entry.get("timestamp")
+            if at is None:
+                continue
+            inside = start <= timestamp(at) <= end
+            if at and not inside:
+                full_window = False
+            if inside:
+                entries.append(entry)
+    return (identity, entries, full_window) if owned else None
+
+
 def collect_transcripts(home, session, timeout=45):
     agent = session["agent"]
     path = session["workspace_path"]
@@ -439,45 +469,10 @@ def collect_transcripts(home, session, timeout=45):
                 for file in files:
                     if expected and expected not in file.stem:
                         continue
-                    loader = pi_session if agent == "pi" else claude_session
-                    entries = [
-                        e for e in loader._load_entries(file) if isinstance(e, dict)
-                    ]
-                    identity = file.stem
-                    if agent == "codex":
-                        identity = (
-                            next(
-                                (
-                                    e.get("payload", {}).get("id")
-                                    for e in entries
-                                    if e.get("type") == "session_meta"
-                                ),
-                                None,
-                            )
-                            or identity
-                        )
-                    full_window = all(
-                        start <= timestamp(e["timestamp"]) <= end
-                        for e in entries
-                        if e.get("timestamp")
-                    )
-                    if agent == "codex":
-                        cwd = next(
-                            (
-                                e.get("payload", {}).get("cwd")
-                                for e in entries
-                                if e.get("type") == "session_meta"
-                            ),
-                            None,
-                        )
-                        if cwd != path:
-                            continue
-                    entries = [
-                        e
-                        for e in entries
-                        if e.get("timestamp") is not None
-                        and start <= timestamp(e["timestamp"]) <= end
-                    ]
+                    window = transcript_window(file, agent, path, start, end)
+                    if window is None:
+                        continue
+                    identity, entries, full_window = window
                     if entries:
                         candidates.append((identity, entries, file))
                         if full_window or agent == "claude":
