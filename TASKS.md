@@ -9,6 +9,8 @@ Rules for TASKS.md usage are at the bottom of the file.
   Fix this.
 
 ## Ordered backlog
+- [17] Stop `kandev-learn sweep` from parsing every Codex transcript in full before
+  checking which task it belongs to; one 1.17 GB rollout makes each sweep take 4+ GiB.
 
 ## Scheduled
 
@@ -141,6 +143,7 @@ Rules for TASKS.md usage are at the bottom of the file.
 [14]: docs/tasks/14-workflow-step-api.md
 [15]: docs/tasks/15-claude-credential-recovery.md
 [16]: docs/tasks/16-observation-consumer.md
+[17]: docs/tasks/17-codex-transcript-memory.md
 [*]: TASKS.md
 
 ---
