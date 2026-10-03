@@ -9,10 +9,10 @@ Rules for TASKS.md usage are at the bottom of the file.
   Fix this.
 
 ## Ordered backlog
-- [17] Stop `kandev-learn sweep` from parsing every Codex transcript in full before
-  checking which task it belongs to; one 1.17 GB rollout makes each sweep take 4+ GiB.
 
 ## Scheduled
+- [17] Stop `kandev-learn sweep` from parsing every Codex transcript in full before
+  checking which task it belongs to; one 1.17 GB rollout makes each sweep take 4+ GiB.
 
 ## In Progress
 
