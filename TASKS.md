@@ -6,6 +6,12 @@ Rules for TASKS.md usage are at the bottom of the file.
 
 ## Ordered backlog
 
+- [26] JSON inside TOML configuration
+  <!-- hai:{"id":"simple-d5668741-e698-4a8a-b21d-32a2ff4ea0aa","priority":"none","labels":[],"createdAt":"2026-10-04T20:10:15.514Z","updatedAt":"2026-10-04T20:10:15.514Z"} -->
+
+- [25] Requires a manual reload if files changed
+  <!-- hai:{"id":"simple-30818c9d-e3bb-4e76-ae6c-347f585730f1","priority":"none","labels":[],"createdAt":"2026-10-04T20:09:52.925Z","updatedAt":"2026-10-04T20:09:52.925Z"} -->
+
 ## Scheduled
 
 ## In Progress
@@ -185,7 +191,7 @@ Rules for TASKS.md usage are at the bottom of the file.
 
 [19]: docs/tasks/19-uv-source-path-documentation-unclear.md
 
-<!-- hai:reserved-numbers:1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24 -->
+<!-- hai:reserved-numbers:1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26 -->
 
 [20]: docs/tasks/20-command-not-found-error.md
 
@@ -196,6 +202,10 @@ Rules for TASKS.md usage are at the bottom of the file.
 [23]: docs/tasks/23-unclear-unknown-provider-error.md
 
 [24]: docs/tasks/24-codex-reset-workaround-broken-no-anthropic-status.md
+
+[25]: docs/tasks/25-requires-a-manual-reload-if-files-changed.md
+
+[26]: docs/tasks/26-json-inside-toml-configuration.md
 
 ## Rules
 
