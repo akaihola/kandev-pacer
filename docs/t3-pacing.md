@@ -82,7 +82,12 @@ a JSON array; existing JSON strings in TOML remain supported.
 ## Model and launch settings
 
 Omit `t3_model`, `t3_runtime_mode`, and `t3_interaction_mode` to inherit each
-setting from the parent. To always use a specific model, add these keys to the
+setting from the parent. `parent_thread` is optional when all three settings are
+explicitly configured, with either a fixed model or automatic model selection.
+Without a parent, the tracker must still match exactly one project in T3.
+For example, use a tracker table containing only `tracker = "/path/to/TASKS.md"`
+with either of the complete model and mode configurations below.
+To always use a specific model, add these keys to the
 existing `[kandev-pacer]` section:
 
 ```toml

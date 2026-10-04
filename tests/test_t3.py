@@ -439,7 +439,7 @@ def test_startup_logs_safe_tracker_configuration_error(setup, monkeypatch, caplo
     monkeypatch.setattr(t3, "Server", lambda *a: server)
     monkeypatch.setattr(pacer.config, "t3_trackers", [])
     assert t3.run(pacer.config) == 1
-    assert "PACER_T3_TRACKERS needs tracker/parent_thread entries" in caplog.text
+    assert "PACER_T3_TRACKERS needs tracker entries" in caplog.text
 
 
 def test_startup_hides_unclassified_exception_contents(setup, monkeypatch, caplog):
@@ -752,3 +752,92 @@ def test_automatic_uses_scoped_headroom_and_reconsiders_each_launch(setup, monke
     windows[1]["consumed_frac"] = 0.05
     # Both now have the same binding shared window; configured order breaks the tie.
     assert choose()["model"] == "claude-fable"
+
+
+@pytest.mark.parametrize("automatic", [False, True])
+def test_configured_launch_without_parent_and_restart(
+    setup, automatic, monkeypatch, capsys
+):
+    pacer, path, server = setup
+    configure_models(pacer)
+    if not automatic:
+        pacer.config.t3_model = pacer.config.t3_models[1]
+    pacer.config.t3_runtime_mode = "approval-required"
+    pacer.config.t3_interaction_mode = "plan"
+    pacer.config.t3_trackers = [{"tracker": str(path)}]
+    server.data["threads"] = []
+    pacer = t3.T3Pacer(pacer.config, server)
+    monkeypatch.setattr(t3, "Server", lambda *a: pytest.fail("authenticated"))
+    assert t3.run(pacer.config, dump_order=True) == 0
+    assert len(json.loads(capsys.readouterr().out)) == 2
+    server.lose_reply = True
+    with pytest.raises(TimeoutError):
+        pacer.tick()
+    command = server.calls[0]
+    expected = pacer.config.t3_models[0 if automatic else 1].model_dump(
+        exclude_none=True
+    )
+    for settings in (command, command["bootstrap"]["createThread"]):
+        assert settings["modelSelection"] == expected
+        assert settings["runtimeMode"] == "approval-required"
+        assert settings["interactionMode"] == "plan"
+    assert command["bootstrap"]["createThread"]["projectId"] == "project"
+    assert command["bootstrap"]["prepareWorktree"]["projectCwd"] == str(path.parent)
+    server.data["threads"] = []
+    server.lose_reply = False
+    t3.T3Pacer(pacer.config, server).tick()
+    assert server.calls == [command, command]
+
+
+@pytest.mark.parametrize(
+    "missing", ["t3_model", "t3_runtime_mode", "t3_interaction_mode"]
+)
+def test_without_parent_requires_explicit_launch_settings(setup, missing):
+    pacer, path, server = setup
+    configure_models(pacer)
+    pacer.config.t3_runtime_mode = "full-access"
+    pacer.config.t3_interaction_mode = "default"
+    pacer.config.t3_trackers = [{"tracker": str(path)}]
+    setattr(pacer.config, missing, None)
+    with pytest.raises(t3.Withheld, match=f"without parent_thread require {missing}"):
+        t3.T3Pacer(pacer.config, server)
+    assert not server.calls
+    assert not list(pacer.state.glob("*.json"))
+    assert t3.git(path.parent, "status", "--porcelain") == ""
+
+
+@pytest.mark.parametrize("problem", ["missing", "wrong-root", "duplicate"])
+def test_without_parent_requires_matching_project(setup, problem):
+    pacer, path, server = setup
+    configure_models(pacer)
+    pacer.config.t3_runtime_mode = "full-access"
+    pacer.config.t3_interaction_mode = "default"
+    pacer.config.t3_trackers = [{"tracker": str(path)}]
+    if problem == "missing":
+        server.data["projects"] = []
+    elif problem == "wrong-root":
+        server.data["projects"][0]["workspaceRoot"] = "/other"
+    else:
+        server.data["projects"].append(
+            {"id": "duplicate", "workspaceRoot": str(path.parent)}
+        )
+    server.data["threads"] = []
+    with pytest.raises(t3.Withheld, match="exactly one T3 project"):
+        t3.T3Pacer(pacer.config, server).tick()
+    assert not server.calls
+    assert not list(pacer.state.glob("*.json"))
+
+
+@pytest.mark.parametrize("parent", ["", "missing", "wrong-project"])
+def test_supplied_parent_still_requires_valid_thread(setup, parent):
+    pacer, path, server = setup
+    configure_models(pacer)
+    pacer.config.t3_runtime_mode = "full-access"
+    pacer.config.t3_interaction_mode = "default"
+    pacer.config.t3_trackers = [{"tracker": str(path), "parent_thread": parent}]
+    if parent == "wrong-project":
+        server.data["threads"][0].update(id=parent, projectId="other")
+    with pytest.raises(t3.Withheld, match="parent_thread|Parent thread"):
+        t3.T3Pacer(pacer.config, server).tick()
+    assert not server.calls
+    assert not list(pacer.state.glob("*.json"))

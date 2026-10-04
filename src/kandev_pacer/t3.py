@@ -126,13 +126,27 @@ class T3Pacer:
         self.config, self.server = config, server
         entries = config.t3_trackers
         if not isinstance(entries, list) or not entries:
-            raise Withheld("PACER_T3_TRACKERS needs tracker/parent_thread entries")
+            raise Withheld("PACER_T3_TRACKERS needs tracker entries")
         self.trackers = {}
         for entry in entries:
             path = str(Path(entry["tracker"]).expanduser().resolve(strict=True))
-            parent = entry["parent_thread"]
-            if path in self.trackers or not isinstance(parent, str) or not parent:
-                raise Withheld("Each tracker needs one explicit parent thread")
+            parent = entry.get("parent_thread")
+            if path in self.trackers:
+                raise Withheld("Each tracker must appear only once")
+            if "parent_thread" in entry and (not isinstance(parent, str) or not parent):
+                raise Withheld(
+                    "parent_thread must be a nonempty thread ID when supplied"
+                )
+            if parent is None:
+                missing = [
+                    key
+                    for key in ("t3_model", "t3_runtime_mode", "t3_interaction_mode")
+                    if getattr(config, key) is None
+                ]
+                if missing:
+                    raise Withheld(
+                        "Trackers without parent_thread require " + ", ".join(missing)
+                    )
             self.trackers[path] = (TasksStore(path), parent)
         self.state = Path(config.t3_state_dir).expanduser()
         self.state.mkdir(parents=True, exist_ok=True, mode=0o700)
@@ -450,14 +464,14 @@ class T3Pacer:
                 self.dispatch(path, record)
             return
         for tracker, (store, parent_id) in self.trackers.items():
-            parent = threads.get(parent_id)
+            parent = threads.get(parent_id) if parent_id is not None else {}
             projects = [
                 p for p in snapshot["projects"] if p["workspaceRoot"] == str(store.root)
             ]
-            if (
-                not parent
-                or len(projects) != 1
-                or parent["projectId"] != projects[0]["id"]
+            if len(projects) != 1:
+                raise Withheld("Tracker must match exactly one T3 project")
+            if parent_id is not None and (
+                not parent or parent["projectId"] != projects[0]["id"]
             ):
                 raise Withheld("Parent thread must belong to the tracker project")
             parent = self.launch_settings(parent, running, usage, errors, now)
