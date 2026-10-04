@@ -8,11 +8,11 @@ Rules for TASKS.md usage are at the bottom of the file.
 
 ## Scheduled
 
+## In Progress
+
 - [*] The `Queue` button injected by the userscript into the Quick Chat window queues
   the prompt to the task beneath the Quick Chat pop-up, not as a new quick chat session.
   Fix this.
-
-## In Progress
 
 - [16] Learn from session observation records: a lowest-priority Kandev task the
   Heartbeat creates when unread records exist, writing observations and proposed
