@@ -8,10 +8,10 @@ Rules for TASKS.md usage are at the bottom of the file.
 
 ## Scheduled
 
+## In Progress
+
 - [18] Pace TASKS.md work through Hai's Python API and launch admitted tasks in T3 Code.
     - Hai's `hai_tasks` Python module is ready to use; the API dependency is satisfied.
-
-## In Progress
 
 - [16] Learn from session observation records: a lowest-priority Kandev task the
   Heartbeat creates when unread records exist, writing observations and proposed
