@@ -11,10 +11,10 @@ Rules for TASKS.md usage are at the bottom of the file.
 
 ## Scheduled
 
-- [26] JSON inside TOML configuration
-  <!-- hai:{"id":"simple-d5668741-e698-4a8a-b21d-32a2ff4ea0aa","priority":"none","labels":[],"createdAt":"2026-10-04T20:10:15.514Z","updatedAt":"2026-10-04T20:11:04.623Z"} -->
-
 ## In Progress
+
+- [~] [26] JSON inside TOML configuration
+  <!-- hai:{"id":"simple-d5668741-e698-4a8a-b21d-32a2ff4ea0aa","priority":"none","labels":[],"createdAt":"2026-10-04T20:10:15.514Z","updatedAt":"2026-10-04T20:11:43.263Z"} -->
 
 - [16] Learn from session observation records: a lowest-priority Kandev task the
   Heartbeat creates when unread records exist, writing observations and proposed
