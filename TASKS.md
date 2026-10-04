@@ -23,6 +23,9 @@ Rules for TASKS.md usage are at the bottom of the file.
 
 ## Completed / Accepted
 
+- [ ] [*] Configure T3 model selection as fixed or automatic by pacing headroom,
+      and override runtime and interaction modes in the configuration file.
+
 - [x] [19] UV source path documentation unclear
   <!-- hai:{"id":"simple-1ea5eea8-5a65-4a87-a84f-3f2ab01533b4","priority":"none","labels":[],"createdAt":"2026-10-04T18:44:41.879Z","updatedAt":"2026-10-04T19:43:02.979Z"} -->
 
