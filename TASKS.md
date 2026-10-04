@@ -23,8 +23,8 @@ Rules for TASKS.md usage are at the bottom of the file.
 
 ## Completed / Accepted
 
-- [ ] [27] Unclear error on configuration mistake
-  <!-- hai:{"id":"simple-aeab5d07-0f79-4609-9483-4601cb894f99","priority":"none","labels":[],"createdAt":"2026-10-04T20:22:34.136Z","updatedAt":"2026-10-04T20:33:50.983Z"} -->
+- [x] [27] Unclear error on configuration mistake
+  <!-- hai:{"id":"simple-aeab5d07-0f79-4609-9483-4601cb894f99","priority":"none","labels":[],"createdAt":"2026-10-04T20:22:34.136Z","updatedAt":"2026-10-04T20:34:49.446Z"} -->
 
 - [x] [28] Still requires `parent_thread`
   <!-- hai:{"id":"simple-60f79b37-10ad-4c2e-9817-fcb8e3f11912","priority":"none","labels":[],"createdAt":"2026-10-04T20:24:37.536Z","updatedAt":"2026-10-04T20:33:05.030Z"} -->
