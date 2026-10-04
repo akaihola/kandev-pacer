@@ -368,3 +368,37 @@ installed copy. Version `1.1.2` reads the wrong REST field and reports
 Version `1.1.3` fixed that mapping; `1.1.4` also rejects failed HTTP lookups and
 invalid identities before queue admission, preserving the composer text.
 Version `1.1.5` adds the composer checks and draft protection described above.
+
+
+## Deployment and browser checks, 2026-10-04
+
+Merged the two feature commits as `de25386` after rebasing onto `a159ba4`.
+The implementation is `ae5b88e`; its earlier reviewed hash was `3b4d8ba`.
+Both worktrees were clean after the merge. The only rebase conflict was the
+tracker: current main's other issues were preserved, including the completed
+lock fix. The Quick Chat issue is completed with `[ ]`, pending user acceptance
+of the documented fallback; full Quick Chat pacing remains unavailable.
+
+The 64 simulated userscript cases and Python wrapper passed review, together
+with formatting, lint, and diff checks. The Node suite and Python wrapper passed
+again after the rebase; the tested userscript and JavaScript tests were unchanged.
+Restarted the development-tree `kandev-learn.service` at 13:15:43 EEST. It exited
+successfully at 13:15:59; its timer remained active.
+
+Browser activation is still pending. No connection to the user's installed
+userscript manager was available, and this deployment did not replace its copy.
+Install version 1.1.5 as described above, then check these cases on a designated
+test task. Ordinary task Queue can dispatch immediately when Auto-run is enabled.
+These browser checks have not been run during this workflow:
+
+1. Keep a draft in the task composer and another in Quick Chat above it. Press
+   Quick Chat Queue: the unavailable error appears, both drafts remain, and the
+   task queue gets no new entry. Repeat the click; no Quick Chat is created.
+2. Repeat Quick Chat Queue from the board, without a task URL. It reports the
+   same error and preserves the draft.
+3. In an ordinary task, select a secondary session. Queue a prompt containing
+   mentions and an entity reference. It reaches that session with its context,
+   and only that submitted composer clears after confirmed admission.
+4. Set the browser's network to offline before an ordinary Queue click. The error
+   leaves the draft intact. Restore the network afterward. If admission is
+   uncertain, inspect the queue before retrying.
