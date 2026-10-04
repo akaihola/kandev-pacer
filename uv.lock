@@ -149,6 +149,11 @@ dependencies = [
 ]
 
 [[package]]
+name = "hai-tasks"
+version = "0.1.0"
+source = { editable = "../hai" }
+
+[[package]]
 name = "iniconfig"
 version = "2.3.0"
 source = { registry = "https://pypi.org/simple" }
@@ -166,6 +171,11 @@ dependencies = [
     { name = "websocket-client" },
 ]
 
+[package.optional-dependencies]
+t3 = [
+    { name = "hai-tasks" },
+]
+
 [package.dev-dependencies]
 dev = [
     { name = "darker", extra = ["ruff"] },
@@ -177,9 +187,11 @@ dev = [
 
 [package.metadata]
 requires-dist = [
+    { name = "hai-tasks", marker = "extra == 't3'", editable = "../hai" },
     { name = "pydantic-settings", specifier = ">=2.14.2" },
     { name = "websocket-client" },
 ]
+provides-extras = ["t3"]
 
 [package.metadata.requires-dev]
 dev = [

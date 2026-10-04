@@ -13,6 +13,9 @@ dependencies = [
     "websocket-client",
 ]
 
+[project.optional-dependencies]
+t3 = ["hai-tasks"]
+
 [project.scripts]
 kandev-pacer = "kandev_pacer.runtime:main"
 make-paced = "kandev_pacer.make_paced:main"
@@ -74,4 +77,5 @@ testpaths = ["tests"]
 pythonpath = ["tests"]
 
 [tool.uv.sources]
+hai-tasks = { path = "../hai", editable = true }
 graylint = { git = "https://github.com/akaihola/graylint", rev = "main" }

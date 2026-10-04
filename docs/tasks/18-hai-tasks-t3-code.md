@@ -84,3 +84,21 @@ the endpoint configurable.
 - Add offline tests using real Hai fixture trackers and a fake T3 server, covering
   dependencies, overlapping numbers, conflicts, gates, state, and interrupted launch.
   Run the full Python suite and repository lint/type checks.
+
+## Implementation evidence, 2026-10-04
+
+Implemented opt-in T3 mode, Hai scheduling, subscription gates, private launch
+records, restart reconciliation, thread-state reporting, and isolated worktree
+bootstrap with explicit parent settings. Setup and recovery instructions are in
+[docs/t3-pacing.md](../t3-pacing.md).
+
+Validation: 641 tests passed, 20 live-contract tests skipped. The 31 new tests cover
+Hai selection and conflicts, overlapping tracker identities, gates and capacity,
+waiting/finished turns, lost replies and restart, private records, process locking,
+authentication renewal, and WebSocket framing. `darker --check`, `graylint`, whole-tree
+`ty check src tests`, and `git diff --check` passed.
+
+The local T3 CLI reports 0.0.44. Gogo was reachable over HTTP, but SSH authentication
+was refused, so its installed version was not independently reconfirmed. No live
+backlog work was launched. Activation requires tracker paths, explicit parent thread
+IDs, and endpoint authentication. Kandev remains the default.

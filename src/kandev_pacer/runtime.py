@@ -1736,6 +1736,11 @@ def main():
     # time. `journalctl` stamps them anyway when this runs as a unit.
     logging.basicConfig(level=logging.INFO, format="%(message)s")
 
+    if settings.mode == "t3":
+        from .t3 import run
+
+        return run(settings, dump_order=args.dump_order)
+
     try:
         entries = client.workflow_entries()
     except OSError as error:

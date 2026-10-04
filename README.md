@@ -451,3 +451,9 @@ at 0.84.1, which leaves that branch of the startup lint unverifiable from outsid
 [`docs/cache-aware-pacing.md`]: docs/cache-aware-pacing.md
 [`docs/isolation-and-federation.md`]: docs/isolation-and-federation.md
 [kdlbs/kandev#1669]: https://github.com/kdlbs/kandev/issues/1669
+
+### Hai tasks in T3 Code
+
+Set `PACER_MODE=t3` to pace local Hai TASKS.md trackers into isolated T3 threads.
+This mode reuses the quota gates and concurrency settings, with persistent launch
+recovery and explicit parent-thread settings. See [T3 setup and recovery](docs/t3-pacing.md).

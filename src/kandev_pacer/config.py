@@ -27,6 +27,15 @@ class Settings(BaseSettings):
     week should not start at all on a typo'd number.
     """
 
+    mode: Literal["kandev", "t3"] = Field("kandev", alias="PACER_MODE")
+    t3_url: str = Field("http://127.0.0.1:3773", alias="PACER_T3_URL")
+    t3_base_dir: str = Field("", alias="PACER_T3_BASE_DIR")
+    t3_trackers: str = Field("[]", alias="PACER_T3_TRACKERS")
+    t3_base_branch: str = Field("main", alias="PACER_T3_BASE_BRANCH")
+    t3_state_dir: str = Field(
+        str(Path.home() / ".local/state/kandev-pacer/t3"), alias="PACER_T3_STATE_DIR"
+    )
+
     url: str = Field("http://127.0.0.1:38429", alias="KANDEV_URL")
     # Empty means "derive it from url"; see the ws_url property.
     ws_url_override: str = Field("", alias="KANDEV_WS_URL")
