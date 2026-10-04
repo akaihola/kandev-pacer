@@ -4,11 +4,14 @@ Rules for TASKS.md usage are at the bottom of the file.
 
 ## Unverified proposals
 
+## Ordered backlog
+
 - [*] The `Queue` button injected by the userscript into the Quick Chat window queues
   the prompt to the task beneath the Quick Chat pop-up, not as a new quick chat session.
   Fix this.
 
-## Ordered backlog
+- [*] In task 0cab15fe-556c-4837-b04b-83e50e52c4a9, the observation consumer couldn't
+  create a lock file due to a read-only directory. Investigate and fix this problem.
 
 ## Scheduled
 
@@ -28,7 +31,8 @@ Rules for TASKS.md usage are at the bottom of the file.
 ## Completed / Accepted
 
 - [ ] [17] Stop `kandev-learn sweep` from parsing every Codex transcript in full before
-  checking which task it belongs to; one 1.17 GB rollout makes each sweep take 4+ GiB.
+      checking which task it belongs to; one 1.17 GB rollout makes each sweep take 4+
+      GiB.
 
 - [ ] [*] Kandev task dd6897a9-b54e-4ad4-b9b5-b2372292f4b1 stated: "Capacity-deferral
       handling remains separate follow-up work." If that hasn't been implemented, do it.
