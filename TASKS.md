@@ -6,6 +6,15 @@ Rules for TASKS.md usage are at the bottom of the file.
 
 ## Ordered backlog
 
+- [21] Unclear URLError
+  <!-- hai:{"id":"simple-0ad93f1d-3593-46f0-b76c-5cea0e0cba6f","priority":"none","labels":[],"createdAt":"2026-10-04T18:47:10.449Z","updatedAt":"2026-10-04T18:47:10.449Z"} -->
+
+- [20] `Command not found` error
+  <!-- hai:{"id":"simple-b2087b50-35fc-4c18-8a87-3826565d0d60","priority":"none","labels":[],"createdAt":"2026-10-04T18:45:46.258Z","updatedAt":"2026-10-04T18:45:46.258Z"} -->
+
+- [19] UV source path documentation unclear
+  <!-- hai:{"id":"simple-1ea5eea8-5a65-4a87-a84f-3f2ab01533b4","priority":"none","labels":[],"createdAt":"2026-10-04T18:44:41.879Z","updatedAt":"2026-10-04T18:44:41.879Z"} -->
+
 ## Scheduled
 
 ## In Progress
@@ -160,6 +169,14 @@ Rules for TASKS.md usage are at the bottom of the file.
 [*]: TASKS.md
 
 ---
+
+[19]: docs/tasks/19-uv-source-path-documentation-unclear.md
+
+<!-- hai:reserved-numbers:1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21 -->
+
+[20]: docs/tasks/20-command-not-found-error.md
+
+[21]: docs/tasks/21-unclear-urlerror.md
 
 ## Rules
 
