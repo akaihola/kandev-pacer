@@ -26,8 +26,8 @@ Rules for TASKS.md usage are at the bottom of the file.
 - [ ] [19] UV source path documentation unclear
   <!-- hai:{"id":"simple-1ea5eea8-5a65-4a87-a84f-3f2ab01533b4","priority":"none","labels":[],"createdAt":"2026-10-04T18:44:41.879Z","updatedAt":"2026-10-04T19:23:34.139Z"} -->
 
-- [ ] [24] Codex reset workaround broken, no Anthropic status
-  <!-- hai:{"id":"simple-1afb0e60-8d2e-4995-85eb-314807cfd60b","priority":"none","labels":[],"createdAt":"2026-10-04T19:13:34.534Z","updatedAt":"2026-10-04T19:13:34.534Z"} -->
+- [x] [24] Codex reset workaround broken, no Anthropic status
+  <!-- hai:{"id":"simple-1afb0e60-8d2e-4995-85eb-314807cfd60b","priority":"none","labels":[],"createdAt":"2026-10-04T19:13:34.534Z","updatedAt":"2026-10-04T19:24:14.956Z"} -->
 
 - [x] [20] `Command not found` error
   <!-- hai:{"id":"simple-b2087b50-35fc-4c18-8a87-3826565d0d60","priority":"none","labels":[],"createdAt":"2026-10-04T18:45:46.258Z","updatedAt":"2026-10-04T19:11:10.780Z"} -->
