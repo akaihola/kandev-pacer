@@ -10,9 +10,6 @@ Rules for TASKS.md usage are at the bottom of the file.
 
 ## In Progress
 
-- [18] Pace TASKS.md work through Hai's Python API and launch admitted tasks in T3 Code.
-    - Hai's `hai_tasks` Python module is ready to use; the API dependency is satisfied.
-
 - [16] Learn from session observation records: a lowest-priority Kandev task the
   Heartbeat creates when unread records exist, writing observations and proposed
   solution prompts to the right repository's unreviewed section.
@@ -25,6 +22,9 @@ Rules for TASKS.md usage are at the bottom of the file.
   before resuming tasks.
 
 ## Completed / Accepted
+
+- [ ] [18] Pace TASKS.md work through Hai's Python API and launch admitted tasks in T3 Code.
+    - Hai's `hai_tasks` Python module is ready to use; the API dependency is satisfied.
 
 - [ ] [*] Write `pages/PKB/Kandev Session Observations/index.md` from `kandev-learn sweep`
   in the same commit as new records, reading the JSON sidecar when present. It replaces
