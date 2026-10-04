@@ -65,12 +65,19 @@ Example configuration, with real paths and parent IDs substituted:
 [kandev-pacer]
 mode = "t3"
 t3_url = "http://127.0.0.1:3773"
-t3_trackers = '[{"tracker":"/home/me/prg/project/TASKS.md","parent_thread":"T3_THREAD_ID"}]'
 t3_base_branch = "main"
 providers_raw = "openai anthropic"
 concurrency = 1
 concurrency_total = 2
+
+[[kandev-pacer.t3_trackers]]
+tracker = "/home/me/prg/project/TASKS.md"
+parent_thread = "T3_THREAD_ID"
 ```
+
+Repeat `[[kandev-pacer.t3_trackers]]` for each tracker. A TOML array of inline
+tables also works. `PACER_T3_TRACKERS` environment and CLI overrides still use
+a JSON array; existing JSON strings in TOML remain supported.
 
 ## Model and launch settings
 

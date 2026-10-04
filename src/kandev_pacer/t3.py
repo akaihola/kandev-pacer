@@ -124,7 +124,7 @@ class T3Pacer:
         TasksStore = importlib.import_module("hai_tasks").TasksStore
 
         self.config, self.server = config, server
-        entries = json.loads(config.t3_trackers)
+        entries = config.t3_trackers
         if not isinstance(entries, list) or not entries:
             raise Withheld("PACER_T3_TRACKERS needs tracker/parent_thread entries")
         self.trackers = {}

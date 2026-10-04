@@ -93,9 +93,7 @@ def setup(tmp_path, monkeypatch):
     ]
     config = Settings(
         PACER_PROVIDER="openai",
-        PACER_T3_TRACKERS=json.dumps(
-            [{"tracker": str(path), "parent_thread": "parent"}]
-        ),
+        PACER_T3_TRACKERS=[{"tracker": str(path), "parent_thread": "parent"}],
         PACER_T3_STATE_DIR=str(tmp_path / "state"),
     )
     monkeypatch.setattr(t3.provider, "read", lambda *a, **kw: ({}, {}))
@@ -439,7 +437,7 @@ def test_startup_explains_missing_remote_token(setup, monkeypatch, caplog):
 def test_startup_logs_safe_tracker_configuration_error(setup, monkeypatch, caplog):
     pacer, _, server = setup
     monkeypatch.setattr(t3, "Server", lambda *a: server)
-    monkeypatch.setattr(pacer.config, "t3_trackers", "[]")
+    monkeypatch.setattr(pacer.config, "t3_trackers", [])
     assert t3.run(pacer.config) == 1
     assert "PACER_T3_TRACKERS needs tracker/parent_thread entries" in caplog.text
 
