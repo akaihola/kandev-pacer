@@ -8,6 +8,10 @@ Rules for TASKS.md usage are at the bottom of the file.
 
 ## Scheduled
 
+- [*] Write `pages/PKB/Kandev Session Observations/index.md` from `kandev-learn sweep`
+  in the same commit as new records, reading the JSON sidecar when present. It replaces
+  the vault's one-off `scripts/kandev-observations-index`, whose output went stale.
+
 ## In Progress
 
 - [16] Learn from session observation records: a lowest-priority Kandev task the
