@@ -933,6 +933,70 @@ def commit_records(vault, paths, journal=None):
         journal.unlink()
 
 
+INDEX_HEADER = dedent(
+    """\
+    ---
+    type: note
+    description: Index of the archived Kandev task observations, one row per task.
+    aliases:
+    - Kandev Session Observations
+    ---
+
+    # Kandev Session Observations
+
+    One note per archived Kandev task. `kandev-learn sweep` in `~/prg/kandev-pacer`
+    writes the notes and rewrites this index in the same commit, so do not edit it
+    by hand. The notes hold measurements, not curated knowledge. Newest first.
+    """
+)
+
+
+def index_row(vault, path):
+    record = read_record(path)
+    archived = format_timestamp(record["archived_at"])[:16].replace("T", " ")
+    # Brackets would end the link text early and a pipe would split the table cell.
+    title = str(record.get("title") or record["task"]).translate(
+        str.maketrans("[]|", "()/")
+    )
+    link = quote(str(path.relative_to(vault / OBSERVATIONS)))
+    agents = ", ".join(
+        sorted({str(s.get("agent") or "?") for s in record.get("sessions", [])})
+    )
+    workflow = record.get("workflow") or ""
+    return archived, f"| {archived} | [{title}]({link}) | {workflow} | {agents} |"
+
+
+def write_index(vault):
+    """Rewrite the series index from every record. Unreadable records are skipped,
+    so one bad file never blocks a sweep."""
+    months: dict[str, list[tuple[str, str, str]]] = {}
+    for path in sorted((vault / OBSERVATIONS).glob("*/*.md")):
+        try:
+            archived, row = index_row(vault, path)
+        except (OSError, KeyError, ValueError) as exc:
+            print(f"kandev-learn: index skips {path.name}: {exc}", file=sys.stderr)
+            continue
+        months.setdefault(path.parent.name, []).append((archived, path.name, row))
+    lines = [INDEX_HEADER]
+    for month in sorted(months, reverse=True):
+        lines += [
+            f"## {month}",
+            "",
+            "| Archived (UTC) | Task | Workflow | Agents |",
+            "| --- | --- | --- | --- |",
+            *[row for *_, row in sorted(months[month], reverse=True)],
+            "",
+        ]
+    path = vault / OBSERVATIONS / "index.md"
+    content = "\n".join(lines)
+    if not path.exists() or path.read_text() != content:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        temporary = path.with_suffix(".tmp")
+        temporary.write_text(content)
+        temporary.replace(path)
+    return path
+
+
 def sweep(args):
     state_path = args.state / "state.json"
     state: dict[str, Any] | None = (
@@ -990,6 +1054,8 @@ def sweep(args):
             paths.append(path)
             if path.with_suffix(".json").exists():
                 paths.append(path.with_suffix(".json"))
+    if paths:
+        paths.append(write_index(args.vault))
     commit_records(args.vault, paths, args.state / "commit.json")
     if args.backfill:
         state["backfill_done"] = [*state.get("backfill_done", []), *selected]

@@ -728,8 +728,9 @@ def test_split_sweep_recovers_publication_and_commit(
         .decode()
         .splitlines()
     )
+    index = args.vault / learn.OBSERVATIONS / "index.md"
     assert committed == sorted(
-        str(p.relative_to(args.vault)) for p in [path, path.with_suffix(".json")]
+        str(p.relative_to(args.vault)) for p in [path, path.with_suffix(".json"), index]
     )
 
 
@@ -908,7 +909,7 @@ def test_identity_backup_recovery_and_exact_retry(sweep_args, observation, monke
     learn.sweep(args)
     assert before == (path.read_bytes(), sidecar.read_bytes())
     assert json.loads(sidecar.read_text()) == observation
-    assert len(list(args.vault.rglob("*.md"))) == 1
+    assert len(list((args.vault / learn.OBSERVATIONS).glob("*/*.md"))) == 1
     assert len(list(args.vault.rglob("*.json"))) == 1
     assert json.loads((backup / sidecar.name).read_text())["task"] == "other"
 
@@ -952,3 +953,43 @@ def test_invalid_metadata_diagnostic(sweep_args, capsys, content):
     assert "move both" in error
     assert "Traceback" not in error
     assert sidecar.read_text() == content
+
+
+def test_sweep_writes_index_with_records(sweep_args, observation, monkeypatch):
+    args = sweep_args
+    legacy = learn.record_path(args.vault, "legacy", "2026-08-31T23:59:00Z")
+    learn.publish(
+        legacy,
+        "---\n"
+        + json.dumps(
+            {"task": "legacy", "archived_at": "2026-08-31T23:59:00Z", "title": "Old"}
+        )
+        + "\n---\n",
+    )
+    broken = learn.record_path(args.vault, "broken", "2026-08-30T00:00:00Z")
+    learn.publish(broken, "# no metadata\n")
+    add(args, "task", observation["archived_at"])
+    record = {**observation, "title": "[Auto] Fix a|b", "workflow": "Paced"}
+    monkeypatch.setattr(learn, "collect_task", lambda *_: record)
+    learn.main(
+        ["sweep", "--backfill", "--db", str(args.db), "--vault", str(args.vault)]
+        + ["--state", str(args.state)]
+    )
+    index = args.vault / learn.OBSERVATIONS / "index.md"
+    text = index.read_text()
+    assert text.index("## 2026-09") < text.index("## 2026-08")
+    row = "| [(Auto) Fix a/b](2026-09/2026-09-01T00-00-00.123%20task.md) | Paced |"
+    assert row in text
+    assert "[Old](2026-08/2026-08-31T23-59-00.000%20legacy.md)" in text
+    assert "broken" not in text
+    committed = subprocess.run(
+        ["git", "-C", str(args.vault), "show", "--name-only", "--format=", "HEAD"],
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout
+    assert str(learn.OBSERVATIONS / "index.md") in committed
+    assert "task.json" in committed
+    before = index.stat().st_mtime_ns
+    learn.write_index(args.vault)
+    assert index.stat().st_mtime_ns == before

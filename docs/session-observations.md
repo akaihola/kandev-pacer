@@ -25,6 +25,14 @@ The digest reads JSON and prints a single table with totals. It also reads legac
 Markdown observations with JSON frontmatter. Existing observations are not migrated.
 Scripts consuming new observations should read the same filename with a `.json` suffix.
 
+Each sweep that records new tasks also rewrites `index.md` at the series root, in the
+same vault commit. It has one table per month, newest first: archive time, task title
+linked to its note, workflow and agents. Titles come from the JSON sidecar when
+present and from legacy frontmatter otherwise. A record that cannot be read is left
+out with a message on stderr instead of failing the sweep. Do not edit the index by
+hand. The digest and the observation consumer read only `YYYY-MM/` folders, so they
+never see it.
+
 One observation file can contain multiple Kandev sessions. The Markdown body
 introduces each session once with a `## Session <id>` heading; session-specific
 tables below that heading omit the repeated ID. Task-level tables remain outside
