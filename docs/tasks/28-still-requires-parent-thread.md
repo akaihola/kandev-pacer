@@ -1,0 +1,1 @@
+Even if `t3_model`, `t3_models`, `t3_runtime_mode`, and `t3_interaction_mode` are defined in the configuration, dropping `parent_thread` from trackers causes an error. It shouldn't.

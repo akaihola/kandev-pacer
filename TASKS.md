@@ -6,6 +6,9 @@ Rules for TASKS.md usage are at the bottom of the file.
 
 ## Ordered backlog
 
+- [28] Still requires `parent_thread`
+  <!-- hai:{"id":"simple-60f79b37-10ad-4c2e-9817-fcb8e3f11912","priority":"none","labels":[],"createdAt":"2026-10-04T20:24:37.536Z","updatedAt":"2026-10-04T20:24:37.536Z"} -->
+
 - [27] Unclear error on configuration mistake
   <!-- hai:{"id":"simple-aeab5d07-0f79-4609-9483-4601cb894f99","priority":"none","labels":[],"createdAt":"2026-10-04T20:22:34.136Z","updatedAt":"2026-10-04T20:22:34.136Z"} -->
 
@@ -191,7 +194,7 @@ Rules for TASKS.md usage are at the bottom of the file.
 
 [19]: docs/tasks/19-uv-source-path-documentation-unclear.md
 
-<!-- hai:reserved-numbers:1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,26,27 -->
+<!-- hai:reserved-numbers:1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,26,27,28 -->
 
 [20]: docs/tasks/20-command-not-found-error.md
 
@@ -206,6 +209,8 @@ Rules for TASKS.md usage are at the bottom of the file.
 [26]: docs/tasks/26-json-inside-toml-configuration.md
 
 [27]: docs/tasks/27-unclear-error-on-configuration-mistake.md
+
+[28]: docs/tasks/28-still-requires-parent-thread.md
 
 ## Rules
 
