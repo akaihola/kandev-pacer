@@ -16,7 +16,14 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from . import provider
-from .quota import class_windows, quota_verdict, scope_names, windows_by_provider
+from .config import API_KEY
+from .quota import (
+    class_windows,
+    quota_verdict,
+    resume_note,
+    scope_names,
+    windows_by_provider,
+)
 from .selection import matched_scopes
 from .t3_client import Server, T3ConfigurationError, T3ConnectionError
 
@@ -251,11 +258,7 @@ class T3Pacer:
 
     def admitted(self, selection, running, usage, errors, now):
         name = selection_provider(selection)
-        if (
-            name not in self.config.providers
-            or name in errors
-            or not selection.get("model")
-        ):
+        if name not in self.config.providers or not selection.get("model"):
             return False
         if running[name] >= self.config.concurrency:
             return False
@@ -264,13 +267,74 @@ class T3Pacer:
             and sum(running.values()) >= self.config.concurrency_total
         ):
             return False
+        if self.quota_bypassed(name):
+            return self.config.apikey_policy == "cap"
+        if name in errors:
+            return False
         windows = windows_by_provider(usage).get(name, [])
         scopes = matched_scopes([selection["model"]], scope_names(windows))
         verdict = quota_verdict(
             usage, class_windows(windows, scopes), now, self.config, provider=name
         )
-        log.info("T3 [%s] %s", name, verdict.gate)
         return verdict.is_open
+
+    def quota_bypassed(self, name):
+        instance = next(
+            (key for key, value in PROVIDERS.items() if value == name), None
+        )
+        overrides = self.config.agent_provider_overrides
+        return (
+            overrides.get(
+                instance, overrides.get("codex-acp") if instance == "codex" else None
+            )
+            == API_KEY
+        )
+
+    def report_status(self, running, usage, errors, now, threads):
+        windows = windows_by_provider(usage)
+        parents = {
+            selection_provider(threads[parent].get("modelSelection", {}))
+            for _, parent in self.trackers.values()
+            if parent in threads
+        }
+        for name in self.config.providers:
+            capacity = f" ({running[name]}/{self.config.concurrency} running)"
+            if self.config.concurrency_total:
+                capacity += (
+                    f", {sum(running.values())}/{self.config.concurrency_total} total"
+                )
+            if name not in parents:
+                capacity += ", no tracker parent uses this provider"
+            if self.quota_bypassed(name):
+                state = (
+                    "quota bypass, concurrency only"
+                    if self.config.apikey_policy == "cap"
+                    else "WITHHELD by apikey-policy=withhold"
+                )
+                log.info("T3 [%s] %s%s", name, state, capacity)
+                continue
+            if name in errors:
+                log.warning("T3 [%s] quota unavailable, WITHHOLDING%s", name, capacity)
+                continue
+            provider_windows = windows.get(name, [])
+            for scopes in [(), *((scope,) for scope in scope_names(provider_windows))]:
+                verdict = quota_verdict(
+                    usage,
+                    class_windows(provider_windows, scopes),
+                    now,
+                    self.config,
+                    provider=name,
+                )
+                label = name + (f" ({'+'.join(scopes)})" if scopes else "")
+                state = verdict.message or f"headroom={verdict.headroom:+.3f} open"
+                log.info(
+                    "T3 [%s] %s%s%s, next tick in %ss",
+                    label,
+                    state,
+                    capacity,
+                    resume_note(verdict.resumes_at, now),
+                    self.config.interval,
+                )
 
     def tick(self):
         snapshot = self.server.snapshot()
@@ -291,8 +355,8 @@ class T3Pacer:
                         "Inspect this thread in T3 and let it finish or stop its activity; "
                         "resolve any pending approval/input or background work. Use a "
                         "supported subscription-backed provider for paced threads. "
-                        "--agent-providers-raw and --apikey-policy configure Kandev mode, "
-                        "not T3 provider instances. See docs/t3-pacing.md#unknown-providers."
+                        "--agent-providers-raw and --apikey-policy do not add support for "
+                        "T3 provider instances. See docs/t3-pacing.md#unknown-providers."
                     )
                 running[name] += 1
         records, pending = {}, []
@@ -331,6 +395,7 @@ class T3Pacer:
                 raise Withheld("Unknown launch record phase; inspect state directory")
         now = time.time()
         usage, errors = provider.read(self.config.providers, now=now)
+        self.report_status(running, usage, errors, now, threads)
         # An unresolved launch blocks new admissions, even when its gate is closed.
         if pending:
             path, record = pending[0]

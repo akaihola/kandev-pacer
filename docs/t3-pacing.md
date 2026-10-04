@@ -137,8 +137,8 @@ provider. Let its work finish or stop it intentionally, and resolve pending
 approvals, input, and background work. These also count as active work. Use a
 supported subscription-backed provider instance for threads that the pacer launches.
 
-`--agent-providers-raw` and `--apikey-policy` control Kandev agent attribution;
-they do not map T3 provider instances. Setting `hermes-acp=__api_key__` therefore
+`--agent-providers-raw` and `--apikey-policy` do not register T3 provider instances.
+Setting `hermes-acp=__api_key__` therefore
 does not exclude an active T3 Hermes thread from the server-wide capacity check.
 Configure subscription providers with `providers_raw` or `PACER_PROVIDERS`, and
 select a supported provider instance in each configured T3 parent thread.
@@ -179,3 +179,28 @@ records before reusing the state directory.
 Run the integration fixtures with `uv run --extra t3 pytest tests/test_t3.py` and the
 transport tests with `uv run pytest tests/test_t3_client.py`. The default suite skips
 Hai integration tests when the optional dependency is absent.
+
+
+## Quota status and manual resets
+
+Each tick reports every provider in `providers_raw`, including providers with no
+tracker parent. Status includes headroom, running counts, scoped windows such as
+Fable, and estimated resume times. A provider without a tracker parent cannot
+launch work, even when its gate is open. T3 inherits each tracker's parent model;
+it does not switch an OpenAI parent to Anthropic when OpenAI is paused.
+
+To spend a Codex reset without burn-line pacing, the Kandev workaround also works
+in T3 mode:
+
+```bash
+uv run --extra t3 --frozen kandev-pacer --config ~/.config/kandev-pacer/config-t3.toml --agent-providers-raw 'codex-acp=__api_key__ hermes-acp=__api_key__' --apikey-policy cap
+```
+
+`codex=__api_key__` also selects this bypass. `claudeAgent=__api_key__` bypasses
+Anthropic pacing. T3 instance names take precedence over the legacy `codex-acp`
+alias. The override changes pacing only; T3 authentication stays as configured.
+The log says `quota bypass, concurrency only`. Provider and total concurrency
+limits still apply, including pending launch retries. With `--apikey-policy
+withhold`, bypassed providers cannot launch. Remove the override to restore quota
+pacing after using the reset. `hermes-acp` has no effect in T3 mode because Hermes
+is not a supported T3 provider instance.

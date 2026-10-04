@@ -8,6 +8,7 @@ import pytest
 
 from kandev_pacer import t3
 from kandev_pacer.config import Settings
+from kandev_pacer.quota import Verdict
 
 hai_tasks = pytest.importorskip("hai_tasks")
 TasksStore = hai_tasks.TasksStore
@@ -101,7 +102,7 @@ def setup(tmp_path, monkeypatch):
     monkeypatch.setattr(
         t3,
         "quota_verdict",
-        lambda *a, **kw: type("Verdict", (), {"is_open": True, "gate": "open"})(),
+        lambda *a, **kw: Verdict("open", 1.0, ""),
     )
     return t3.T3Pacer(config, server), path, server
 
@@ -204,7 +205,7 @@ def test_unknown_provider_explains_blocking_thread(setup, selection, detail, act
     assert detail in message
     assert "let it finish or stop its activity" in message
     assert "codex (OpenAI) and claudeAgent (Anthropic)" in message
-    assert "--agent-providers-raw and --apikey-policy configure Kandev mode" in message
+    assert "--agent-providers-raw and --apikey-policy do not add support" in message
     assert "docs/t3-pacing.md#unknown-providers" in message
     assert not server.calls
     assert not list(pacer.state.glob("*.json"))
@@ -221,7 +222,7 @@ def test_withholding(setup, monkeypatch, block):
         monkeypatch.setattr(
             t3,
             "quota_verdict",
-            lambda *a, **kw: type("V", (), {"is_open": False, "gate": "paused"})(),
+            lambda *a, **kw: Verdict("paused", -0.1, "headroom=-0.100 PAUSED", 3600),
         )
     elif block == "provider":
         parent["modelSelection"]["provider"] = "unknown"
@@ -497,3 +498,129 @@ def test_submitted_record_with_changed_tracker_withholds(setup):
     with pytest.raises(ValueError, match="changed before dispatch"):
         t3.T3Pacer(pacer.config, server).tick()
     assert len(server.calls) == 1
+
+
+@pytest.mark.parametrize("agent", ["codex-acp", "codex"])
+@pytest.mark.parametrize("selection", ["provider", "instanceId"])
+def test_quota_bypass_launches_and_retries_with_original_selection(
+    setup, monkeypatch, caplog, agent, selection
+):
+    pacer, _, server = setup
+    pacer.config.agent_providers_raw = f"{agent}=__api_key__ hermes-acp=__api_key__"
+    server.data["threads"][0]["modelSelection"] = {
+        selection: "codex",
+        "model": "test-model",
+    }
+    monkeypatch.setattr(
+        t3.provider, "read", lambda *a, **kw: ({}, {"openai": "unavailable"})
+    )
+    caplog.set_level("INFO", logger="kandev-pacer")
+    pacer.tick()
+    assert len(server.calls) == 1
+    assert (
+        server.calls[0]["modelSelection"] == server.data["threads"][0]["modelSelection"]
+    )
+    assert "T3 [openai] quota bypass, concurrency only (0/1 running)" in caplog.text
+    record_path = next(pacer.state.glob("*.json"))
+    record = json.loads(record_path.read_text())
+    record["phase"] = "submitted"
+    t3.save(record_path, record)
+    server.data["threads"].pop()
+    pacer.tick()
+    assert server.calls[0] == server.calls[1]
+
+
+@pytest.mark.parametrize("block", ["provider_cap", "total_cap", "withhold", "disabled"])
+def test_quota_bypass_retains_admission_limits(setup, block):
+    pacer, path, server = setup
+    pacer.config.agent_providers_raw = "codex-acp=__api_key__"
+    if block == "provider_cap":
+        server.data["threads"][0]["session"] = {"status": "running"}
+    elif block == "total_cap":
+        pacer.config.concurrency_total = 1
+        server.data["threads"].append(
+            {
+                **server.data["threads"][0],
+                "id": "claude",
+                "modelSelection": {"instanceId": "claudeAgent", "model": "claude"},
+                "session": {"status": "running"},
+            }
+        )
+    elif block == "withhold":
+        pacer.config.apikey_policy = "withhold"
+    else:
+        pacer.config.providers_raw = "anthropic"
+    pacer.tick()
+    assert not server.calls
+    assert not list(pacer.state.glob("*.json"))
+    assert t3.git(path.parent, "status", "--porcelain") == ""
+
+
+def test_status_reports_both_providers_scopes_and_resume(setup, monkeypatch, caplog):
+    from kandev_pacer.quota import quota_verdict
+
+    pacer, _, server = setup
+    pacer.config.providers_raw = "openai anthropic"
+    monkeypatch.setattr(t3, "quota_verdict", quota_verdict)
+    monkeypatch.setattr(t3.time, "time", lambda: 0)
+    windows = {
+        "openai": [{"duration_s": 604800, "resets_at": 302400, "consumed_frac": 0.8}],
+        "anthropic": [
+            {"duration_s": 604800, "resets_at": 302400, "consumed_frac": 0.1},
+            {
+                "duration_s": 604800,
+                "resets_at": 302400,
+                "consumed_frac": 0.99,
+                "scope": "Fable",
+            },
+        ],
+    }
+    monkeypatch.setattr(t3, "windows_by_provider", lambda usage: windows)
+    caplog.set_level("INFO", logger="kandev-pacer")
+    pacer.tick()
+    assert "T3 [openai] headroom=-0.300 PAUSED (0/1 running), resumes in" in caplog.text
+    assert "T3 [anthropic] headroom=+0.400 open (0/1 running)" in caplog.text
+    assert "no tracker parent uses this provider" in caplog.text
+    assert "T3 [anthropic (Fable)] headroom=-0.490 CEILING" in caplog.text
+    assert "next tick in 30s" in caplog.text
+    assert not server.calls
+
+
+def test_status_reports_quota_failure_even_without_parent(setup, monkeypatch, caplog):
+    pacer, _, _ = setup
+    pacer.config.providers_raw = "openai anthropic"
+    monkeypatch.setattr(
+        t3.provider, "read", lambda *a, **kw: ({}, {"anthropic": "private-token"})
+    )
+    pacer.tick()
+    assert "T3 [anthropic] quota unavailable, WITHHOLDING (0/1 running)" in caplog.text
+    assert "no tracker parent uses this provider" in caplog.text
+    assert "private-token" not in caplog.text
+
+
+@pytest.mark.parametrize(
+    "overrides, expected",
+    [
+        ("codex-acp=__api_key__", True),
+        ("codex-acp=__api_key__ codex=openai", False),
+        ("claudeAgent=__api_key__", False),
+    ],
+)
+def test_bypass_does_not_change_other_provider_gates(
+    setup, monkeypatch, overrides, expected
+):
+    from collections import Counter
+
+    pacer, _, _ = setup
+    pacer.config.providers_raw = "openai anthropic"
+    pacer.config.agent_providers_raw = overrides
+    monkeypatch.setattr(
+        t3, "quota_verdict", lambda *a, **kw: Verdict("paused", -0.1, "PAUSED")
+    )
+    assert (
+        pacer.admitted({"instanceId": "codex", "model": "gpt"}, Counter(), {}, {}, 0)
+        is expected
+    )
+    assert pacer.admitted(
+        {"instanceId": "claudeAgent", "model": "claude-fable"}, Counter(), {}, {}, 0
+    ) is (overrides == "claudeAgent=__api_key__")

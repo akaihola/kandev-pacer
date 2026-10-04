@@ -21,3 +21,9 @@ T3 [openai] paused
 - Honor the explicit `codex-acp=__api_key__` override in T3 mode. Keep provider and total concurrency limits, and honor `--apikey-policy withhold`. This changes pacing only, not T3 authentication.
 - Print quota status for every configured provider each tick, including scoped windows, headroom, running counts and resume estimates. Report quota read failures and identify providers with no tracker parent.
 - Verify admissions, retries, bypass capacity limits and provider status with offline integration tests.
+
+## Completion evidence, 2026-10-04
+
+Implemented the override and provider status reporting in T3 mode. Instance-name overrides take precedence over the legacy Codex alias. Quota bypass retains all concurrency limits and the withhold policy, including launch retries. Unsupported active providers still block admission. See [T3 pacing documentation](../t3-pacing.md#quota-status-and-manual-resets).
+
+Offline verification: 56 T3 integration tests passed; the full suite passed with 684 tests and 20 live tests skipped. `darker --check`, `graylint`, Ruff and `ty check` passed. No live tasks were launched. Restart the running pacer to load the change.
