@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import contextlib
+import errno
 import fcntl
 import json
 import os
@@ -835,9 +836,27 @@ def save_state(path, state):
 
 @contextlib.contextmanager
 def locked(path):
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("a") as file:
-        fcntl.flock(file, fcntl.LOCK_EX)
+    with contextlib.ExitStack() as stack:
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            file = stack.enter_context(path.open("a"))
+            fcntl.flock(file, fcntl.LOCK_EX)
+        except OSError as error:
+            if error.errno not in {errno.EROFS, errno.EACCES, errno.EPERM}:
+                raise
+            advice = (
+                "Check the read-only mount and executor sandbox writable paths; "
+                "chmod cannot make a read-only mount writable."
+                if error.errno == errno.EROFS
+                else "Check directory/file permissions and executor sandbox write access."
+            )
+            raise OSError(
+                error.errno,
+                f"Cannot acquire lock {path}: {error.strerror}. {advice} "
+                "Keep existing state and lock files; retry with the same paths "
+                "after restoring access.",
+                error.filename or str(path),
+            ) from error
         yield
 
 

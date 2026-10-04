@@ -1,11 +1,111 @@
+import errno
 import json
+import os
+import select
 import sqlite3
 import subprocess
+import sys
 from argparse import Namespace
+from pathlib import Path
 
 import pytest
 
 from kandev_pacer import learn
+
+
+@pytest.mark.parametrize("operation", ["mkdir", "open", "flock"])
+@pytest.mark.parametrize("code", [errno.EROFS, errno.EACCES, errno.EPERM, errno.ENOSPC])
+def test_lock_access_errors(tmp_path, monkeypatch, operation, code):
+    path = tmp_path / "state/consumer.lock"
+    if operation != "mkdir":
+        path.parent.mkdir()
+        path.write_text("keep lock contents")
+    failed_path = path.parent if operation == "mkdir" else path
+    error = OSError(code, os.strerror(code), str(failed_path))
+    owner = learn.fcntl if operation == "flock" else Path
+    original = getattr(owner, operation)
+    handles = []
+
+    def denied(target, *args, **kwargs):
+        selected = (
+            target.name == str(path) if operation == "flock" else target == failed_path
+        )
+        if selected:
+            if operation == "flock":
+                handles.append(target)
+            raise error
+        return original(target, *args, **kwargs)
+
+    monkeypatch.setattr(owner, operation, denied)
+    with pytest.raises(OSError) as raised, learn.locked(path):
+        pytest.fail("entered without acquiring the lock")
+    monkeypatch.undo()
+    assert raised.value.errno == code
+    assert raised.value.filename == str(failed_path)
+    if code == errno.ENOSPC:
+        assert raised.value is error
+    else:
+        assert raised.value.__cause__ is error
+        message = str(raised.value)
+        assert str(path) in message
+        assert "sandbox" in message
+        assert "same paths" in message
+        assert (
+            "read-only" in message if code == errno.EROFS else "permissions" in message
+        )
+    assert all(handle.closed for handle in handles)
+    if operation != "mkdir":
+        assert path.read_text() == "keep lock contents"
+
+
+def test_lock_serializes_and_releases_after_body_error(tmp_path):
+    path = tmp_path / "new/state/consumer.lock"
+    error = OSError(errno.EROFS, "body write failed", str(tmp_path / "other"))
+    child = None
+    try:
+        with pytest.raises(OSError) as raised, learn.locked(path):
+            child = subprocess.Popen(
+                [
+                    sys.executable,
+                    "-c",
+                    """
+import fcntl
+import sys
+with open(sys.argv[1], "a") as file:
+    try:
+        fcntl.flock(file, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        print("blocked", flush=True)
+    else:
+        raise AssertionError("second process acquired the held lock")
+    fcntl.flock(file, fcntl.LOCK_EX)
+    print("acquired", flush=True)
+""",
+                    str(path),
+                ],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+            )
+            assert child.stdout is not None
+            assert select.select([child.stdout], [], [], 5)[0], (
+                "child did not attempt lock"
+            )
+            assert child.stdout.readline() == "blocked\n"
+            assert child.poll() is None
+            raise error
+        assert raised.value is error
+        assert child is not None
+        output, errors = child.communicate(timeout=5)
+        assert child.returncode == 0, errors
+        assert output == "acquired\n"
+        with learn.locked(path):
+            assert path.exists()
+    finally:
+        if child is not None:
+            if child.poll() is None:
+                child.kill()
+            child.communicate(timeout=5)
 
 
 @pytest.fixture
