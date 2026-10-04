@@ -49,6 +49,27 @@ matches T3 0.0.44. On 2026-10-04 the local CLI reported that version; the Gogo H
 endpoint was reachable, but its installed version could not be rechecked over SSH
 because authentication was refused. No live task launch was used for verification.
 
+## Shell command not found
+
+If a pasted multiline command prints ` : command not found` and then the pacer
+starts, check for a space after a line-continuation backslash. The backslash must
+be the final character before the newline. With a trailing space, Zsh treats that
+space as a command name and executes `uv` separately on the next line. This is a
+shell error, so the pacer's error handler cannot explain it.
+
+Use the existing secrets-file loader and a single-line command to avoid sourcing
+the file and relying on backslash continuations:
+
+```bash
+uv run --extra t3 --frozen kandev-pacer --config ~/.config/kandev-pacer/config-t3.toml --secrets-file ~/.config/secrets/kandev-pacer.env --dump-order
+```
+
+Remove `--dump-order` when ready to run the scheduler. The secrets file must use
+literal `KEY=VALUE` lines without shell quotes, `export`, or command substitution,
+and have mode `0600` or stricter. The loader reads pacer settings only;
+`T3_THREAD_AUTH_TOKEN` must still be exported in the process environment for a
+non-loopback endpoint. See [connection setup](#connection-errors).
+
 ## Connection errors
 
 The pacer first requests an authenticated WebSocket ticket over HTTP. A connection

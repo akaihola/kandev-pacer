@@ -6,9 +6,6 @@ Rules for TASKS.md usage are at the bottom of the file.
 
 ## Ordered backlog
 
-- [20] `Command not found` error
-  <!-- hai:{"id":"simple-b2087b50-35fc-4c18-8a87-3826565d0d60","priority":"none","labels":[],"createdAt":"2026-10-04T18:45:46.258Z","updatedAt":"2026-10-04T18:45:46.258Z"} -->
-
 - [19] UV source path documentation unclear
   <!-- hai:{"id":"simple-1ea5eea8-5a65-4a87-a84f-3f2ab01533b4","priority":"none","labels":[],"createdAt":"2026-10-04T18:44:41.879Z","updatedAt":"2026-10-04T18:44:41.879Z"} -->
 
@@ -28,6 +25,9 @@ Rules for TASKS.md usage are at the bottom of the file.
   before resuming tasks.
 
 ## Completed / Accepted
+
+- [x] [20] `Command not found` error
+  <!-- hai:{"id":"simple-b2087b50-35fc-4c18-8a87-3826565d0d60","priority":"none","labels":[],"createdAt":"2026-10-04T18:45:46.258Z","updatedAt":"2026-10-04T19:11:10.780Z"} -->
 
 - [x] [23] Unclear "unknown provider" error
   <!-- hai:{"id":"simple-573cb9ef-fda8-47a8-904c-de914d45738a","priority":"none","labels":[],"createdAt":"2026-10-04T18:56:27.672Z","updatedAt":"2026-10-04T19:06:31.589Z"} -->
