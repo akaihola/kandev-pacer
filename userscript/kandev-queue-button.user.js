@@ -1,9 +1,8 @@
 // ==UserScript==
 // @name         Kandev: Queue instead of Send
-// @description  Adds a "Queue" button beside the composer's submit button. Parks the
-//               typed prompt on the session's message queue instead of starting a turn,
-//               so kandev-pacer decides when the quota gets spent.
-// @version      1.1.4
+// @description  Adds Queue to the composer, targets the displayed task session,
+//               and preserves Quick Chat drafts when paced queueing is unavailable.
+// @version      1.1.5
 // @include      /^[^:]*?:\/\/[^\/]*?:(38429|8449)\/.*?$/
 // @grant        none
 // @run-at       document-idle
@@ -23,16 +22,10 @@
 //
 // Limitations, all deliberate to keep it small: no attachments; context that lives
 // outside the composer document is not carried over (the context popover's chips,
-// the active side-by-side document, plan mode, a model override); targets the
-// task's primary session, so it queues to the wrong session if you have switched
-// the sessions dropdown; and queueing while a turn is running is pointless —
-// Kandev's own submit button already queues then, and the entry gets drained at
-// turn end either way.
-//
-// Queueing to the primary session is safe even though the pacer resumes the newest:
-// the pacer reads message.queue.get for *every* idle session and drains whichever
-// one came back non-empty. See "The queue is not necessarily on the newest session"
-// in the README.
+// the active side-by-side document, plan mode, a model override). Quick Chat is
+// refused: its creation API boots an agent and the pacer cannot discover its
+// workflowless task. Ordinary composers target their displayed session. Kandev's
+// queue Auto-run can dispatch immediately; see the guide for pacing limits.
 "use strict";
 
 // ── Composer serialization, mirroring tiptap-helpers.ts ─────────────
@@ -270,13 +263,25 @@ async function buildPayload(editor) {
 // The queue lives behind the WebSocket API only (no /api/v1 route). One
 // connection per click keeps this stateless — the page's own socket is
 // deliberately not reused.
-function queueMessage(taskId, sessionId, sessionIncarnationId, payload) {
+function queueMessage(taskId, sessionId, sessionIncarnationId, payload, canSubmit) {
   return new Promise((resolve, reject) => {
     const ws = new WebSocket(`${location.origin.replace("http", "ws")}/ws`);
-    ws.onerror = () => reject(new Error("websocket failed"));
-    ws.onopen = () =>
-      ws.send(
-        JSON.stringify({
+    let settled = false;
+    const uncertain = (reason) => new Error(`${reason}; admission unconfirmed, draft kept. Check the queue before retrying`);
+    const timer = setTimeout(() => finish(uncertain("queue request timed out")), 15000);
+    function finish(error) {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      ws.close();
+      error ? reject(error) : resolve();
+    }
+    ws.onerror = () => finish(uncertain("websocket failed"));
+    ws.onclose = () => finish(uncertain("websocket closed before acknowledgement"));
+    ws.onopen = () => {
+      try {
+        if (!canSubmit()) { finish(new Error("composer changed before submission; draft kept")); return; }
+        ws.send(JSON.stringify({
           id: "us-queue",
           type: "request",
           action: "message.queue.add",
@@ -286,21 +291,35 @@ function queueMessage(taskId, sessionId, sessionIncarnationId, payload) {
             session_incarnation_id: sessionIncarnationId,
             ...payload,
           },
-        }),
-      );
+        }));
+      } catch {
+        finish(uncertain("websocket send failed"));
+      }
+    };
     ws.onmessage = (e) => {
-      const m = JSON.parse(e.data);
-      if (m.id !== "us-queue") return; // skip pushed events on the shared /ws stream
-      ws.close();
-      m.type === "error" ? reject(new Error(m.payload?.message || "queue failed")) : resolve();
+      let m;
+      try { m = JSON.parse(e.data); } catch { finish(uncertain("invalid queue reply")); return; }
+      if (m?.id !== "us-queue") return; // skip pushed events on the shared /ws stream
+      if (m.action !== "message.queue.add") { finish(uncertain("unexpected queue reply")); return; }
+      if (m.type === "error") { finish(new Error(m.payload?.message || "queue failed")); return; }
+      if (m.type !== "response" || !validId(m.payload?.id) ||
+          m.payload.task_id !== taskId || m.payload.session_id !== sessionId) {
+        finish(uncertain("invalid queue acknowledgement"));
+        return;
+      }
+      finish();
     };
   });
 }
 
-// The queue API now validates all three identities. Read the current session
-// incarnation instead of relying on the task's cached primary_session_id.
+function validId(value) {
+  return typeof value === "string" && value.trim() !== "";
+}
+
+// Read the displayed session's current identity. Never substitute another session.
 // REST calls it queue_incarnation_id; only the WS payload uses session_incarnation_id.
-async function queueTarget(taskId) {
+async function queueTarget(taskId, sessionId) {
+  if (![taskId, sessionId].every(validId)) throw new Error("task session identity is unavailable");
   const [taskRes, sessionsRes] = await Promise.all([
     fetch(`/api/v1/tasks/${taskId}`),
     fetch(`/api/v1/tasks/${taskId}/sessions`),
@@ -310,10 +329,12 @@ async function queueTarget(taskId) {
   const task = await taskRes.json();
   const sessions = (await sessionsRes.json())?.sessions;
   if (!Array.isArray(sessions)) throw new Error("invalid task sessions response");
-  const primaryId = (task?.task ?? task)?.primary_session_id;
-  const session = sessions.find((candidate) => candidate?.is_primary === true) ??
-    sessions.find((candidate) => candidate?.id === primaryId) ?? sessions[0];
-  if (![session?.id, session?.queue_incarnation_id].every((id) => typeof id === "string" && id.trim()))
+  const returnedTaskId = (task?.task ?? task)?.id;
+  const matching = sessions.filter((candidate) => candidate?.id === sessionId);
+  const session = matching.length === 1 ? matching[0] : null;
+  if (returnedTaskId !== taskId || (session?.task_id !== undefined && session.task_id !== taskId))
+    throw new Error("task session identity conflicts with the submitted composer");
+  if (![session?.id, session?.queue_incarnation_id].every(validId))
     throw new Error("task session identity is unavailable: expected id and queue_incarnation_id from the sessions API");
   return { sessionId: session.id, sessionIncarnationId: session.queue_incarnation_id };
 }
@@ -323,24 +344,63 @@ function taskIdFromUrl() {
 }
 
 async function onQueue(button) {
-  const taskId = taskIdFromUrl();
-  const editor = button.closest('[data-testid="chat-input-area"]').querySelector("[contenteditable=true]");
-  if (!taskId || !editor) return;
-
-  button.disabled = true;
+  let area, admitted = false, ownsRequest = false;
   try {
+    if (button.closest('[data-testid="quick-chat-content"], [data-testid="quick-chat-setup"]'))
+      throw new Error("Quick Chat paced queueing is unavailable; your draft was kept. Kandev creates it by starting an agent, and pacer cannot pace Quick Chats");
+    area = button.closest('[data-testid="chat-input-area"]');
+    if (pendingComposers.has(area)) return;
+    const panel = area?.closest('[data-testid="session-chat"]');
+    const sessionId = panel?.getAttribute("data-session-id");
+    const editor = area?.querySelector("[contenteditable=true]");
+    const taskId = taskIdFromUrl();
+    if (!editor || ![taskId, sessionId].every(validId))
+      throw new Error("composer task session identity is unavailable; draft kept");
+    const snapshot = () => JSON.stringify(composerDoc(editor) ?? editor.innerText);
+    const submitted = snapshot();
+    const current = () => editor.isConnected && area.isConnected && panel.isConnected &&
+      button.closest('[data-testid="chat-input-area"]') === area &&
+      area.closest('[data-testid="session-chat"]') === panel &&
+      !button.closest('[data-testid="quick-chat-content"], [data-testid="quick-chat-setup"]') &&
+      area.querySelector("[contenteditable=true]") === editor &&
+      panel.getAttribute("data-session-id") === sessionId && taskIdFromUrl() === taskId;
+    if (!current()) throw new Error("composer changed; draft kept");
+    pendingComposers.add(area);
+    ownsRequest = true;
+    button.disabled = true;
     const payload = await buildPayload(editor);
     if (!payload) return;
-    const target = await queueTarget(taskId);
-    await queueMessage(taskId, target.sessionId, target.sessionIncarnationId, payload);
-    editor.focus();
-    document.execCommand("selectAll");
-    document.execCommand("delete");
+    const target = await queueTarget(taskId, sessionId);
+    if (!current() || snapshot() !== submitted) throw new Error("composer changed; draft kept");
+    await queueMessage(taskId, target.sessionId, target.sessionIncarnationId, payload,
+      () => current() && snapshot() === submitted);
+    admitted = true;
+    if (current() && snapshot() === submitted) clearComposer(editor);
   } catch (err) {
-    alert(`Queue failed: ${err.message}`);
+    alert(`${admitted ? "Prompt queued, but draft could not be cleared" : "Queue failed"}: ${err.message}`);
   } finally {
-    button.disabled = false;
+    if (ownsRequest) {
+      pendingComposers.delete(area);
+      button.disabled = false;
+    }
   }
+}
+
+const pendingComposers = new WeakSet();
+
+function clearComposer(editor) {
+  if (editor.editor?.commands?.clearContent) {
+    if (editor.editor.commands.clearContent() === false) throw new Error("editor refused to clear");
+    return;
+  }
+  editor.focus();
+  if (document.activeElement !== editor) throw new Error("editor could not receive focus");
+  const range = document.createRange();
+  range.selectNodeContents(editor);
+  const selection = document.getSelection();
+  selection.removeAllRanges();
+  selection.addRange(range);
+  if (!document.execCommand("delete")) throw new Error("editor refused to clear");
 }
 
 // The submit button sits in its own tooltip <span>; the injection target is that
@@ -353,7 +413,7 @@ function inject() {
     const button = document.createElement("button");
     button.className = "us-queue-btn";
     button.textContent = "Queue";
-    button.title = "Park this prompt on the queue — the pacer starts the turn";
+    button.title = "Add to this session's queue (Auto-run may start the turn)";
     button.style.cssText = "padding:2px 8px;border:1px solid currentColor;border-radius:9999px;font-size:12px";
     button.onclick = () => onQueue(button);
     row.insertBefore(button, span);

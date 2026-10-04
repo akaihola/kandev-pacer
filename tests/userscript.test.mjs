@@ -24,36 +24,112 @@ function local(value) {
 const sessionFixture = JSON.parse(readFileSync(new URL("./fixtures/queue/sessions.json", import.meta.url)));
 const primary = sessionFixture.sessions[0];
 
-function queueClick({ sessions = sessionFixture, taskStatus = 200, sessionsStatus = 200, queueError } = {}) {
+function queueClick({ sessions = sessionFixture, taskStatus = 200, sessionsStatus = 200, queueError,
+  quickChat = false, pathname = `/tasks/${primary.task_id}`, sessionId = primary.id,
+  delayReply = false, delayOpen = false, reply, beforeFetch, missingArea = false, unknownPanel = false,
+  missingEditor = false, tiptap = true, task = { id: primary.task_id },
+} = {}) {
   const sent = [], fetched = [], alerts = [], edits = [];
-  let closed = false;
-  const editor = { innerText: "keep this prompt", querySelector: () => null, focus() {} };
-  const button = { disabled: false, closest: () => ({ querySelector: () => editor }) };
+  const timers = new Map();
+  let closed = false, socket, selection;
+  // Real frontend ancestry: session-chat/quick-chat-content > chat-input-area > editor/button.
+  function element(testId, parentElement = null) {
+    return {
+      parentElement, isConnected: true,
+      attrs: { "data-testid": testId },
+      getAttribute(name) { return this.attrs[name] ?? null; },
+      closest(selector) {
+        return selector.split(",").some((part) =>
+          [...part.matchAll(/\[([^=\]]+)(?:=["']?([^"'\]]+)["']?)?\]/g)]
+            .every(([, name, value]) => name in this.attrs && (!value || this.attrs[name] === value)),
+        ) ? this : this.parentElement?.closest(selector) ?? null;
+      },
+    };
+  }
+  const document = {
+    querySelectorAll: () => [], body: {}, activeElement: null,
+    createRange: () => ({ selectNodeContents(target) { this.target = target; } }),
+    getSelection: () => ({ removeAllRanges() { selection = null; }, addRange(range) { selection = range; } }),
+    execCommand(command) {
+      edits.push(command);
+      if (command === "selectAll") selection = { target: document.activeElement };
+      if (command === "delete" && selection?.target) selection.target.innerText = "";
+      return true;
+    },
+  };
+  function composer(isQuickChat, text) {
+    const panel = element(isQuickChat ? "quick-chat-content" : "session-chat");
+    if (!isQuickChat) panel.attrs["data-session-id"] = sessionId;
+    const area = element("chat-input-area", panel);
+    const editor = Object.assign(element(null, area), {
+      innerText: text, querySelector: () => null,
+      focus() { document.activeElement = this; },
+    });
+    if (tiptap) editor.editor = {
+      getJSON: () => ({ type: "doc", content: [{ type: "paragraph", content: [{ type: "text", text: editor.innerText }] }] }),
+      commands: { clearContent() { edits.push("clearContent"); editor.innerText = ""; return true; } },
+    };
+    area.querySelector = () => area.editor;
+    area.editor = editor;
+    return { panel, area, editor, button: Object.assign(element(null, area), { disabled: false }) };
+  }
+  const taskComposer = composer(false, "task draft");
+  const quickComposer = composer(true, "quick chat draft");
+  const selected = quickChat ? quickComposer : taskComposer;
+  const { button, editor, area, panel } = selected;
+  editor.innerText = "keep this prompt";
+  if (missingArea) button.parentElement = null;
+  if (unknownPanel) panel.attrs["data-testid"] = "unknown";
+  if (missingEditor) area.editor = null;
   const ctx = load({
-    location: { origin: "https://kandev.example.test:8449", pathname: `/tasks/${primary.task_id}` },
-    document: { querySelectorAll: () => [], body: {}, execCommand: (command) => edits.push(command) },
+    location: { origin: "https://kandev.example.test:8449", pathname },
+    document,
+    setTimeout(callback) { const id = {}; timers.set(id, callback); return id; },
+    clearTimeout(id) { timers.delete(id); },
     alert: (message) => alerts.push(message),
     fetch: async (url) => {
       fetched.push(url);
+      await beforeFetch?.();
       const isSessions = url.endsWith("/sessions");
       const status = isSessions ? sessionsStatus : taskStatus;
-      return { ok: status === 200, status, json: async () => isSessions ? sessions : { id: primary.task_id } };
+      return { ok: status === 200, status, json: async () => isSessions ? sessions : task };
     },
     WebSocket: class {
       constructor(url) {
+        socket = this;
         assert.equal(url, "wss://kandev.example.test:8449/ws");
-        queueMicrotask(() => this.onopen());
+        if (!delayOpen) queueMicrotask(() => this.onopen());
       }
       send(message) {
         sent.push(JSON.parse(message));
-        queueMicrotask(() => this.onmessage({ data: JSON.stringify({
-          id: "us-queue", type: queueError ? "error" : "response", payload: { message: queueError },
-        }) }));
+        if (!delayReply) queueMicrotask(() => this.respond());
       }
-      close() { closed = true; }
+      respond(value = reply ?? {
+        id: "us-queue", action: "message.queue.add", type: queueError ? "error" : "response",
+        payload: queueError ? { message: queueError } : {
+          id: "entry-1", task_id: sent[0].payload.task_id, session_id: sent[0].payload.session_id,
+        },
+      }) {
+        this.onmessage({ data: typeof value === "string" ? value : JSON.stringify(value) });
+      }
+      close() { closed = true; this.onclose?.(); }
     },
   });
-  return { ctx, button, sent, fetched, alerts, edits, get closed() { return closed; } };
+  return { ctx, ...selected, taskComposer, quickComposer, sent, fetched, alerts, edits, timers,
+    get closed() { return closed; }, get socket() { return socket; } };
+}
+
+for (const pathname of [`/tasks/${primary.task_id}`, "/"]) {
+  test(`Quick Chat refuses Queue and preserves both drafts at ${pathname}`, async () => {
+    const click = queueClick({ quickChat: true, pathname });
+    await click.ctx.onQueue(click.button);
+    assert.deepEqual(click.sent, []);
+    assert.deepEqual(click.fetched, []);
+    assert.equal(click.editor.innerText, "keep this prompt");
+    assert.equal(click.taskComposer.editor.innerText, "task draft");
+    assert.match(click.alerts[0], /Quick Chat.*unavailable.*draft.*kept/i);
+    assert.equal(click.button.disabled, false);
+  });
 }
 
 test("Queue click maps the live REST identity and clears only after admission", async () => {
@@ -70,7 +146,9 @@ test("Queue click maps the live REST identity and clears only after admission", 
       session_incarnation_id: primary.queue_incarnation_id, content: "keep this prompt",
     },
   }]);
-  assert.deepEqual(click.edits, ["selectAll", "delete"]);
+  assert.deepEqual(click.edits, ["clearContent"]);
+  assert.equal(click.editor.innerText, "");
+  assert.equal(click.quickComposer.editor.innerText, "quick chat draft");
   assert.equal(click.button.disabled, false);
   assert.equal(click.closed, true);
 });
@@ -85,7 +163,7 @@ test("Queue accepts identity from a task-scoped session response without task_id
   assert.deepEqual(click.alerts, []);
   assert.equal(click.sent[0].payload.session_id, primary.id);
   assert.equal(click.sent[0].payload.session_incarnation_id, primary.queue_incarnation_id);
-  assert.deepEqual(click.edits, ["selectAll", "delete"]);
+  assert.deepEqual(click.edits, ["clearContent"]);
 });
 
 test("Queue rejection keeps the composer and restores the button", async () => {
@@ -99,6 +177,15 @@ test("Queue rejection keeps the composer and restores the button", async () => {
 });
 
 for (const [name, options, error] of [
+  ["unknown panel", { unknownPanel: true }, /composer task session identity is unavailable/],
+  ["missing composer", { missingArea: true }, /composer task session identity is unavailable/],
+  ["missing editor", { missingEditor: true }, /composer task session identity is unavailable/],
+  ["missing session attribute", { sessionId: "" }, /composer task session identity is unavailable/],
+  ["missing task URL", { pathname: "/" }, /composer task session identity is unavailable/],
+  ["conflicting task", { task: { id: "another-task" } }, /identity conflicts/],
+  ["conflicting session task", { sessions: { sessions: [{ ...primary, task_id: "another-task" }] } }, /identity conflicts/],
+  ["duplicate session", { sessions: { sessions: [primary, primary] } }, /identity is unavailable/],
+  ["missing selected session", { sessionId: "missing" }, /identity is unavailable/],
   ["task HTTP error", { taskStatus: 404 }, /task lookup failed \(HTTP 404\)/],
   ["sessions HTTP error", { sessionsStatus: 503 }, /session lookup failed \(HTTP 503\)/],
   ["missing sessions", { sessions: {} }, /invalid task sessions response/],
@@ -123,29 +210,154 @@ for (const [name, options, error] of [
     assert.match(click.alerts[0], error);
     assert.deepEqual(click.sent, []);
     assert.deepEqual(click.edits, []);
+    assert.equal(click.editor.innerText, "keep this prompt");
     assert.equal(click.button.disabled, false);
   });
 }
 
 for (const wrapped of [false, true]) {
-  for (const primaryId of ["older", undefined]) {
-    test(`session selection preserves task primary and first-session fallback, wrapped=${wrapped}, primary=${primaryId}`, async () => {
-      const ctx = load({
-        fetch: async (url) => ({
-          ok: true,
-          json: async () => {
-            const task = { primary_session_id: primaryId };
-            return url.endsWith("/sessions") ? { sessions: [
-              { ...primary, id: "newer", is_primary: false },
-              { ...primary, id: "older", is_primary: false },
-            ] } : wrapped ? { task } : task;
-          },
-        }),
-      });
-      assert.equal((await ctx.queueTarget(primary.task_id)).sessionId, primaryId ?? "newer");
+  test(`targets the displayed secondary session, wrapped=${wrapped}`, async () => {
+    const task = { id: primary.task_id, primary_session_id: primary.id };
+    const click = queueClick({
+      sessionId: "secondary",
+      task: wrapped ? { task } : task,
+      sessions: { sessions: [primary, { ...primary, id: "secondary", is_primary: false, queue_incarnation_id: "inc-secondary" }] },
     });
-  }
+    await click.ctx.onQueue(click.button);
+    assert.deepEqual(click.alerts, []);
+    assert.equal(click.sent[0].payload.session_id, "secondary");
+    assert.equal(click.sent[0].payload.session_incarnation_id, "inc-secondary");
+  });
 }
+
+test("repeated Quick Chat clicks never create or submit anything", async () => {
+  const click = queueClick({ quickChat: true });
+  await Promise.all([click.ctx.onQueue(click.button), click.ctx.onQueue(click.button)]);
+  assert.deepEqual(click.fetched, []);
+  assert.deepEqual(click.sent, []);
+  assert.equal(click.editor.innerText, "keep this prompt");
+});
+
+test("repeated clicks and a replacement button share the composer guard until admission", async () => {
+  const click = queueClick({ delayReply: true });
+  const pending = click.ctx.onQueue(click.button);
+  await new Promise(setImmediate);
+  await click.ctx.onQueue(click.button);
+  await click.ctx.onQueue({ ...click.button, disabled: false });
+  assert.equal(click.button.disabled, true);
+  assert.equal(click.sent.length, 1);
+  assert.equal(click.editor.innerText, "keep this prompt");
+  click.socket.respond({ id: "unrelated", type: "event" });
+  assert.equal(click.editor.innerText, "keep this prompt");
+  click.socket.respond();
+  await pending;
+  assert.equal(click.editor.innerText, "");
+  assert.equal(click.quickComposer.editor.innerText, "quick chat draft");
+  assert.equal(click.button.disabled, false);
+  assert.equal(click.timers.size, 0);
+});
+
+const contextChanges = [
+  ["edited draft", (click) => { click.editor.innerText = "new draft"; }],
+  ["changed session", (click) => { click.panel.attrs["data-session-id"] = "other-session"; }],
+  ["navigation", (click) => { click.ctx.location.pathname = "/"; }],
+  ["removed editor", (click) => { click.editor.isConnected = false; }],
+  ["replacement editor", (click) => { click.area.editor = click.quickComposer.editor; }],
+];
+for (const [name, change] of contextChanges) {
+  test(`refuses submission after ${name} while the socket connects`, async () => {
+    const click = queueClick({ delayOpen: true });
+    const pending = click.ctx.onQueue(click.button);
+    await new Promise(setImmediate);
+    change(click);
+    click.socket.onopen();
+    await pending;
+    assert.deepEqual(click.sent, []);
+    assert.deepEqual(click.edits, []);
+    assert.match(click.alerts[0], /composer changed/);
+    assert.equal(click.closed, true);
+  });
+  test(`preserves ${name} while admission is pending`, async () => {
+    const click = queueClick({ delayReply: true });
+    const pending = click.ctx.onQueue(click.button);
+    await new Promise(setImmediate);
+    change(click);
+    const text = click.editor.innerText;
+    click.socket.respond();
+    await pending;
+    assert.equal(click.editor.innerText, text);
+    assert.equal(click.quickComposer.editor.innerText, "quick chat draft");
+    assert.deepEqual(click.edits, []);
+    assert.equal(click.sent.length, 1);
+  });
+  test(`refuses submission after ${name} during lookup`, async () => {
+    const click = queueClick({ beforeFetch: () => change(click) });
+    await click.ctx.onQueue(click.button);
+    assert.deepEqual(click.sent, []);
+    assert.deepEqual(click.edits, []);
+    assert.match(click.alerts[0], /composer changed/);
+  });
+}
+
+for (const [name, response] of [
+  ["invalid JSON", "{"],
+  ["wrong action", { action: "message.add" }],
+  ["wrong type", { type: "event" }],
+  ["missing entry", { payload: {} }],
+  ["wrong task", { payload: { id: "q", task_id: "other", session_id: primary.id } }],
+  ["wrong session", { payload: { id: "q", task_id: primary.task_id, session_id: "other" } }],
+]) {
+  test(`unconfirmed admission (${name}) preserves the draft`, async () => {
+    const click = queueClick({ reply: typeof response === "string" ? response : {
+      id: "us-queue", action: "message.queue.add", type: "response", ...response,
+    } });
+    await click.ctx.onQueue(click.button);
+    assert.match(click.alerts[0], /admission unconfirmed/);
+    assert.equal(click.editor.innerText, "keep this prompt");
+    assert.deepEqual(click.edits, []);
+    assert.equal(click.button.disabled, false);
+    assert.equal(click.closed, true);
+    assert.equal(click.timers.size, 0);
+  });
+}
+
+for (const failure of ["error", "close", "timeout"]) {
+  test(`socket ${failure} retains text and releases the guard`, async () => {
+    const click = queueClick({ delayReply: true });
+    const pending = click.ctx.onQueue(click.button);
+    await new Promise(setImmediate);
+    if (failure === "timeout") [...click.timers.values()][0]();
+    else if (failure === "close") click.socket.close();
+    else click.socket.onerror();
+    await pending;
+    assert.match(click.alerts[0], /admission unconfirmed/);
+    assert.equal(click.editor.innerText, "keep this prompt");
+    assert.equal(click.button.disabled, false);
+    assert.equal(click.timers.size, 0);
+    assert.equal(click.closed, true);
+  });
+}
+
+test("plain editor clearing selects only the submitted content", async () => {
+  const click = queueClick({ tiptap: false });
+  click.quickComposer.editor.focus();
+  await click.ctx.onQueue(click.button);
+  assert.deepEqual(click.alerts, []);
+  assert.deepEqual(click.edits, ["delete"]);
+  assert.equal(click.editor.innerText, "");
+  assert.equal(click.quickComposer.editor.innerText, "quick chat draft");
+});
+
+test("failed focus after admission cannot delete a different composer", async () => {
+  const click = queueClick({ tiptap: false });
+  click.quickComposer.editor.focus();
+  click.editor.focus = () => {};
+  await click.ctx.onQueue(click.button);
+  assert.match(click.alerts[0], /^Prompt queued, but draft could not be cleared/);
+  assert.equal(click.editor.innerText, "keep this prompt");
+  assert.equal(click.quickComposer.editor.innerText, "quick chat draft");
+  assert.deepEqual(click.edits, []);
+});
 
 function load(overrides = {}) {
   const context = {
@@ -294,37 +506,6 @@ test("plain text needs no document and no fetch", async () => {
   assert.deepEqual(local(await ctx.buildPayload(editor)), { content: "just words" });
 });
 
-test("queues with the current primary session incarnation", async () => {
-  const sent = [];
-  const ctx = load({
-    WebSocket: class {
-      constructor() { this.readyState = 1; queueMicrotask(() => this.onopen()); }
-      send(message) {
-        sent.push(JSON.parse(message));
-        queueMicrotask(() => this.onmessage({ data: JSON.stringify({ id: "us-queue", type: "response" }) }));
-      }
-      close() {}
-    },
-    fetch: async (url) => ({
-      ok: true,
-      json: async () => url.endsWith("/sessions")
-        ? { sessions: [{ id: "stale", task_id: "task-7", queue_incarnation_id: "old", is_primary: false }, { id: "current", task_id: "task-7", queue_incarnation_id: "inc-7", is_primary: true }] }
-        : { task: { id: "task-7", primary_session_id: "stale" } },
-    }),
-  });
-  assert.deepEqual(local(await ctx.queueTarget("task-7")), {
-    sessionId: "current",
-    sessionIncarnationId: "inc-7",
-  });
-  await ctx.queueMessage("task-7", "current", "inc-7", { content: "queued" });
-  assert.deepEqual(local(sent[0].payload), {
-    task_id: "task-7",
-    session_id: "current",
-    session_incarnation_id: "inc-7",
-    content: "queued",
-  });
-});
-
 test("valid entity references ride along; duplicates and malformed ones dropped", async () => {
   const ctx = load();
   const ref = {
@@ -370,7 +551,7 @@ test("refuses innerText when the document is unreadable and a chip is present", 
 
 test("missing queue incarnation rejects before admission", async () => {
   const ctx = load({
-    fetch: async () => ({ ok: true, json: async () => ({ sessions: [{ id: "s", task_id: "t", is_primary: true }] }) }),
+    fetch: async () => ({ ok: true, json: async () => ({ id: "t", sessions: [{ id: "s", task_id: "t", is_primary: true }] }) }),
   });
-  await assert.rejects(ctx.queueTarget("t"), /task session identity is unavailable/);
+  await assert.rejects(ctx.queueTarget("t", "s"), /task session identity is unavailable/);
 });
