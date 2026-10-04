@@ -11,10 +11,10 @@ Rules for TASKS.md usage are at the bottom of the file.
 
 ## Scheduled
 
+## In Progress
+
 - [24] Codex reset workaround broken, no Anthropic status
   <!-- hai:{"id":"simple-1afb0e60-8d2e-4995-85eb-314807cfd60b","priority":"none","labels":[],"createdAt":"2026-10-04T19:13:34.534Z","updatedAt":"2026-10-04T19:13:34.534Z"} -->
-
-## In Progress
 
 - [16] Learn from session observation records: a lowest-priority Kandev task the
   Heartbeat creates when unread records exist, writing observations and proposed
