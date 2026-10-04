@@ -5,12 +5,70 @@ the blue submit button starts the next turn *immediately*, which spends quota
 outside the pacer's control. What we want is the follow-up equivalent of
 `+ Create without starting agent`: park the prompt, let the pacer start the turn.
 
-**It already exists.** Kandev has a per-session FIFO **message queue** with a full
-add / get / update / remove / cancel / drain API. No Kandev source change is
-needed — only a client that calls `message.queue.add` instead of `message.add`.
+Kandev has a per-session message queue with an add / get / update / remove /
+cancel / drain API. The userscript calls `message.queue.add`. Current Kandev can
+automatically dispatch an admitted entry, so admission alone does not guarantee
+that a prompt waits for the pacer.
 
 Verified against the Kandev source (`~/repos/ai/kandev`, 2026-07-26) and live
 against the running server on `gogo`.
+
+## Quick Chat and composer safety, 2026-10-04
+
+Userscript **1.1.5** checks the clicked composer's context before any request.
+Quick Chat Queue reports that paced queueing is unavailable and keeps the draft,
+whether the popup covers a task or the board. Repeated clicks create nothing.
+The earlier URL-only lookup could send the Quick Chat draft to the task behind it.
+
+The supported Quick Chat endpoint is `POST /api/v1/workspaces/:id/quick-chat`.
+At local Kandev source commit `d5142d9db`, `httpStartQuickChat()` in
+`apps/backend/internal/task/handlers/task_http_handlers.go` always calls
+`LaunchSession(IntentStart)`. Its `launch_immediately` request field is unused.
+This boots an agent for initialization even when no user prompt is supplied;
+initialization is not evidence of a model turn. Generic task creation exposes
+`prepare_session` but not `is_ephemeral`, so it cannot create an equivalent
+Quick Chat. Prepare can also launch passthrough agents; internal `NoAgentLaunch`
+is not a JSON request field. There is no supported no-agent Quick Chat creation
+path in this contract.
+
+Quick Chats also have no workflow. `client.paced_tasks()` only discovers tasks in
+enrolled workflows, so even an existing Quick Chat queue would be outside pacing.
+The script therefore refuses admission instead of leaving an unreachable queued
+prompt or creating a different kind of task. Full Quick Chat pacing remains
+unimplemented.
+
+For ordinary tasks, the script reads `data-session-id` from the clicked
+`session-chat` panel, validates it against the URL task's sessions, and reads that
+session's fresh `queue_incarnation_id`. It never substitutes the primary session
+for a missing selected session. Quick Chat uses the separate `quick-chat-content`
+wrapper; an unknown composer is refused. These markers were checked in
+`apps/web/components/task/task-chat-panel.tsx` and
+`apps/web/components/quick-chat/quick-chat-content.tsx`.
+
+A successful queue reply must identify the admitted entry, task, and session.
+Only the submitted editor is cleared, and only if its document and context still
+match the submitted draft. New edits and replacement composers are preserved.
+Lookup failures, rejected or malformed replies, socket failures, and a 15-second
+queue timeout preserve the draft and report an error. When admission cannot be
+confirmed, inspect Kandev's queue before retrying: the server may have saved the
+entry even though its reply was lost. There is no automatic retry.
+
+`tests/userscript.test.mjs` simulates composer ancestry, separate drafts, REST and
+WebSocket responses in Node's VM. It covers Quick Chat over a task and at `/`,
+selected secondary sessions, serialization, repeated clicks, delayed replies,
+context changes, failures, and scoped clearing. `tests/test_userscript.py` runs
+that suite. The two Quick Chat regressions failed against 1.1.4 before the fix.
+These are simulated browser tests; the frontend/API evidence above is read-only
+source inspection, not a new live browser or queue-admission test.
+
+### Auto-run is a separate pacing limitation
+
+At the same source commit, `queue_handlers.go:wsQueueMessage()` invokes
+`CheckQueueAdmissionReadiness()` after admission. With queue Auto-run enabled,
+that check can dispatch immediately. `message.queue.auto_run.set` can pause
+automatic dispatch, but `message.queue.drain` enables Auto-run again. This script
+does not change that policy. The July observations below predate this contract;
+their claim that idle admission has no drain trigger no longer applies generally.
 
 ## The API
 
@@ -20,7 +78,7 @@ are declared in `apps/backend/pkg/websocket/actions.go:114`:
 
 | Action | Effect |
 |---|---|
-| `message.queue.add` | Park one entry. `{session_id, task_id, content, model?, plan_mode?, attachments?}` → the created entry incl. its `id`. |
+| `message.queue.add` | Admit one entry. `{session_id, task_id, session_incarnation_id, content, model?, plan_mode?, attachments?}` → the entry including `id`, `task_id`, and `session_id`. Auto-run may dispatch it. |
 | `message.queue.get` | `{task_id, session_id, session_incarnation_id}` → `{entries, count, max}`. |
 | `message.queue.update` | Edit a parked entry's content/attachments. |
 | `message.queue.remove` | Delete one entry by `entry_id`. |
@@ -35,11 +93,12 @@ The cap is 10 entries per session (`KANDEV_QUEUE_MAX_PER_SESSION`,
 `queue_full`. Entries live in the `queued_messages` table of `kandev.db`
 (`repository_sqlite.go:33`), so they survive a server restart.
 
-`message.queue.add` performs **no** session-existence check — a typo'd
-`session_id` is accepted and the entry is then unreachable from any UI. Read the
-session id from `GET /api/v1/tasks/:id/sessions` rather than constructing it.
+Current `message.queue.add` validates the task, session, and queue incarnation.
+Read the displayed session's identity from `GET /api/v1/tasks/:id/sessions`;
+send REST's `queue_incarnation_id` as `session_incarnation_id`. The successful
+entry response does not contain an incarnation field.
 
-## Why the composer submits instead of queueing
+## Why the composer submitted instead of queueing, July 2026
 
 `deriveSessionInputMode` (`apps/web/hooks/domains/session/session-input-mode.ts`)
 maps session state to composer behaviour, and `use-message-handler.ts` obeys it:
@@ -59,7 +118,7 @@ when the session is `WAITING_FOR_INPUT` or `IDLE`
 (`components/task/chat/chat-input-area.tsx:436`). Queue-while-parked is a
 supported state, complete with a manual release control.
 
-## What drains the queue
+## What drained the queue, July 2026
 
 This is the part that decides whether pacing holds. Drain sites:
 
@@ -83,13 +142,12 @@ Consequence for the pacer:
 > mid-turn is drained by site 1 or 2 the moment the turn ends and the task lands
 > on its next step — immediately, un-paced.
 
-A parked task with no in-flight turn has no drain trigger at all: nothing fires
-until the pacer says so. Confirmed live — `message.queue.add` against a
+A parked task with no in-flight turn had no drain trigger in that version.
+Confirmed live in July 2026: `message.queue.add` against a
 `WAITING_FOR_INPUT` session left the state `WAITING_FOR_INPUT` and started
 nothing; the entry sat in `message.queue.get` until removed.
 
-Nothing *else* will pick it up either, which is what makes the queue a safe
-parking place:
+The July source inspection also found:
 
 - **No background reconciler.** Every drain site above is event-driven. The only
   `time.NewTicker`s in the orchestrator are inside `waitForAgentPromptReady` and
@@ -128,8 +186,8 @@ fire as its task is opened.
 
 ## How the pacer releases it
 
-Queueing is inert unless the pacer drains, because **nothing else will**. Before
-this was wired up, `pacer.py` had no reference to the queue API at all, and a
+With automatic dispatch paused, the pacer can release queued prompts. Before
+this was wired up in July, `pacer.py` had no reference to the queue API, and a
 queued prompt was either never delivered or delivered un-paced:
 
 - **Parked at Review or Done → never released.** `is_launchable` returns `False`
@@ -303,9 +361,10 @@ queue reads from the replacement process. A merge alone does not update a runnin
 Python process. Test prompt admission and release only on a designated test task.
 
 For the Queue button, replace the installed script in the browser's userscript
-manager with `userscript/kandev-queue-button.user.js`, confirm version `1.1.4`, save,
+manager with `userscript/kandev-queue-button.user.js`, confirm version `1.1.5`, save,
 and reload the Kandev page. Updating this repository does not update the browser's
 installed copy. Version `1.1.2` reads the wrong REST field and reports
 `task session identity is unavailable` even when the API returns a valid identity.
 Version `1.1.3` fixed that mapping; `1.1.4` also rejects failed HTTP lookups and
 invalid identities before queue admission, preserving the composer text.
+Version `1.1.5` adds the composer checks and draft protection described above.

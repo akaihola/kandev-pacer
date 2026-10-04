@@ -148,12 +148,18 @@ one, and the WIP trade-off the layering makes — is in [`docs/design.md`].
 
 ## Queued user prompts
 
-A follow-up typed into kandev's composer normally fires a turn on the spot. Park it on the
-session's message queue instead — the Queue button in
-[`userscript/kandev-queue-button.user.js`] — and the
-pacer releases it when the gate opens. Releases outrank launches, and a task with a queued
-prompt is drained at *any* step, including parked ones like Review where a launch never
-applies. See [`docs/queueing-user-prompts.md`].
+A follow-up typed into Kandev's composer normally starts a turn immediately. The
+Queue button in [`userscript/kandev-queue-button.user.js`] adds it to the displayed
+task session's queue. Pacer releases outrank launches and can drain prompts at any
+step, including Review. Kandev's queue Auto-run can also dispatch immediately;
+queue admission alone does not guarantee pacing. See [`docs/queueing-user-prompts.md`].
+
+Userscript 1.1.5 refuses Quick Chat queueing and keeps its draft. The Quick Chat
+creation API starts an agent process, and the pacer does not discover Quick Chat's
+workflowless task. The script never sends that draft to the task behind the popup.
+Ordinary task drafts clear only after a confirmed queue response, and edits made
+while waiting are preserved. Replace the installed userscript and reload Kandev;
+updating this repository does not update the browser's copy.
 
 ## Refilling the board
 
