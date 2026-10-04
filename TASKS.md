@@ -11,6 +11,9 @@ Rules for TASKS.md usage are at the bottom of the file.
 
 ## Scheduled
 
+- [24] Codex reset workaround broken, no Anthropic status
+  <!-- hai:{"id":"simple-1afb0e60-8d2e-4995-85eb-314807cfd60b","priority":"none","labels":[],"createdAt":"2026-10-04T19:13:34.534Z","updatedAt":"2026-10-04T19:13:34.534Z"} -->
+
 ## In Progress
 
 - [16] Learn from session observation records: a lowest-priority Kandev task the
@@ -178,7 +181,7 @@ Rules for TASKS.md usage are at the bottom of the file.
 
 [19]: docs/tasks/19-uv-source-path-documentation-unclear.md
 
-<!-- hai:reserved-numbers:1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23 -->
+<!-- hai:reserved-numbers:1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24 -->
 
 [20]: docs/tasks/20-command-not-found-error.md
 
@@ -187,6 +190,8 @@ Rules for TASKS.md usage are at the bottom of the file.
 [22]: docs/tasks/22-unclear-valueerror.md
 
 [23]: docs/tasks/23-unclear-unknown-provider-error.md
+
+[24]: docs/tasks/24-codex-reset-workaround-broken-no-anthropic-status.md
 
 ## Rules
 
