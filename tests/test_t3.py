@@ -163,6 +163,55 @@ def test_waiting_occupies_capacity(setup, flag):
 
 
 @pytest.mark.parametrize(
+    "instance, provider", [("codex", "openai"), ("claudeAgent", "anthropic")]
+)
+def test_instance_selection_launches_and_counts_capacity(setup, instance, provider):
+    pacer, _, server = setup
+    pacer.config.providers_raw = provider
+    parent = server.data["threads"][0]
+    parent["modelSelection"] = {"instanceId": instance, "model": "test-model"}
+    pacer.tick()
+    assert len(server.calls) == 1
+    assert server.calls[0]["modelSelection"] == parent["modelSelection"]
+    pacer.tick()
+    assert len(server.calls) == 1
+
+
+@pytest.mark.parametrize(
+    "selection, detail",
+    [
+        ({"instanceId": "hermes"}, 'instanceId="hermes"'),
+        ({"provider": "unknown"}, 'provider="unknown"'),
+        ({}, "provider=null"),
+        ({"instanceId": "custom", "provider": "codex"}, 'instanceId="custom"'),
+    ],
+)
+@pytest.mark.parametrize("activity", ["running", "approval", "background"])
+def test_unknown_provider_explains_blocking_thread(setup, selection, detail, activity):
+    pacer, path, server = setup
+    parent = server.data["threads"][0]
+    parent["modelSelection"] = selection
+    if activity == "running":
+        parent["session"] = {"status": "running"}
+    elif activity == "approval":
+        parent["hasPendingApprovals"] = True
+    else:
+        parent["backgroundLiveness"] = "working"
+    with pytest.raises(t3.Withheld) as caught:
+        pacer.tick()
+    message = str(caught.value)
+    assert 'Active T3 thread "parent"' in message
+    assert detail in message
+    assert "let it finish or stop its activity" in message
+    assert "codex (OpenAI) and claudeAgent (Anthropic)" in message
+    assert "--agent-providers-raw and --apikey-policy configure Kandev mode" in message
+    assert "docs/t3-pacing.md#unknown-providers" in message
+    assert not server.calls
+    assert not list(pacer.state.glob("*.json"))
+    assert t3.git(path.parent, "status", "--porcelain") == ""
+
+
+@pytest.mark.parametrize(
     "block", ["quota", "provider", "state", "total", "starting", "quota_error"]
 )
 def test_withholding(setup, monkeypatch, block):

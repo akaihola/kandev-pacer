@@ -24,6 +24,11 @@ log = logging.getLogger("kandev-pacer")
 PROVIDERS = {"codex": "openai", "claudeAgent": "anthropic"}
 
 
+def selection_provider(selection):
+    """Map default T3 instances and legacy selections to quota providers."""
+    return PROVIDERS.get(selection.get("instanceId", selection.get("provider")))
+
+
 class Withheld(ValueError):
     """An admission failure with a safe, operator-facing explanation."""
 
@@ -245,7 +250,7 @@ class T3Pacer:
         save(path, record)
 
     def admitted(self, selection, running, usage, errors, now):
-        name = PROVIDERS.get(selection.get("provider"))
+        name = selection_provider(selection)
         if (
             name not in self.config.providers
             or name in errors
@@ -273,10 +278,21 @@ class T3Pacer:
         running = Counter()
         for thread in threads.values():
             if activity(thread):
-                name = PROVIDERS.get(thread.get("modelSelection", {}).get("provider"))
+                selection = thread.get("modelSelection", {})
+                name = selection_provider(selection)
                 if name is None:
+                    field = "instanceId" if "instanceId" in selection else "provider"
                     raise Withheld(
-                        "Running thread has unknown provider; withholding work"
+                        f"Active T3 thread {json.dumps(thread['id'])} has unsupported "
+                        f"or missing modelSelection.{field}="
+                        f"{json.dumps(selection.get(field))}; cannot assign it to a "
+                        "subscription for capacity checks. "
+                        "Pacer supports codex (OpenAI) and claudeAgent (Anthropic). "
+                        "Inspect this thread in T3 and let it finish or stop its activity; "
+                        "resolve any pending approval/input or background work. Use a "
+                        "supported subscription-backed provider for paced threads. "
+                        "--agent-providers-raw and --apikey-policy configure Kandev mode, "
+                        "not T3 provider instances. See docs/t3-pacing.md#unknown-providers."
                     )
                 running[name] += 1
         records, pending = {}, []

@@ -6,9 +6,6 @@ Rules for TASKS.md usage are at the bottom of the file.
 
 ## Ordered backlog
 
-- [23] Unclear "unknown provider" error
-  <!-- hai:{"id":"simple-573cb9ef-fda8-47a8-904c-de914d45738a","priority":"none","labels":[],"createdAt":"2026-10-04T18:56:27.672Z","updatedAt":"2026-10-04T18:56:27.672Z"} -->
-
 - [20] `Command not found` error
   <!-- hai:{"id":"simple-b2087b50-35fc-4c18-8a87-3826565d0d60","priority":"none","labels":[],"createdAt":"2026-10-04T18:45:46.258Z","updatedAt":"2026-10-04T18:45:46.258Z"} -->
 
@@ -31,6 +28,9 @@ Rules for TASKS.md usage are at the bottom of the file.
   before resuming tasks.
 
 ## Completed / Accepted
+
+- [x] [23] Unclear "unknown provider" error
+  <!-- hai:{"id":"simple-573cb9ef-fda8-47a8-904c-de914d45738a","priority":"none","labels":[],"createdAt":"2026-10-04T18:56:27.672Z","updatedAt":"2026-10-04T19:06:31.589Z"} -->
 
 - [x] [22] Unclear ValueError
   <!-- hai:{"id":"simple-04f2f10f-b85d-4318-8db4-1ea72176c3e1","priority":"none","labels":[],"createdAt":"2026-10-04T18:54:18.448Z","updatedAt":"2026-10-04T19:03:05.774Z"} -->

@@ -43,7 +43,7 @@ not admitted. Numbered references are resolved only within their own tracker.
 
 Local authentication uses `t3 auth session issue`, renewing the five-minute session
 before expiry. Set `t3_base_dir` if the CLI and server use different state directories.
-Remote endpoints require `T3_THREAD_AUTH_TOKEN`, supplied through the environment.
+Non-loopback endpoints require `T3_THREAD_AUTH_TOKEN`, supplied through the environment.
 Tokens and WebSocket tickets are never written into launch records. The protocol
 matches T3 0.0.44. On 2026-10-04 the local CLI reported that version; the Gogo HTTP
 endpoint was reachable, but its installed version could not be rechecked over SSH
@@ -100,6 +100,27 @@ set `t3_base_dir` or `PACER_T3_BASE_DIR` when that server uses a custom director
 
 The error reports the endpoint origin and a safe reason. It omits raw exception
 text, response bodies, tokens, and URL paths because these can contain secrets.
+
+## Unknown providers
+
+T3's current snapshots identify a model selection with `instanceId`; older snapshots
+use `provider`. The pacer accepts both, preferring `instanceId` when present. It maps
+the default instances `codex` to OpenAI and `claudeAgent` to Anthropic, preserving the
+selection when launching a child thread. Custom instance IDs and other providers
+are not mapped automatically because the pacer cannot infer their subscription.
+
+An active thread with an unsupported or missing selection blocks launches across
+the T3 server, including threads outside the configured trackers. The error names
+the thread ID, selection field and value. Open that thread in T3 and inspect its
+provider. Let its work finish or stop it intentionally, and resolve pending
+approvals, input, and background work. These also count as active work. Use a
+supported subscription-backed provider instance for threads that the pacer launches.
+
+`--agent-providers-raw` and `--apikey-policy` control Kandev agent attribution;
+they do not map T3 provider instances. Setting `hermes-acp=__api_key__` therefore
+does not exclude an active T3 Hermes thread from the server-wide capacity check.
+Configure subscription providers with `providers_raw` or `PACER_PROVIDERS`, and
+select a supported provider instance in each configured T3 parent thread.
 
 ## Scheduling and recovery
 
