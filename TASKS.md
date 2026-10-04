@@ -23,8 +23,8 @@ Rules for TASKS.md usage are at the bottom of the file.
 
 ## Completed / Accepted
 
-- [ ] [19] UV source path documentation unclear
-  <!-- hai:{"id":"simple-1ea5eea8-5a65-4a87-a84f-3f2ab01533b4","priority":"none","labels":[],"createdAt":"2026-10-04T18:44:41.879Z","updatedAt":"2026-10-04T19:23:34.139Z"} -->
+- [x] [19] UV source path documentation unclear
+  <!-- hai:{"id":"simple-1ea5eea8-5a65-4a87-a84f-3f2ab01533b4","priority":"none","labels":[],"createdAt":"2026-10-04T18:44:41.879Z","updatedAt":"2026-10-04T19:43:02.979Z"} -->
 
 - [x] [24] Codex reset workaround broken, no Anthropic status
   <!-- hai:{"id":"simple-1afb0e60-8d2e-4995-85eb-314807cfd60b","priority":"none","labels":[],"createdAt":"2026-10-04T19:13:34.534Z","updatedAt":"2026-10-04T19:24:14.956Z"} -->
