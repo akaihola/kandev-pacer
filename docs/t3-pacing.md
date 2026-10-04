@@ -52,7 +52,8 @@ the path and that Hai is checked out there. See uv's
 [path dependency documentation](https://docs.astral.sh/uv/concepts/projects/dependencies/#path).
 
 Run the pacer on the same filesystem as T3. Tracker paths must match T3 project
-workspace roots, and each tracker needs an explicit parent thread in that project.
+workspace roots. Each tracker needs a parent thread in that project unless all
+model and launch settings are explicitly configured.
 The parent supplies the model, model options, runtime mode, and interaction mode
 unless configuration overrides them.
 Codex maps to the OpenAI subscription; `claudeAgent` maps to Anthropic. Other
@@ -78,6 +79,20 @@ parent_thread = "T3_THREAD_ID"
 Repeat `[[kandev-pacer.t3_trackers]]` for each tracker. A TOML array of inline
 tables also works. `PACER_T3_TRACKERS` environment and CLI overrides still use
 a JSON array; existing JSON strings in TOML remain supported.
+
+Tracker configuration errors identify the entry using a zero-based index, so
+`t3_trackers[1].tracker` means the second tracker table's `tracker` field.
+Missing or empty paths, paths that cannot be resolved, directories, duplicate
+trackers, and empty parent IDs produce specific startup errors. Raw invalid
+values and unexpected exception details are omitted from logs because they can
+contain credentials.
+
+If `parent_thread` is omitted while launch settings are missing, startup lists
+each missing setting and explains how to fix it. For example:
+
+```text
+T3 startup failed: t3_trackers[0]: Trackers without parent_thread require t3_model, t3_runtime_mode, t3_interaction_mode; set parent_thread to inherit these settings, or configure them explicitly
+```
 
 ## Model and launch settings
 

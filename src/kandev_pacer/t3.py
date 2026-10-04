@@ -128,14 +128,29 @@ class T3Pacer:
         if not isinstance(entries, list) or not entries:
             raise Withheld("PACER_T3_TRACKERS needs tracker entries")
         self.trackers = {}
-        for entry in entries:
-            path = str(Path(entry["tracker"]).expanduser().resolve(strict=True))
+        for index, entry in enumerate(entries):
+            location = f"t3_trackers[{index}]"
+            if not isinstance(entry, dict):
+                raise Withheld(f"{location} must be a tracker table")
+            tracker = entry.get("tracker")
+            if not isinstance(tracker, str) or not tracker.strip():
+                raise Withheld(f"{location}.tracker must be a nonempty TASKS.md path")
+            try:
+                resolved = Path(tracker).expanduser().resolve(strict=True)
+            except (OSError, ValueError) as error:
+                raise Withheld(
+                    f"{location}.tracker cannot be opened ({type(error).__name__}); "
+                    "check that the path exists and is accessible"
+                ) from error
+            if not resolved.is_file():
+                raise Withheld(f"{location}.tracker must point to a file")
+            path = str(resolved)
             parent = entry.get("parent_thread")
             if path in self.trackers:
-                raise Withheld("Each tracker must appear only once")
+                raise Withheld(f"{location}: Each tracker must appear only once")
             if "parent_thread" in entry and (not isinstance(parent, str) or not parent):
                 raise Withheld(
-                    "parent_thread must be a nonempty thread ID when supplied"
+                    f"{location}.parent_thread must be a nonempty thread ID when supplied"
                 )
             if parent is None:
                 missing = [
@@ -145,7 +160,10 @@ class T3Pacer:
                 ]
                 if missing:
                     raise Withheld(
-                        "Trackers without parent_thread require " + ", ".join(missing)
+                        f"{location}: Trackers without parent_thread require "
+                        + ", ".join(missing)
+                        + "; set parent_thread to inherit these settings, "
+                        "or configure them explicitly"
                     )
             self.trackers[path] = (TasksStore(path), parent)
         self.state = Path(config.t3_state_dir).expanduser()

@@ -454,6 +454,71 @@ def test_startup_hides_unclassified_exception_contents(setup, monkeypatch, caplo
     assert "private-token" not in caplog.text
 
 
+@pytest.mark.parametrize(
+    "entry, message",
+    [
+        ({}, ".tracker must be a nonempty TASKS.md path"),
+        ({"tracker": ""}, ".tracker must be a nonempty TASKS.md path"),
+        ({"tracker": "  "}, ".tracker must be a nonempty TASKS.md path"),
+        ({"tracker": None}, ".tracker must be a nonempty TASKS.md path"),
+        ("private-token", "must be a tracker table"),
+        ({"tracker": "missing/private-token"}, "FileNotFoundError"),
+        ({"tracker": "private-token\0"}, "ValueError"),
+    ],
+)
+def test_startup_identifies_invalid_tracker_entry(
+    setup, monkeypatch, caplog, entry, message
+):
+    pacer, path, server = setup
+    monkeypatch.setattr(t3, "Server", lambda *a: server)
+    pacer.config.t3_trackers.append(entry)
+    assert t3.run(pacer.config) == 1
+    assert "T3 startup failed: t3_trackers[1]" in caplog.text
+    assert message in caplog.text
+    assert "private-token" not in caplog.text
+    assert not server.calls
+    assert not list(pacer.state.glob("*.json"))
+    assert t3.git(path.parent, "status", "--porcelain") == ""
+
+
+@pytest.mark.parametrize("problem", ["directory", "duplicate", "empty-parent"])
+def test_startup_identifies_tracker_path_and_parent_errors(
+    setup, monkeypatch, caplog, problem
+):
+    pacer, path, server = setup
+    monkeypatch.setattr(t3, "Server", lambda *a: server)
+    entry = {"tracker": str(path), "parent_thread": "parent"}
+    if problem == "directory":
+        entry["tracker"] = str(path.parent)
+        message = ".tracker must point to a file"
+    elif problem == "duplicate":
+        message = "Each tracker must appear only once"
+    else:
+        entry["parent_thread"] = ""
+        message = ".parent_thread must be a nonempty thread ID"
+    pacer.config.t3_trackers = [entry] if problem != "duplicate" else [entry, entry]
+    assert t3.run(pacer.config) == 1
+    assert "T3 startup failed: t3_trackers[" in caplog.text
+    assert message in caplog.text
+    assert not server.calls
+
+
+def test_startup_explains_missing_parent_and_all_missing_settings(
+    setup, monkeypatch, caplog
+):
+    pacer, path, server = setup
+    monkeypatch.setattr(t3, "Server", lambda *a: server)
+    pacer.config.t3_trackers = [{"tracker": str(path)}]
+    assert t3.run(pacer.config) == 1
+    assert (
+        "t3_trackers[0]: Trackers without parent_thread require "
+        "t3_model, t3_runtime_mode, t3_interaction_mode"
+    ) in caplog.text
+    assert "set parent_thread to inherit these settings" in caplog.text
+    assert not server.calls
+    assert not list(pacer.state.glob("*.json"))
+
+
 def test_process_lock_prevents_second_pacer(setup, monkeypatch):
     import fcntl
 
