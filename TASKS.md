@@ -41,8 +41,9 @@ Rules for TASKS.md usage are at the bottom of the file.
 - [ ] [21] Unclear URLError
   <!-- hai:{"id":"simple-0ad93f1d-3593-46f0-b76c-5cea0e0cba6f","priority":"none","labels":[],"createdAt":"2026-10-04T18:47:10.449Z","updatedAt":"2026-10-04T18:47:10.449Z"} -->
 
-- [ ] [18] Pace TASKS.md work through Hai's Python API and launch admitted tasks in T3 Code.
+- [x] [18] Pace TASKS.md work through Hai's Python API and launch admitted tasks in T3 Code.
     - Hai's `hai_tasks` Python module is ready to use; the API dependency is satisfied.
+  <!-- hai:{"updatedAt":"2026-10-04T19:25:53.624Z"} -->
 
 - [ ] [*] Write `pages/PKB/Kandev Session Observations/index.md` from `kandev-learn sweep`
   in the same commit as new records, reading the JSON sidecar when present. It replaces
