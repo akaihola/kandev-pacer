@@ -40,7 +40,9 @@ class Settings(BaseSettings):
     mode: Literal["kandev", "t3"] = Field("kandev", alias="PACER_MODE")
     t3_url: str = Field("http://127.0.0.1:3773", alias="PACER_T3_URL")
     t3_base_dir: str = Field("", alias="PACER_T3_BASE_DIR")
-    t3_trackers: str = Field("[]", alias="PACER_T3_TRACKERS")
+    t3_trackers: list[dict[str, str]] = Field(
+        default_factory=list, alias="PACER_T3_TRACKERS"
+    )
     t3_base_branch: str = Field("main", alias="PACER_T3_BASE_BRANCH")
     t3_model: Literal["automatic"] | T3ModelSelection | None = Field(
         None, alias="PACER_T3_MODEL"
@@ -239,9 +241,9 @@ class Settings(BaseSettings):
         # Every caller appends a path that already starts with "/".
         return value.rstrip("/")
 
-    @field_validator("t3_model", "t3_models", mode="before")
+    @field_validator("t3_trackers", "t3_model", "t3_models", mode="before")
     @classmethod
-    def _t3_model_json(cls, value):
+    def _t3_json(cls, value):
         if isinstance(value, str) and value != "automatic":
             return json.loads(value)
         return value

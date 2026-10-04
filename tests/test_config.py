@@ -124,3 +124,53 @@ def test_t3_model_json_command_line_override(tmp_path):
     )
     assert settings.t3_model.model == "gpt-test"
     assert settings.t3_models[0].instanceId == "claudeAgent"
+
+
+@pytest.mark.parametrize(
+    "trackers",
+    [
+        """t3_trackers = [
+  { tracker = "/repo/TASKS.md", parent_thread = "parent" },
+  { tracker = "/other/TASKS.md", parent_thread = "other" },
+]""",
+        '''[[kandev-pacer.t3_trackers]]
+tracker = "/repo/TASKS.md"
+parent_thread = "parent"
+[[kandev-pacer.t3_trackers]]
+tracker = "/other/TASKS.md"
+parent_thread = "other"''',
+        """t3_trackers = '[{"tracker":"/repo/TASKS.md","parent_thread":"parent"},
+{"tracker":"/other/TASKS.md","parent_thread":"other"}]' """.replace("\n", ""),
+    ],
+)
+def test_t3_trackers_from_toml(tmp_path, trackers):
+    path = tmp_path / "pacer.toml"
+    path.write_text("[kandev-pacer]\n" + trackers + "\n")
+    assert load_settings(path).t3_trackers == [
+        {"tracker": "/repo/TASKS.md", "parent_thread": "parent"},
+        {"tracker": "/other/TASKS.md", "parent_thread": "other"},
+    ]
+
+
+def test_t3_tracker_overrides(monkeypatch, tmp_path):
+    path = tmp_path / "pacer.toml"
+    path.write_text("""[kandev-pacer]
+t3_trackers = [{ tracker = "/toml/TASKS.md", parent_thread = "toml" }]
+""")
+    monkeypatch.setenv(
+        "PACER_T3_TRACKERS",
+        '[{"tracker":"/env/TASKS.md","parent_thread":"env"}]',
+    )
+    assert load_settings(path).t3_trackers == [
+        {"tracker": "/env/TASKS.md", "parent_thread": "env"}
+    ]
+    assert load_settings(
+        path,
+        {"PACER_T3_TRACKERS": '[{"tracker":"/cli/TASKS.md","parent_thread":"cli"}]'},
+    ).t3_trackers == [{"tracker": "/cli/TASKS.md", "parent_thread": "cli"}]
+
+
+@pytest.mark.parametrize("value", ["invalid JSON", "{}", '[{"tracker": 123}]'])
+def test_invalid_t3_trackers(value):
+    with pytest.raises(ValueError, match="PACER_T3_TRACKERS"):
+        Settings(PACER_T3_TRACKERS=value)
