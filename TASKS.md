@@ -11,10 +11,10 @@ Rules for TASKS.md usage are at the bottom of the file.
 
 ## Scheduled
 
-- [28] Still requires `parent_thread`
-  <!-- hai:{"id":"simple-60f79b37-10ad-4c2e-9817-fcb8e3f11912","priority":"none","labels":[],"createdAt":"2026-10-04T20:24:37.536Z","updatedAt":"2026-10-04T20:28:25.255Z"} -->
-
 ## In Progress
+
+- [~] [28] Still requires `parent_thread`
+  <!-- hai:{"id":"simple-60f79b37-10ad-4c2e-9817-fcb8e3f11912","priority":"none","labels":[],"createdAt":"2026-10-04T20:24:37.536Z","updatedAt":"2026-10-04T20:29:06.119Z"} -->
 
 - [16] Learn from session observation records: a lowest-priority Kandev task the
   Heartbeat creates when unread records exist, writing observations and proposed
