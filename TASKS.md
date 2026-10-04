@@ -8,10 +8,10 @@ Rules for TASKS.md usage are at the bottom of the file.
 
 ## Scheduled
 
-- [27] Unclear error on configuration mistake
-  <!-- hai:{"id":"simple-aeab5d07-0f79-4609-9483-4601cb894f99","priority":"none","labels":[],"createdAt":"2026-10-04T20:22:34.136Z","updatedAt":"2026-10-04T20:31:26.613Z"} -->
-
 ## In Progress
+
+- [~] [27] Unclear error on configuration mistake
+  <!-- hai:{"id":"simple-aeab5d07-0f79-4609-9483-4601cb894f99","priority":"none","labels":[],"createdAt":"2026-10-04T20:22:34.136Z","updatedAt":"2026-10-04T20:32:14.141Z"} -->
 
 - [16] Learn from session observation records: a lowest-priority Kandev task the
   Heartbeat creates when unread records exist, writing observations and proposed
