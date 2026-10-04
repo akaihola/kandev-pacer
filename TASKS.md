@@ -14,9 +14,6 @@ Rules for TASKS.md usage are at the bottom of the file.
 
 ## In Progress
 
-- [*] In task 0cab15fe-556c-4837-b04b-83e50e52c4a9, the observation consumer couldn't
-  create a lock file due to a read-only directory. Investigate and fix this problem.
-
 - [16] Learn from session observation records: a lowest-priority Kandev task the
   Heartbeat creates when unread records exist, writing observations and proposed
   solution prompts to the right repository's unreviewed section.
@@ -29,6 +26,9 @@ Rules for TASKS.md usage are at the bottom of the file.
   before resuming tasks.
 
 ## Completed / Accepted
+
+- [ ] [*] In task 0cab15fe-556c-4837-b04b-83e50e52c4a9, the observation consumer couldn't
+  create a lock file due to a read-only directory. Investigate and fix this problem.
 
 - [ ] [17] Stop `kandev-learn sweep` from parsing every Codex transcript in full before
       checking which task it belongs to; one 1.17 GB rollout makes each sweep take 4+

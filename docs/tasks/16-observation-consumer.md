@@ -307,3 +307,23 @@ commit exactly once. A second process cannot acquire a held lock and proceeds wh
 the holder exits through an exception. Live state was untouched; no review tasks
 were created or real records acknowledged. Production access restoration remains
 an external deployment requirement.
+
+## Lock fix deployment, 2026-10-04
+
+Merged the two reviewed commits, `40e6cf1` and `e21604d`, into local `main` with
+`--no-ff` as `06ddd86`. The canonical checkout at `/home/agent/prg/kandev-pacer`
+passed all 98 consumer/shared-helper tests in its frozen environment. Both worktrees
+were clean after merging. The lock-file issue moved to Completed / Accepted with
+`[ ]`; [16] and the independent Quick Chat issue retain their existing statuses.
+
+Restarted `kandev-learn.service`, whose working directory is the canonical checkout.
+The one-shot sweep finished with `Result=success` and `ExecMainStatus=0`;
+`kandev-learn.timer` remains active. The consumer helper loads the merged code on
+its next invocation. No live consumer preparation or acknowledgement was used as
+a deployment test, and this task did not modify consumer state or sandbox settings.
+
+This deploys the lock diagnostics and recovery guidance. Restoring production
+consumer write access still requires the scoped Kandev/host configuration described
+above. Keep the existing batch, journals and external identity; no migration is
+needed. Successful fixture tests and the collector restart do not establish restored
+access from Heartbeat's executor.
