@@ -1,9 +1,12 @@
 """Consumer decisions against real temporary Git vaults and a fake Kandev API."""
 
+import errno
 import json
+import os
 import subprocess
 import urllib.error
 from email.message import Message
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -380,3 +383,165 @@ def test_consumed_batch_is_not_recreated_after_task_deletion(review):
     assert prepare()["status"] == "empty"
     assert prepare()["status"] == "empty"
     assert not (state / "pending.json").exists()
+
+
+def deny_lock_open(monkeypatch, lock, code):
+    original = Path.open
+
+    def denied(path, *args, **kwargs):
+        if path == lock and args == ("a",):
+            raise OSError(code, os.strerror(code), str(path))
+        return original(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "open", denied)
+
+
+@pytest.mark.parametrize("explicit_state", [False, True])
+@pytest.mark.parametrize("code", [errno.EROFS, errno.EACCES])
+def test_prepare_cli_state_access_and_retry(
+    review, tmp_path, monkeypatch, capsys, explicit_state, code
+):
+    vault, explicit, _, _ = review
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    default = tmp_path / ".local/state/kandev-observation-consumer"
+    state = explicit if explicit_state else default
+    argv = ["--vault", str(vault)]
+    if explicit_state:
+        argv += ["--state", str(state)]
+    argv += [
+        "prepare",
+        "--workspace",
+        "ws",
+        "--workflow",
+        "wf",
+        "--agent",
+        "agent",
+        "--prompt",
+        str(tmp_path / "consumer.md"),
+        "--executor",
+        "executor",
+    ]
+    record(vault)
+    assert consumer.main(argv) == 0
+    arguments = json.loads(capsys.readouterr().out)["arguments"]
+    before = (state / "pending.json").read_bytes()
+    assert (state / "consumer.lock").exists()
+    record(vault, "older", at="2020-01-01T00:00:00Z")
+    argv[-1] = "different-future-executor"
+    with monkeypatch.context() as patch:
+        deny_lock_open(patch, state / "consumer.lock", code)
+        assert consumer.main(argv) == 1
+    output = capsys.readouterr()
+    assert output.out == ""
+    assert f"[Errno {code}]" in output.err
+    assert str(state / "consumer.lock") in output.err
+    assert "sandbox" in output.err and "same paths" in output.err
+    assert (state / "pending.json").read_bytes() == before
+    assert not (default if explicit_state else explicit).exists()
+    assert consumer.main(argv) == 0
+    assert json.loads(capsys.readouterr().out)["arguments"] == arguments
+    assert (state / "pending.json").read_bytes() == before
+
+
+@pytest.mark.parametrize("action", ["prepare", "acknowledge"])
+@pytest.mark.parametrize("code", [errno.EROFS, errno.EACCES])
+@pytest.mark.parametrize("recovering", [False, True])
+def test_denied_consumer_lock_preserves_batch(
+    review, monkeypatch, action, code, recovering
+):
+    vault, state, _, prepare = review
+    first = record(vault)
+    record(vault, "still-unread")
+    arguments = prepare()["arguments"]
+    identity = arguments["external_id"]
+    (vault / "unrelated").write_text("keep staged")
+    git(vault, "add", "unrelated")
+    if recovering:
+        with monkeypatch.context() as patch:
+
+            def interrupted(*args, **kwargs):
+                raise RuntimeError("interrupted ledger commit")
+
+            patch.setattr(consumer, "commit_records", interrupted)
+            with pytest.raises(RuntimeError, match="interrupted"):
+                consumer.acknowledge(vault, state, identity, [first])
+
+    def snapshot():
+        ledger = vault / consumer.OBSERVATIONS / "consumed.md"
+        return (
+            {p.name: p.read_bytes() for p in state.iterdir()},
+            ledger.read_bytes() if ledger.exists() else None,
+            git(vault, "rev-parse", "HEAD"),
+            (vault / ".git/index").read_bytes(),
+        )
+
+    before = snapshot()
+    with monkeypatch.context() as patch:
+        deny_lock_open(patch, state / "consumer.lock", code)
+        patch.setattr(consumer.client, "get", lambda *_: pytest.fail("API called"))
+        patch.setattr(
+            consumer.client, "ws_request", lambda *_: pytest.fail("API mutation")
+        )
+        patch.setattr(consumer, "ledger", lambda *_: pytest.fail("ledger recovery ran"))
+        with pytest.raises(OSError) as raised:
+            if action == "prepare":
+                prepare()
+            else:
+                consumer.acknowledge(vault, state, identity, [first])
+        assert raised.value.errno == code
+    assert snapshot() == before
+    record(vault, "arrival", at="2020-01-01T00:00:00Z")
+    assert prepare()["arguments"] == arguments
+    assert prepare()["arguments"] == arguments
+    if recovering:
+        assert consumer.acknowledge(vault, state, identity, [first])["records"] == 0
+        assert not (state / "acknowledgement.json").exists()
+    assert git(vault, "diff", "--cached", "--name-only") == "unrelated"
+
+
+@pytest.mark.parametrize("code", [errno.EROFS, errno.EACCES])
+def test_denied_vault_lock_recovers_acknowledgement(review, monkeypatch, capsys, code):
+    vault, state, _, prepare = review
+    first = record(vault)
+    record(vault, "still-unread")
+    arguments = prepare()["arguments"]
+    before = (state / "pending.json").read_bytes()
+    head = git(vault, "rev-parse", "HEAD")
+    (vault / "unrelated").write_text("keep staged")
+    git(vault, "add", "unrelated")
+    index = (vault / ".git/index").read_bytes()
+    argv = ["--vault", str(vault), "--state", str(state)]
+    lock = vault / ".git/kandev-learn.lock"
+    with monkeypatch.context() as patch:
+        deny_lock_open(patch, lock, code)
+        for command in (
+            ["acknowledge", arguments["external_id"], first],
+            [
+                "prepare",
+                "--workspace",
+                "ws",
+                "--workflow",
+                "wf",
+                "--agent",
+                "agent",
+                "--executor",
+                "executor",
+            ],
+        ):
+            assert consumer.main(argv + command) == 1
+            output = capsys.readouterr()
+            assert output.out == ""
+            assert str(lock) in output.err and "same paths" in output.err
+            assert (state / "pending.json").read_bytes() == before
+            assert (state / "acknowledgement.json").exists()
+            assert git(vault, "rev-parse", "HEAD") == head
+            assert (vault / ".git/index").read_bytes() == index
+    assert (
+        consumer.acknowledge(vault, state, arguments["external_id"], [first])["records"]
+        == 0
+    )
+    assert git(vault, "rev-list", "--count", f"{head}..HEAD") == "1"
+    assert consumer.ledger(vault, state)[1] == {first}
+    assert not (state / "acknowledgement.json").exists()
+    assert prepare()["arguments"] == arguments
+    assert git(vault, "diff", "--cached", "--name-only") == "unrelated"

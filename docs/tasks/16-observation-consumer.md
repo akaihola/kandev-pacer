@@ -199,3 +199,111 @@ replacement to work around the access failure. Restore the consumer's execution 
 resume the same task, then inspect its proposal commits and ledger entries. Re-run
 preparation while it is open to verify suppression. The fully consumed-input/no-new-task
 case passes focused fixtures; the production backlog still contains unread records.
+
+## Lock access failure, 2026-10-04
+
+Heartbeat task `0cab15fe-556c-4837-b04b-83e50e52c4a9`, session
+`cf5f081e-c7a5-4b8e-a941-34ee88ec1793`, reported Errno 30 creating
+`/home/agent/.local/state/kandev-observation-consumer/consumer.lock` during the
+2026-10-03 12:49 heartbeat. Direct Kandev command message
+`d27c2024-8e93-48e5-858c-8b10c060bdda`, at 12:51:27 UTC, records the helper invocation
+without `--state` and exit status 1. Report message
+`d4fd841e-0112-441c-8aac-bfa7f758a14b` identifies the error and confirms no replacement
+task was created. The historical task used the Local executor with no repository
+binding. Its `--executor` argument selected the future consumer task's executor;
+it did not grant the helper filesystem access.
+
+Read-only inspection in this fix's executor on 2026-10-04 found the existing state
+directory owned by `agent`, mode 0755, and its lock mode 0644. UID 1002 was the owner.
+However, `findmnt -T` placed that path on a read-only `/home` mount. The task worktree
+and `/tmp` had writable mounts, matching the session's allowed writable roots, which
+excluded the state directory and vault. Existing `pending.json` was present.
+This demonstrates an execution access mismatch despite owner write permission.
+It is consistent with the historical EROFS report; the historical mount namespace
+was not captured, and this does not establish a read-only disk outside the sandbox.
+
+`prepare` and `acknowledge` acquire the same consumer lock before any batch, API or
+ledger work. The shared lock helper now reports the lock path, original errno and
+recovery guidance. EROFS points to a read-only mount, potentially imposed by the
+sandbox; changing mode bits cannot fix it. EACCES/EPERM requires checking file and
+directory permissions and the executor's access policy. Neither error causes a
+fallback to another state directory. Errors after acquisition keep their original
+meaning instead of being labelled as lock failures.
+
+### Required execution configuration
+
+Keep the existing default state path. For both Heartbeat preparation and consumer
+acknowledgement, the authorized helper needs these scoped filesystem permissions:
+
+| Path | Required access |
+| --- | --- |
+| `/home/agent/.local/state/kandev-observation-consumer/` | Writable directory and mount, including create, append/open, rename, unlink and `flock`; includes pending and recovery journals |
+| `/home/agent/my-knowledge/pages/PKB/Kandev Session Observations/` | Read records; write and atomically replace `consumed.md` via `consumed.tmp` for acknowledgement/recovery |
+| `/home/agent/my-knowledge/.git/` | Read repository metadata; create the shared Git lock, objects, refs and index updates for the ledger commit |
+
+The configuration change belongs to the Kandev/host helper execution boundary:
+declare the existing state directory writable and expose that same directory through
+a writable mount there, with the ledger/Git access above for commit recovery. A grant
+for just `consumer.lock` is insufficient. Keep the general agent sandbox policy and
+unrelated paths restricted. Do not disable sandboxing, remount all of `/home`, or
+apply broad ownership changes. The inspected executor-profile API exposes no
+writable-path field; a supported scoped helper execution configuration must be
+provided externally before production access can be restored.
+
+Heartbeat section 6 in
+`~/prg/kandev-config/workspaces/Default Workspace/automations/Heartbeat/prompt.md`
+and `~/prg/kandev-config/prompts/observation-consumer.md` must use that same scoped
+access for the helper. Selecting the "writable" Paced Kanban workflow only controls
+the task workflow; it does not grant filesystem writes. Preparation also needs ledger
+write access when recovering an interrupted acknowledgement.
+
+Both prompts use the supported invocation from any checkout:
+
+```bash
+export SHELL=/bin/bash
+PACER_HEARTBEAT_WEBHOOK_URL= uv run --frozen \
+  --project /home/agent/prg/kandev-pacer \
+  python -m kandev_pacer.observation_consumer \
+  prepare --workspace WORKSPACE_ID --workflow WORKFLOW_ID \
+  --agent AGENT_PROFILE_ID --executor EXECUTOR_PROFILE_ID
+```
+
+The consumer uses `acknowledge EXTERNAL_ID RECORD...` in place of `prepare` and its
+options. This command can write state and recover ledger commits, so do not use it
+against production as a diagnostic probe. Use the fixture checks below. An explicit
+`--state PATH` goes before the subcommand; it does not grant access to that path.
+
+### State recovery and verification
+
+No migration is needed when restoring access to the existing directory. Keep
+`pending.json`, `acknowledgement.json`, `ledger-commit.json` when present, and lock
+files. Then retry with the same paths and external identity. Never select a fresh
+state directory in `/tmp` or a task worktree to escape the failure: another state
+directory would use another lock and could freeze a different batch and task identity.
+Do not delete the pending batch, release its identity or hand-edit `consumed.md`.
+
+A denied consumer lock changes no batch or ledger data. A later denied vault Git
+lock can leave ledger working-tree changes plus an acknowledgement journal. Those
+changes are not successful acknowledgement; retry recovers the original commit
+before treating the records as consumed. A partially consumed batch keeps its
+identity; a fully consumed batch can retire normally.
+
+Verification uses disposable Git vaults, state directories and a fake API:
+
+```bash
+export SHELL=/bin/bash
+env -u PACER_LIVE_KANDEV uv run --frozen pytest \
+  tests/test_observation_consumer.py tests/test_learn.py
+uv run --frozen darker --check
+uv run --frozen graylint
+```
+
+The focused suite passes 98 tests; `darker --check`, `graylint` and `git diff --check`
+also pass. Graylint required elevated Git access for its temporary comparison worktree.
+New tests reproduce EROFS, EACCES and EPERM at
+lock creation/open/acquisition, test default and explicit CLI state paths, preserve
+frozen batches across denied access and new arrivals, and recover a denied vault
+commit exactly once. A second process cannot acquire a held lock and proceeds when
+the holder exits through an exception. Live state was untouched; no review tasks
+were created or real records acknowledged. Production access restoration remains
+an external deployment requirement.

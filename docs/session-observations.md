@@ -104,6 +104,13 @@ recovers interruption between the HEAD update and index synchronization. A concu
 HEAD or index conflict stops the sweep with pending state retained. Hooks are disabled,
 unrelated staged/unstaged files remain intact, and nothing is pushed.
 
+Collector, consumer and vault locks report the failing path and distinguish a
+read-only mount, EROFS, from denied permissions or sandbox policy, EACCES/EPERM.
+Owner write permission alone does not make a sandbox mount writable. Restore access
+in the helper's execution context and retry with the same paths. Keep state, journals
+and lock files intact. See the [consumer execution requirements](tasks/16-observation-consumer.md#lock-access-failure-2026-10-04)
+for the Heartbeat failure and required external configuration.
+
 Missing transcripts, stores and source timeouts produce `no transcript` or
 `no data for <agent>` inside an exit-0 partial record. Output, state or Git failures
 exit nonzero. Default source deadline is 45 seconds; a task has a shared budget of

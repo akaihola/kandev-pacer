@@ -8,14 +8,14 @@ Rules for TASKS.md usage are at the bottom of the file.
 
 ## Scheduled
 
-- [*] In task 0cab15fe-556c-4837-b04b-83e50e52c4a9, the observation consumer couldn't
-  create a lock file due to a read-only directory. Investigate and fix this problem.
-
 - [*] The `Queue` button injected by the userscript into the Quick Chat window queues
   the prompt to the task beneath the Quick Chat pop-up, not as a new quick chat session.
   Fix this.
 
 ## In Progress
+
+- [*] In task 0cab15fe-556c-4837-b04b-83e50e52c4a9, the observation consumer couldn't
+  create a lock file due to a read-only directory. Investigate and fix this problem.
 
 - [16] Learn from session observation records: a lowest-priority Kandev task the
   Heartbeat creates when unread records exist, writing observations and proposed
