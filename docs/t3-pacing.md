@@ -3,13 +3,54 @@
 T3 mode reads local TASKS.md trackers through Hai's `hai_tasks` API and launches
 eligible issues in isolated T3 worktrees. Kandev remains the default mode.
 
-Install Hai alongside this checkout, then install the optional dependency:
+T3 mode needs Hai's Python package, `hai-tasks`, which provides the `hai_tasks`
+module. This checkout tells uv to install it from a local Hai checkout. The setting
+is in the root `pyproject.toml`, under the existing `[tool.uv.sources]` table:
+
+```toml
+[tool.uv.sources]
+hai-tasks = { path = "../hai", editable = true }
+```
+
+The path is relative to the directory containing this `pyproject.toml`. `../hai`
+means go up one directory, then into `hai`. For example, this layout works without
+changing the setting:
+
+```text
+/home/me/prg/
+  kandev-pacer/pyproject.toml
+  hai/pyproject.toml
+  hai/hai_tasks/
+```
+
+Point to the Hai repository root containing its `pyproject.toml`, not the
+`hai_tasks/` module directory. If Hai lives elsewhere, edit only the `path` value
+in that existing entry. For example:
+
+```toml
+hai-tasks = { path = "/home/me/prg/hai", editable = true }
+```
+
+Replace the example with your actual path. An absolute path also works from a T3
+worktree, whose parent directory may differ from the main checkout's. A relative
+path must be correct for each checkout where you run uv. `editable = true` makes
+Python load Hai's code directly from that checkout, so edits there take effect
+without reinstalling.
+
+Run these commands from the kandev-pacer checkout root after checking the path:
 
 ```bash
 uv sync --extra t3
+uv run --extra t3 python -c 'import hai_tasks; print(hai_tasks.__file__)'
 ```
 
-The UV source points to `../hai`. Change that source path if Hai lives elsewhere.
+The second command should print a file inside the Hai checkout you selected.
+`uv sync` updates the environment and, when needed, `uv.lock`. After changing the
+source path, run it without `--frozen` so the lockfile can record the new source.
+If uv reports that the source directory or its `pyproject.toml` is missing, check
+the path and that Hai is checked out there. See uv's
+[path dependency documentation](https://docs.astral.sh/uv/concepts/projects/dependencies/#path).
+
 Run the pacer on the same filesystem as T3. Tracker paths must match T3 project
 workspace roots, and each tracker needs an explicit parent thread in that project.
 The parent supplies the model, model options, runtime mode, and interaction mode.
