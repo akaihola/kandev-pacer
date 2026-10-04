@@ -6,8 +6,11 @@ Rules for TASKS.md usage are at the bottom of the file.
 
 ## Ordered backlog
 
-- [21] Unclear URLError
-  <!-- hai:{"id":"simple-0ad93f1d-3593-46f0-b76c-5cea0e0cba6f","priority":"none","labels":[],"createdAt":"2026-10-04T18:47:10.449Z","updatedAt":"2026-10-04T18:47:10.449Z"} -->
+- [22] Unclear ValueError
+  <!-- hai:{"id":"simple-04f2f10f-b85d-4318-8db4-1ea72176c3e1","priority":"none","labels":[],"createdAt":"2026-10-04T18:54:18.448Z","updatedAt":"2026-10-04T18:54:18.448Z"} -->
+
+- [23] Unclear "unknown provider" error
+  <!-- hai:{"id":"simple-573cb9ef-fda8-47a8-904c-de914d45738a","priority":"none","labels":[],"createdAt":"2026-10-04T18:56:27.672Z","updatedAt":"2026-10-04T18:56:27.672Z"} -->
 
 - [20] `Command not found` error
   <!-- hai:{"id":"simple-b2087b50-35fc-4c18-8a87-3826565d0d60","priority":"none","labels":[],"createdAt":"2026-10-04T18:45:46.258Z","updatedAt":"2026-10-04T18:45:46.258Z"} -->
@@ -31,6 +34,9 @@ Rules for TASKS.md usage are at the bottom of the file.
   before resuming tasks.
 
 ## Completed / Accepted
+
+- [ ] [21] Unclear URLError
+  <!-- hai:{"id":"simple-0ad93f1d-3593-46f0-b76c-5cea0e0cba6f","priority":"none","labels":[],"createdAt":"2026-10-04T18:47:10.449Z","updatedAt":"2026-10-04T18:47:10.449Z"} -->
 
 - [ ] [18] Pace TASKS.md work through Hai's Python API and launch admitted tasks in T3 Code.
     - Hai's `hai_tasks` Python module is ready to use; the API dependency is satisfied.
@@ -172,11 +178,15 @@ Rules for TASKS.md usage are at the bottom of the file.
 
 [19]: docs/tasks/19-uv-source-path-documentation-unclear.md
 
-<!-- hai:reserved-numbers:1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21 -->
+<!-- hai:reserved-numbers:1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23 -->
 
 [20]: docs/tasks/20-command-not-found-error.md
 
 [21]: docs/tasks/21-unclear-urlerror.md
+
+[22]: docs/tasks/22-unclear-valueerror.md
+
+[23]: docs/tasks/23-unclear-unknown-provider-error.md
 
 ## Rules
 

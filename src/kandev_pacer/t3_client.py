@@ -1,16 +1,24 @@
 """T3 0.0.44 RPC transport, adapted from the t3-start-thread skill."""
 
+import errno
 import json
 import os
 import re
 import shutil
+import ssl
 import subprocess
 import time
 import uuid
+from socket import gaierror
+from urllib.error import HTTPError, URLError
 from urllib.parse import quote, urlsplit
 from urllib.request import Request, urlopen
 
 import websocket
+
+
+class T3ConnectionError(RuntimeError):
+    """A transport failure explained without tokens or response contents."""
 
 
 class Server:
@@ -70,8 +78,42 @@ class Server:
             method="POST",
             headers={"Authorization": "Bearer " + self.token},
         )
-        with urlopen(request, timeout=15) as response:
-            ticket = json.load(response)["ticket"]
+        try:
+            with urlopen(request, timeout=15) as response:
+                ticket = json.load(response)["ticket"]
+        except (URLError, TimeoutError) as error:
+            endpoint = urlsplit(self.url)
+            # Only show the origin; a proxy path or exception may contain secrets.
+            origin = f"{endpoint.scheme}://{endpoint.netloc}"
+            if isinstance(error, HTTPError):
+                reason = f"HTTP {error.code}"
+                hint = (
+                    "Check T3_THREAD_AUTH_TOKEN and ensure t3_base_dir "
+                    "(PACER_T3_BASE_DIR) matches the running server's state directory."
+                    if error.code in {401, 403}
+                    else "Check the T3 server and any reverse proxy."
+                )
+            else:
+                cause = error.reason if isinstance(error, URLError) else error
+                if isinstance(cause, gaierror):
+                    reason = "hostname lookup failed"
+                elif isinstance(cause, ssl.SSLError):
+                    reason = "TLS verification or handshake failed"
+                elif isinstance(cause, TimeoutError):
+                    reason = "connection timed out"
+                elif isinstance(cause, OSError) and cause.errno == errno.ECONNREFUSED:
+                    reason = "connection refused"
+                else:
+                    reason = "connection failed"
+                hint = (
+                    "Ensure T3 is running and t3_url (PACER_T3_URL) matches its "
+                    "listening address and port; check network/proxy/TLS settings."
+                )
+            raise T3ConnectionError(
+                f"T3 HTTP ticket request to {origin} failed: {reason}. {hint} "
+                "Configure [kandev-pacer] in the TOML selected by --config; "
+                "environment settings override TOML. See docs/t3-pacing.md#connection-errors."
+            ) from None
         ws_url = re.sub(r"^http", "ws", self.url) + "/ws?wsTicket=" + quote(ticket)
         socket = websocket.create_connection(ws_url, timeout=45)
         request_id = str(uuid.uuid4())

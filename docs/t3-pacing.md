@@ -49,6 +49,58 @@ matches T3 0.0.44. On 2026-10-04 the local CLI reported that version; the Gogo H
 endpoint was reachable, but its installed version could not be rechecked over SSH
 because authentication was refused. No live task launch was used for verification.
 
+## Connection errors
+
+The pacer first requests an authenticated WebSocket ticket over HTTP. A connection
+failure at this point happens before it can inspect or launch a T3 thread. Check
+the server endpoint and authentication before changing tracker or launch records.
+
+Set `t3_url` in the `[kandev-pacer]` section of the file selected by `--config`.
+`PACER_T3_URL` in the process environment or configured secrets file overrides TOML;
+check those sources too. The default `http://127.0.0.1:3773` works only when T3
+listens on loopback. A server bound to a specific LAN or Tailscale address needs
+that address even when the pacer runs on the same machine.
+
+For example, task [21] was investigated on 2026-10-04. The user's
+`~/.config/kandev-pacer/config-t3.toml` selected `http://127.0.0.1:3773`, which refused
+connections. `ss -ltnp 'sport = :3773'` showed T3 listening on `100.81.121.7:3773`,
+and that address accepted connections. For that installation, use:
+
+```toml
+[kandev-pacer]
+mode = "t3"
+t3_url = "http://100.81.121.7:3773"
+```
+
+Keep the other settings in the existing section. For any non-loopback URL, including
+this same-machine Tailscale address, the pacer requires `T3_THREAD_AUTH_TOKEN`.
+On the T3 server's machine, issue a token using the running server's state directory
+and pass it privately to the pacer:
+
+```bash
+export T3_THREAD_AUTH_TOKEN="$(t3 auth session issue --ttl 1h --label kandev-pacer --token-only)"
+uv run --extra t3 --frozen kandev-pacer --config ~/.config/kandev-pacer/config-t3.toml
+```
+
+If T3 uses a custom state directory, add `--base-dir /actual/t3/state-directory`
+to the token command. Explicit tokens are not renewed by the pacer; issue a fresh
+one before expiry. With a loopback URL, the pacer issues and renews its own token;
+set `t3_base_dir` or `PACER_T3_BASE_DIR` when that server uses a custom directory.
+
+- **Connection refused** means no server accepts connections at that address and
+  port, or a firewall actively rejects them. Check T3 is running and its bind address.
+- **Hostname lookup failed** means the configured hostname could not be resolved.
+- **Connection timed out** means the connection or response did not arrive in time.
+  Check network access, firewall, proxy settings, and server responsiveness.
+- **TLS verification or handshake failed** means HTTPS could not establish a trusted
+  connection. Check the hostname, certificate, and local certificate trust.
+- **HTTP 401 or 403** means authentication was rejected. Check token expiry and that
+  the token was issued from the running server's state directory.
+- Other HTTP failures need inspection of the T3 server or reverse proxy logs.
+
+The error reports the endpoint origin and a safe reason. It omits raw exception
+text, response bodies, tokens, and URL paths because these can contain secrets.
+
 ## Scheduling and recovery
 
 Scheduling requires a clean checkout on `t3_base_branch`. Pacer saves a private

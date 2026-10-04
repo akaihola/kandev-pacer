@@ -385,6 +385,25 @@ def test_process_lock_prevents_second_pacer(setup, monkeypatch):
     assert not server.calls
 
 
+def test_connection_error_is_logged_and_tick_retries(setup, monkeypatch, caplog):
+    pacer, _, server = setup
+    message = "T3 HTTP ticket request failed: connection refused. Check PACER_T3_URL."
+
+    def fail():
+        raise t3.T3ConnectionError(message)
+
+    def stop(interval):
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(t3, "Server", lambda *a: server)
+    monkeypatch.setattr(server, "snapshot", fail)
+    monkeypatch.setattr(t3.time, "sleep", stop)
+    assert t3.run(pacer.config) == 0
+    assert message in caplog.text
+    assert not server.calls
+    assert not list(pacer.state.glob("*.json"))
+
+
 def test_submitted_record_with_changed_tracker_withholds(setup):
     pacer, path, server = setup
     pacer.tick()

@@ -2,10 +2,83 @@
 
 import io
 import json
+import socket
+import ssl
+from email.message import Message
+from urllib.error import HTTPError, URLError
 
 import pytest
 
 from kandev_pacer import t3_client
+
+
+@pytest.mark.parametrize(
+    "error, reason, setting",
+    [
+        (
+            URLError(ConnectionRefusedError(111, "private-token")),
+            "connection refused",
+            "PACER_T3_URL",
+        ),
+        (
+            URLError(socket.gaierror(-2, "private-token")),
+            "hostname lookup failed",
+            "PACER_T3_URL",
+        ),
+        (
+            URLError(TimeoutError("private-token")),
+            "connection timed out",
+            "PACER_T3_URL",
+        ),
+        (TimeoutError("private-token"), "connection timed out", "PACER_T3_URL"),
+        (URLError(ssl.SSLError("private-token")), "TLS verification", "PACER_T3_URL"),
+        (
+            URLError("http://secret@host/?token=private-token"),
+            "connection failed",
+            "PACER_T3_URL",
+        ),
+        (
+            HTTPError("private-token", 401, "private-token", Message(), None),
+            "HTTP 401",
+            "T3_THREAD_AUTH_TOKEN",
+        ),
+        (
+            HTTPError("private-token", 403, "private-token", Message(), None),
+            "HTTP 403",
+            "PACER_T3_BASE_DIR",
+        ),
+        (
+            HTTPError("private-token", 502, "private-token", Message(), None),
+            "HTTP 502",
+            "reverse proxy",
+        ),
+    ],
+)
+def test_ticket_errors_explain_configuration_without_secrets(
+    monkeypatch, error, reason, setting
+):
+    monkeypatch.setenv("T3_THREAD_AUTH_TOKEN", "private-token")
+
+    def fail(*args, **kwargs):
+        raise error
+
+    monkeypatch.setattr(t3_client, "urlopen", fail)
+    monkeypatch.setattr(
+        t3_client.websocket,
+        "create_connection",
+        lambda *a, **kw: pytest.fail("connected"),
+    )
+    server = t3_client.Server("https://remote.example/private-path", None)
+    with pytest.raises(t3_client.T3ConnectionError) as caught:
+        server.snapshot()
+    message = str(caught.value)
+    assert "https://remote.example" in message
+    assert reason in message
+    assert setting in message
+    assert "--config" in message
+    assert "docs/t3-pacing.md#connection-errors" in message
+    assert "private-token" not in message
+    assert "private-path" not in message
 
 
 def test_remote_requires_token(monkeypatch):
@@ -94,7 +167,7 @@ def test_local_token_renews_before_expiry(monkeypatch):
     monkeypatch.setattr(
         t3_client, "urlopen", lambda *a, **kw: (_ for _ in ()).throw(TimeoutError())
     )
-    with pytest.raises(TimeoutError):
+    with pytest.raises(t3_client.T3ConnectionError, match="connection timed out"):
         server.snapshot()
     assert len(issued) == 2
     assert issued[-1][-2:] == ["--base-dir", "/private/t3"]

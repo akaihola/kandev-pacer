@@ -18,7 +18,7 @@ from pathlib import Path
 from . import provider
 from .quota import class_windows, quota_verdict, scope_names, windows_by_provider
 from .selection import matched_scopes
-from .t3_client import Server
+from .t3_client import Server, T3ConnectionError
 
 log = logging.getLogger("kandev-pacer")
 PROVIDERS = {"codex": "openai", "claudeAgent": "anthropic"}
@@ -387,7 +387,7 @@ def run(config, dump_order=False):
             while True:
                 try:
                     pacer.tick()
-                except Withheld as error:
+                except (Withheld, T3ConnectionError) as error:
                     log.error("T3 withheld: %s", error)
                 except Exception as error:
                     # Transport exceptions can contain credential-bearing URLs.
