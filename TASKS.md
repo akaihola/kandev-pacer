@@ -8,10 +8,10 @@ Rules for TASKS.md usage are at the bottom of the file.
 
 ## Scheduled
 
-- [25] Requires a manual reload if files changed
-  <!-- hai:{"id":"simple-30818c9d-e3bb-4e76-ae6c-347f585730f1","priority":"none","labels":[],"createdAt":"2026-10-04T20:09:52.925Z","updatedAt":"2026-10-04T20:13:36.103Z"} -->
-
 ## In Progress
+
+- [~] [25] Requires a manual reload if files changed
+  <!-- hai:{"id":"simple-30818c9d-e3bb-4e76-ae6c-347f585730f1","priority":"none","labels":[],"createdAt":"2026-10-04T20:09:52.925Z","updatedAt":"2026-10-04T20:14:15.698Z"} -->
 
 - [16] Learn from session observation records: a lowest-priority Kandev task the
   Heartbeat creates when unread records exist, writing observations and proposed
