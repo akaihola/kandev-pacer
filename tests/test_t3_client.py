@@ -83,16 +83,29 @@ def test_ticket_errors_explain_configuration_without_secrets(
 
 def test_remote_requires_token(monkeypatch):
     monkeypatch.delenv("T3_THREAD_AUTH_TOKEN", raising=False)
-    with pytest.raises(ValueError, match="Remote servers require"):
+    with pytest.raises(
+        t3_client.T3ConfigurationError, match="requires T3_THREAD_AUTH_TOKEN"
+    ):
         t3_client.Server("https://remote.example", None)
 
 
 @pytest.mark.parametrize(
-    "url", ["file:///tmp/server", "http://user:secret@host", "http://host?token=x"]
+    "url",
+    [
+        "file:///tmp/server",
+        "http://user:secret@host",
+        "http://host?token=secret",
+        "http://host/#secret",
+        "http://[secret",
+        "http://host:secret",
+    ],
 )
 def test_rejects_credential_urls(url):
-    with pytest.raises(ValueError):
+    with pytest.raises(t3_client.T3ConfigurationError) as caught:
         t3_client.Server(url, None)
+    assert "secret" not in str(caught.value)
+    assert "PACER_T3_URL" in str(caught.value)
+    assert "--config" in str(caught.value)
 
 
 def test_stream_rpc_and_ticket_stay_in_memory(monkeypatch):

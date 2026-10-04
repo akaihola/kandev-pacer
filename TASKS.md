@@ -6,9 +6,6 @@ Rules for TASKS.md usage are at the bottom of the file.
 
 ## Ordered backlog
 
-- [22] Unclear ValueError
-  <!-- hai:{"id":"simple-04f2f10f-b85d-4318-8db4-1ea72176c3e1","priority":"none","labels":[],"createdAt":"2026-10-04T18:54:18.448Z","updatedAt":"2026-10-04T18:54:18.448Z"} -->
-
 - [23] Unclear "unknown provider" error
   <!-- hai:{"id":"simple-573cb9ef-fda8-47a8-904c-de914d45738a","priority":"none","labels":[],"createdAt":"2026-10-04T18:56:27.672Z","updatedAt":"2026-10-04T18:56:27.672Z"} -->
 
@@ -34,6 +31,9 @@ Rules for TASKS.md usage are at the bottom of the file.
   before resuming tasks.
 
 ## Completed / Accepted
+
+- [x] [22] Unclear ValueError
+  <!-- hai:{"id":"simple-04f2f10f-b85d-4318-8db4-1ea72176c3e1","priority":"none","labels":[],"createdAt":"2026-10-04T18:54:18.448Z","updatedAt":"2026-10-04T19:03:05.774Z"} -->
 
 - [ ] [21] Unclear URLError
   <!-- hai:{"id":"simple-0ad93f1d-3593-46f0-b76c-5cea0e0cba6f","priority":"none","labels":[],"createdAt":"2026-10-04T18:47:10.449Z","updatedAt":"2026-10-04T18:47:10.449Z"} -->

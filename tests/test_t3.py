@@ -374,6 +374,38 @@ def test_dump_order_needs_no_authentication(setup, monkeypatch, capsys):
     assert t3.git(path.parent, "status", "--porcelain") == ""
 
 
+def test_startup_explains_missing_remote_token(setup, monkeypatch, caplog):
+    pacer, _, _ = setup
+    monkeypatch.delenv("T3_THREAD_AUTH_TOKEN", raising=False)
+    monkeypatch.setattr(pacer.config, "t3_url", "http://100.81.121.7:3773")
+    assert t3.run(pacer.config) == 1
+    assert "requires T3_THREAD_AUTH_TOKEN" in caplog.text
+    assert "t3 auth session issue" in caplog.text
+    assert "--base-dir" in caplog.text
+    assert "docs/t3-pacing.md#connection-errors" in caplog.text
+    assert not list(pacer.state.glob("*.json"))
+
+
+def test_startup_logs_safe_tracker_configuration_error(setup, monkeypatch, caplog):
+    pacer, _, server = setup
+    monkeypatch.setattr(t3, "Server", lambda *a: server)
+    monkeypatch.setattr(pacer.config, "t3_trackers", "[]")
+    assert t3.run(pacer.config) == 1
+    assert "PACER_T3_TRACKERS needs tracker/parent_thread entries" in caplog.text
+
+
+def test_startup_hides_unclassified_exception_contents(setup, monkeypatch, caplog):
+    pacer, _, _ = setup
+
+    def fail(*args):
+        raise ValueError("private-token")
+
+    monkeypatch.setattr(t3, "Server", fail)
+    assert t3.run(pacer.config) == 1
+    assert "ValueError" in caplog.text
+    assert "private-token" not in caplog.text
+
+
 def test_process_lock_prevents_second_pacer(setup, monkeypatch):
     import fcntl
 

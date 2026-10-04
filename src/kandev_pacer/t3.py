@@ -18,7 +18,7 @@ from pathlib import Path
 from . import provider
 from .quota import class_windows, quota_verdict, scope_names, windows_by_provider
 from .selection import matched_scopes
-from .t3_client import Server, T3ConnectionError
+from .t3_client import Server, T3ConfigurationError, T3ConnectionError
 
 log = logging.getLogger("kandev-pacer")
 PROVIDERS = {"codex": "openai", "claudeAgent": "anthropic"}
@@ -387,7 +387,7 @@ def run(config, dump_order=False):
             while True:
                 try:
                     pacer.tick()
-                except (Withheld, T3ConnectionError) as error:
+                except (Withheld, T3ConfigurationError, T3ConnectionError) as error:
                     log.error("T3 withheld: %s", error)
                 except Exception as error:
                     # Transport exceptions can contain credential-bearing URLs.
@@ -398,6 +398,9 @@ def run(config, dump_order=False):
                 time.sleep(config.interval)
     except KeyboardInterrupt:
         return 0
+    except (Withheld, T3ConfigurationError, T3ConnectionError) as error:
+        log.error("T3 startup failed: %s", error)
+        return 1
     except Exception as error:
         log.error(
             "T3 startup failed (%s); check configuration and Hai installation",

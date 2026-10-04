@@ -21,6 +21,10 @@ class T3ConnectionError(RuntimeError):
     """A transport failure explained without tokens or response contents."""
 
 
+class T3ConfigurationError(ValueError):
+    """A configuration failure with an explanation safe to log."""
+
+
 class Server:
     """Keep a short-lived bearer session in memory for one invocation."""
 
@@ -29,18 +33,43 @@ class Server:
         self.base_dir = base_dir
         self.issued_at = time.monotonic()
         self.url = url.rstrip("/")
-        parsed = urlsplit(self.url)
-        if parsed.scheme not in {"http", "https"} or not parsed.hostname:
-            msg = "Server URL must use HTTP or HTTPS"
-            raise ValueError(msg)
+        try:
+            parsed = urlsplit(self.url)
+            hostname = parsed.hostname
+            _ = parsed.port
+        except ValueError:
+            raise T3ConfigurationError(
+                "Invalid t3_url (PACER_T3_URL). Set a valid HTTP or HTTPS server URL "
+                "in [kandev-pacer] in the TOML selected by --config; "
+                "check environment overrides. See docs/t3-pacing.md#connection-errors."
+            ) from None
+        if parsed.scheme not in {"http", "https"} or not hostname:
+            msg = (
+                "t3_url (PACER_T3_URL) must use HTTP or HTTPS and include a hostname. "
+                "Check [kandev-pacer] in the TOML selected by --config and environment "
+                "overrides. See docs/t3-pacing.md#connection-errors."
+            )
+            raise T3ConfigurationError(msg)
         if parsed.username or parsed.password or parsed.query or parsed.fragment:
-            msg = "Do not put credentials or query parameters in the URL"
-            raise ValueError(msg)
+            msg = (
+                "Remove credentials, query parameters, and fragments from t3_url "
+                "(PACER_T3_URL). Supply the bearer token through T3_THREAD_AUTH_TOKEN "
+                "in the process environment. Check the TOML selected by --config "
+                "and environment overrides. See docs/t3-pacing.md#connection-errors."
+            )
+            raise T3ConfigurationError(msg)
         token = os.environ.get("T3_THREAD_AUTH_TOKEN")
         if not token:
             if parsed.hostname not in {"localhost", "127.0.0.1", "::1"}:
-                msg = "Remote servers require T3_THREAD_AUTH_TOKEN"
-                raise ValueError(msg)
+                msg = (
+                    "Non-loopback t3_url (PACER_T3_URL) requires T3_THREAD_AUTH_TOKEN "
+                    "in the process environment, even on the same machine. On the T3 "
+                    "server's machine, issue a token with `t3 auth session issue "
+                    "--ttl 1h --label kandev-pacer --token-only` and export it before "
+                    "starting the pacer. Add --base-dir if the server uses a custom "
+                    "state directory. See docs/t3-pacing.md#connection-errors."
+                )
+                raise T3ConfigurationError(msg)
             command = [
                 shutil.which("t3") or "t3",
                 "auth",
@@ -62,8 +91,12 @@ class Server:
                 env={**os.environ, "SHELL": shutil.which("bash") or "bash"},
             ).strip()
         if not token:
-            msg = "No bearer session was issued"
-            raise ValueError(msg)
+            msg = (
+                "t3 auth session issue returned no bearer token. Check the T3 CLI "
+                "installation and t3_base_dir (PACER_T3_BASE_DIR); use the running "
+                "server's state directory. See docs/t3-pacing.md#connection-errors."
+            )
+            raise T3ConfigurationError(msg)
         self.token: str = token
 
     def call(self, method: str, payload: dict, *, stream: bool = False) -> dict:
