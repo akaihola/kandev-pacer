@@ -8,6 +8,9 @@ Rules for TASKS.md usage are at the bottom of the file.
 
 ## Scheduled
 
+- [18] Pace TASKS.md work through Hai's Python API and launch admitted tasks in T3 Code.
+    - Hai's `hai_tasks` Python module is ready to use; the API dependency is satisfied.
+
 ## In Progress
 
 - [16] Learn from session observation records: a lowest-priority Kandev task the
@@ -153,6 +156,7 @@ Rules for TASKS.md usage are at the bottom of the file.
 [15]: docs/tasks/15-claude-credential-recovery.md
 [16]: docs/tasks/16-observation-consumer.md
 [17]: docs/tasks/17-codex-transcript-memory.md
+[18]: docs/tasks/18-hai-tasks-t3-code.md
 [*]: TASKS.md
 
 ---
