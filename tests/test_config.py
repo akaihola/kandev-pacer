@@ -70,3 +70,57 @@ def test_secrets_file_contents_are_not_logged(tmp_path, caplog):
     path = secret_file(tmp_path, f"PACER_HEARTBEAT_WEBHOOK_SECRET={secret}\n")
     load_settings(tmp_path / "missing.toml", {"PACER_SECRETS_FILE": str(path)})
     assert secret not in caplog.text
+
+
+def test_t3_settings_from_toml(tmp_path):
+    path = tmp_path / "pacer.toml"
+    path.write_text("""
+[kandev-pacer]
+t3_runtime_mode = "auto-accept-edits"
+t3_interaction_mode = "plan"
+[kandev-pacer.t3_model]
+instanceId = "claudeAgent"
+model = "claude-fable"
+[kandev-pacer.t3_model.options]
+reasoningEffort = "high"
+""")
+    settings = load_settings(path)
+    assert settings.t3_model.instanceId == "claudeAgent"
+    assert settings.t3_model.options == {"reasoningEffort": "high"}
+    assert settings.t3_runtime_mode == "auto-accept-edits"
+    assert settings.t3_interaction_mode == "plan"
+
+
+def test_t3_automatic_from_environment(monkeypatch):
+    monkeypatch.setenv("PACER_T3_MODEL", "automatic")
+    monkeypatch.setenv("PACER_T3_MODELS", '[{"instanceId":"codex","model":"gpt-test"}]')
+    settings = Settings()
+    assert settings.t3_model == "automatic"
+    assert settings.t3_models[0].model == "gpt-test"
+
+
+@pytest.mark.parametrize(
+    "values",
+    [
+        {"PACER_T3_MODEL": "automatic"},
+        {"PACER_T3_MODEL": {"instanceId": "unknown", "model": "test"}},
+        {"PACER_T3_MODEL": {"instanceId": "codex", "model": " "}},
+        {"PACER_T3_RUNTIME_MODE": "invalid"},
+        {"PACER_T3_INTERACTION_MODE": "invalid"},
+    ],
+)
+def test_invalid_t3_launch_settings(values):
+    with pytest.raises(ValueError, match="PACER_T3"):
+        Settings(**values)
+
+
+def test_t3_model_json_command_line_override(tmp_path):
+    settings = load_settings(
+        tmp_path / "missing.toml",
+        {
+            "PACER_T3_MODEL": '{"instanceId":"codex","model":"gpt-test"}',
+            "PACER_T3_MODELS": '[{"instanceId":"claudeAgent","model":"claude-test"}]',
+        },
+    )
+    assert settings.t3_model.model == "gpt-test"
+    assert settings.t3_models[0].instanceId == "claudeAgent"

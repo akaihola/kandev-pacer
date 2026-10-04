@@ -624,3 +624,133 @@ def test_bypass_does_not_change_other_provider_gates(
     assert pacer.admitted(
         {"instanceId": "claudeAgent", "model": "claude-fable"}, Counter(), {}, {}, 0
     ) is (overrides == "claudeAgent=__api_key__")
+
+
+def configure_models(pacer, model="automatic"):
+    from kandev_pacer.config import T3ModelSelection
+
+    pacer.config.providers_raw = "openai anthropic"
+    pacer.config.t3_models = [
+        T3ModelSelection(instanceId="codex", model="gpt-test"),
+        T3ModelSelection(
+            instanceId="claudeAgent",
+            model="claude-fable",
+            options={"reasoningEffort": "high"},
+        ),
+    ]
+    pacer.config.t3_model = model
+
+
+def test_fixed_model_and_modes_override_parent(setup):
+    pacer, _, server = setup
+    configure_models(pacer)
+    pacer.config.t3_model = pacer.config.t3_models[1]
+    pacer.config.t3_runtime_mode = "approval-required"
+    pacer.config.t3_interaction_mode = "plan"
+    pacer.tick()
+    command = server.calls[0]
+    for settings in (command, command["bootstrap"]["createThread"]):
+        assert settings["modelSelection"] == {
+            "instanceId": "claudeAgent",
+            "model": "claude-fable",
+            "options": {"reasoningEffort": "high"},
+        }
+        assert settings["runtimeMode"] == "approval-required"
+        assert settings["interactionMode"] == "plan"
+
+
+@pytest.mark.parametrize("blocked", [None, "quota", "capacity", "error"])
+def test_automatic_prefers_furthest_behind_available_model(setup, monkeypatch, blocked):
+    pacer, _, server = setup
+    configure_models(pacer)
+    monkeypatch.setattr(
+        t3,
+        "quota_verdict",
+        lambda *a, provider, **kw: (
+            Verdict("paused", -0.1, "paused")
+            if provider == "anthropic" and blocked == "quota"
+            else Verdict("open", 0.8 if provider == "anthropic" else 0.2, "")
+        ),
+    )
+    if blocked == "capacity":
+        server.data["threads"].append(
+            {
+                **server.data["threads"][0],
+                "id": "busy",
+                "modelSelection": {
+                    "instanceId": "claudeAgent",
+                    "model": "claude-fable",
+                },
+                "session": {"status": "running"},
+            }
+        )
+    if blocked == "error":
+        monkeypatch.setattr(
+            t3.provider, "read", lambda *a, **kw: ({}, {"anthropic": "offline"})
+        )
+    pacer.tick()
+    assert server.calls[0]["modelSelection"]["instanceId"] == (
+        "claudeAgent" if blocked is None else "codex"
+    )
+
+
+def test_automatic_all_paused_leaves_tracker_untouched(setup, monkeypatch):
+    pacer, path, server = setup
+    configure_models(pacer)
+    monkeypatch.setattr(
+        t3, "quota_verdict", lambda *a, **kw: Verdict("paused", -0.1, "paused")
+    )
+    pacer.tick()
+    assert not server.calls
+    assert not list(pacer.state.glob("*.json"))
+    assert t3.git(path.parent, "status", "--porcelain") == ""
+
+
+def test_pending_launch_keeps_selected_model_after_config_change(setup):
+    pacer, _, server = setup
+    configure_models(pacer)
+    server.lose_reply = True
+    with pytest.raises(TimeoutError):
+        pacer.tick()
+    selection = server.calls[0]["modelSelection"]
+    server.data["threads"] = server.data["threads"][:1]
+    pacer.config.t3_model = pacer.config.t3_models[1]
+    server.lose_reply = False
+    pacer.tick()
+    assert server.calls[1]["modelSelection"] == selection
+    assert server.calls[1]["commandId"] == server.calls[0]["commandId"]
+
+
+def test_automatic_uses_scoped_headroom_and_reconsiders_each_launch(setup, monkeypatch):
+    from collections import Counter
+
+    from kandev_pacer.config import T3ModelSelection
+    from kandev_pacer.quota import quota_verdict
+
+    pacer, _, server = setup
+    pacer.config.providers_raw = "anthropic"
+    pacer.config.t3_model = "automatic"
+    pacer.config.t3_models = [
+        T3ModelSelection(instanceId="claudeAgent", model="claude-fable"),
+        T3ModelSelection(instanceId="claudeAgent", model="claude-other"),
+    ]
+    windows = [
+        {"duration_s": 604800, "resets_at": 302400, "consumed_frac": 0.1},
+        {
+            "duration_s": 604800,
+            "resets_at": 302400,
+            "consumed_frac": 0.3,
+            "scope": "Fable",
+        },
+    ]
+    monkeypatch.setattr(t3, "windows_by_provider", lambda usage: {"anthropic": windows})
+    monkeypatch.setattr(t3, "quota_verdict", quota_verdict)
+    parent = server.data["threads"][0]
+
+    def choose():
+        return pacer.launch_settings(parent, Counter(), {}, {}, 0)["modelSelection"]
+
+    assert choose()["model"] == "claude-other"
+    windows[1]["consumed_frac"] = 0.05
+    # Both now have the same binding shared window; configured order breaks the tie.
+    assert choose()["model"] == "claude-fable"

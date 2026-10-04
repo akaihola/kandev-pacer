@@ -271,12 +271,49 @@ class T3Pacer:
             return self.config.apikey_policy == "cap"
         if name in errors:
             return False
+        return self.selection_verdict(selection, usage, now).is_open
+
+    def selection_verdict(self, selection, usage, now):
+        name = selection_provider(selection)
         windows = windows_by_provider(usage).get(name, [])
         scopes = matched_scopes([selection["model"]], scope_names(windows))
-        verdict = quota_verdict(
+        return quota_verdict(
             usage, class_windows(windows, scopes), now, self.config, provider=name
         )
-        return verdict.is_open
+
+    def launch_settings(self, parent, running, usage, errors, now):
+        """Choose settings before preparing a durable launch record."""
+        configured = self.config.t3_model
+        if configured == "automatic":
+            candidates = [
+                model.model_dump(exclude_none=True) for model in self.config.t3_models
+            ]
+        elif configured is not None:
+            candidates = [configured.model_dump(exclude_none=True)]
+        else:
+            candidates = [parent["modelSelection"]]
+        available = [
+            selection
+            for selection in candidates
+            if self.admitted(selection, running, usage, errors, now)
+        ]
+        if not available:
+            return None
+        selection = max(
+            available,
+            key=lambda item: (
+                0.0
+                if self.quota_bypassed(selection_provider(item))
+                else self.selection_verdict(item, usage, now).headroom
+            ),
+        )
+        return {
+            **parent,
+            "modelSelection": selection,
+            "runtimeMode": self.config.t3_runtime_mode or parent["runtimeMode"],
+            "interactionMode": self.config.t3_interaction_mode
+            or parent["interactionMode"],
+        }
 
     def quota_bypassed(self, name):
         instance = next(
@@ -297,6 +334,12 @@ class T3Pacer:
             for _, parent in self.trackers.values()
             if parent in threads
         }
+        configured = self.config.t3_model
+        if configured is not None:
+            candidates = (
+                self.config.t3_models if configured == "automatic" else [configured]
+            )
+            parents = {PROVIDERS[model.instanceId] for model in candidates}
         for name in self.config.providers:
             capacity = f" ({running[name]}/{self.config.concurrency} running)"
             if self.config.concurrency_total:
@@ -417,7 +460,8 @@ class T3Pacer:
                 or parent["projectId"] != projects[0]["id"]
             ):
                 raise Withheld("Parent thread must belong to the tracker project")
-            if not self.admitted(parent["modelSelection"], running, usage, errors, now):
+            parent = self.launch_settings(parent, running, usage, errors, now)
+            if parent is None:
                 continue
             source = store.read()
             for issue in eligible(source):

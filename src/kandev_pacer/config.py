@@ -5,18 +5,28 @@ sets per run. The constants below it are what kandev calls things -- not knobs, 
 changing one is a code change, not a configuration change.
 """
 
+import json
 import os
 import re
 import tomllib
 from pathlib import Path
 from typing import Any, Literal
 
-from pydantic import Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 from pydantic_settings import BaseSettings
 
 # What PACER_APIKEY_POLICY may be. Defined here so the field validator can see it before
 # `settings = Settings()` runs at import.
 APIKEY_POLICIES = {"withhold", "cap"}
+
+
+class T3ModelSelection(BaseModel):
+    """A model on one of the T3 instances supported by the pacer."""
+
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+    instanceId: Literal["codex", "claudeAgent"]
+    model: str = Field(min_length=1)
+    options: dict[str, Any] | None = None
 
 
 class Settings(BaseSettings):
@@ -32,6 +42,18 @@ class Settings(BaseSettings):
     t3_base_dir: str = Field("", alias="PACER_T3_BASE_DIR")
     t3_trackers: str = Field("[]", alias="PACER_T3_TRACKERS")
     t3_base_branch: str = Field("main", alias="PACER_T3_BASE_BRANCH")
+    t3_model: Literal["automatic"] | T3ModelSelection | None = Field(
+        None, alias="PACER_T3_MODEL"
+    )
+    t3_models: list[T3ModelSelection] = Field(
+        default_factory=list, alias="PACER_T3_MODELS"
+    )
+    t3_runtime_mode: (
+        Literal["approval-required", "auto-accept-edits", "auto", "full-access"] | None
+    ) = Field(None, alias="PACER_T3_RUNTIME_MODE")
+    t3_interaction_mode: Literal["default", "plan"] | None = Field(
+        None, alias="PACER_T3_INTERACTION_MODE"
+    )
     t3_state_dir: str = Field(
         str(Path.home() / ".local/state/kandev-pacer/t3"), alias="PACER_T3_STATE_DIR"
     )
@@ -217,6 +239,13 @@ class Settings(BaseSettings):
         # Every caller appends a path that already starts with "/".
         return value.rstrip("/")
 
+    @field_validator("t3_model", "t3_models", mode="before")
+    @classmethod
+    def _t3_model_json(cls, value):
+        if isinstance(value, str) and value != "automatic":
+            return json.loads(value)
+        return value
+
     @field_validator("apikey_policy", mode="after")
     @classmethod
     def _known_apikey_policy(cls, value):
@@ -250,6 +279,14 @@ class Settings(BaseSettings):
         if not (0 <= start < end <= 24):
             raise ValueError("PACER_INTERACTIVE_HOURS must be an hour range such as 08-23")
         return value
+
+    @model_validator(mode="after")
+    def _automatic_needs_models(self):
+        if self.t3_model == "automatic" and not self.t3_models:
+            raise ValueError(
+                "PACER_T3_MODEL=automatic requires PACER_T3_MODELS candidates"
+            )
+        return self
 
     @model_validator(mode="after")
     def _heartbeat_needs_a_secret(self):

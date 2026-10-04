@@ -53,7 +53,8 @@ the path and that Hai is checked out there. See uv's
 
 Run the pacer on the same filesystem as T3. Tracker paths must match T3 project
 workspace roots, and each tracker needs an explicit parent thread in that project.
-The parent supplies the model, model options, runtime mode, and interaction mode.
+The parent supplies the model, model options, runtime mode, and interaction mode
+unless configuration overrides them.
 Codex maps to the OpenAI subscription; `claudeAgent` maps to Anthropic. Other
 providers withhold launches. Configure subscription-backed provider sessions in T3;
 pacer cannot detect an API-key override hidden in a provider's environment.
@@ -70,6 +71,54 @@ providers_raw = "openai anthropic"
 concurrency = 1
 concurrency_total = 2
 ```
+
+## Model and launch settings
+
+Omit `t3_model`, `t3_runtime_mode`, and `t3_interaction_mode` to inherit each
+setting from the parent. To always use a specific model, add these keys to the
+existing `[kandev-pacer]` section:
+
+```toml
+t3_model = { instanceId = "codex", model = "gpt-5.3-codex", options = { reasoningEffort = "high" } }
+t3_runtime_mode = "full-access"
+t3_interaction_mode = "default"
+```
+
+Use a model ID available on your T3 instance. `instanceId` must be `codex` or
+`claudeAgent`. Model options are optional and belong to the selected model;
+overriding the model does not copy options from the parent.
+
+For automatic selection, configure the models the pacer may use:
+
+```toml
+t3_model = "automatic"
+t3_models = [
+  { instanceId = "codex", model = "gpt-5.3-codex", options = { reasoningEffort = "high" } },
+  { instanceId = "claudeAgent", model = "YOUR_CLAUDE_MODEL_ID" },
+]
+t3_runtime_mode = "full-access"
+t3_interaction_mode = "default"
+```
+
+Automatic mode chooses the available candidate with the greatest headroom on its
+tightest quota window. This is the model whose subscription usage is furthest
+behind the configured target burn line. Model-specific windows count too.
+Candidates must pass provider, quota, and concurrency checks; if none pass,
+the tracker stays untouched. Equal headroom uses the first configured candidate.
+A provider with quota bypass enabled has a neutral score of zero. Include all
+candidate providers in `providers_raw`.
+
+Runtime modes are `approval-required`, `auto-accept-edits`, `auto`, and
+`full-access`. Interaction modes are `default` and `plan`. These overrides apply
+to new threads and their first turns. Saved launch records keep their original
+model and modes when retried, even after configuration changes.
+
+Environment equivalents are `PACER_T3_MODEL`, `PACER_T3_MODELS`,
+`PACER_T3_RUNTIME_MODE`, and `PACER_T3_INTERACTION_MODE`. Model tables and candidate
+lists use JSON in environment variables and CLI overrides, such as
+`--t3-model '{"instanceId":"codex","model":"gpt-5.3-codex"}'`.
+
+## Running
 
 ```bash
 uv run --extra t3 kandev-pacer --config /path/to/t3-pacer.toml --dump-order
@@ -226,9 +275,10 @@ Hai integration tests when the optional dependency is absent.
 
 Each tick reports every provider in `providers_raw`, including providers with no
 tracker parent. Status includes headroom, running counts, scoped windows such as
-Fable, and estimated resume times. A provider without a tracker parent cannot
-launch work, even when its gate is open. T3 inherits each tracker's parent model;
-it does not switch an OpenAI parent to Anthropic when OpenAI is paused.
+Fable, and estimated resume times. A provider needs a tracker parent using it or
+a configured model candidate to launch work. With inherited or fixed selection,
+the pacer waits for that model's gate. Automatic selection can switch providers
+when another configured candidate is available.
 
 To spend a Codex reset without burn-line pacing, the Kandev workaround also works
 in T3 mode:
