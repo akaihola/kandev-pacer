@@ -6,6 +6,12 @@ Rules for TASKS.md usage are at the bottom of the file.
 
 ## Ordered backlog
 
+- [30] Unclear non-clean repository error
+  <!-- hai:{"id":"simple-9657c54f-11fb-4412-a07f-b516ee58254c","priority":"none","labels":[],"createdAt":"2026-10-05T19:04:41.824Z","updatedAt":"2026-10-05T19:04:41.824Z"} -->
+
+- [29] Unclear tracker error
+  <!-- hai:{"id":"simple-deb4a03b-3449-4cf8-8d19-6efb79ccd008","priority":"none","labels":[],"createdAt":"2026-10-05T19:03:41.798Z","updatedAt":"2026-10-05T19:03:41.798Z"} -->
+
 ## Scheduled
 
 ## In Progress
@@ -194,7 +200,7 @@ Rules for TASKS.md usage are at the bottom of the file.
 
 [19]: docs/tasks/19-uv-source-path-documentation-unclear.md
 
-<!-- hai:reserved-numbers:1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,26,27,28 -->
+<!-- hai:reserved-numbers:1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,26,27,28,29,30 -->
 
 [20]: docs/tasks/20-command-not-found-error.md
 
@@ -211,6 +217,10 @@ Rules for TASKS.md usage are at the bottom of the file.
 [27]: docs/tasks/27-unclear-error-on-configuration-mistake.md
 
 [28]: docs/tasks/28-still-requires-parent-thread.md
+
+[29]: docs/tasks/29-unclear-tracker-error.md
+
+[30]: docs/tasks/30-unclear-non-clean-repository-error.md
 
 ## Rules
 
