@@ -26,8 +26,8 @@ Rules for TASKS.md usage are at the bottom of the file.
 - [ ] [29] Unclear tracker error
   <!-- hai:{"id":"simple-deb4a03b-3449-4cf8-8d19-6efb79ccd008","priority":"none","labels":[],"createdAt":"2026-10-05T19:03:41.798Z","updatedAt":"2026-10-05T19:09:23.222Z"} -->
 
-- [ ] [30] Unclear non-clean repository error
-  <!-- hai:{"id":"simple-9657c54f-11fb-4412-a07f-b516ee58254c","priority":"none","labels":[],"createdAt":"2026-10-05T19:04:41.824Z","updatedAt":"2026-10-05T19:07:29.006Z"} -->
+- [x] [30] Unclear non-clean repository error
+  <!-- hai:{"id":"simple-9657c54f-11fb-4412-a07f-b516ee58254c","priority":"none","labels":[],"createdAt":"2026-10-05T19:04:41.824Z","updatedAt":"2026-10-05T19:30:54.689Z"} -->
 
 - [x] [27] Unclear error on configuration mistake
   <!-- hai:{"id":"simple-aeab5d07-0f79-4609-9483-4601cb894f99","priority":"none","labels":[],"createdAt":"2026-10-04T20:22:34.136Z","updatedAt":"2026-10-04T20:34:49.446Z"} -->
