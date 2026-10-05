@@ -6,13 +6,13 @@ Rules for TASKS.md usage are at the bottom of the file.
 
 ## Ordered backlog
 
-- [30] Unclear non-clean repository error
-  <!-- hai:{"id":"simple-9657c54f-11fb-4412-a07f-b516ee58254c","priority":"none","labels":[],"createdAt":"2026-10-05T19:04:41.824Z","updatedAt":"2026-10-05T19:04:41.824Z"} -->
-
 - [29] Unclear tracker error
   <!-- hai:{"id":"simple-deb4a03b-3449-4cf8-8d19-6efb79ccd008","priority":"none","labels":[],"createdAt":"2026-10-05T19:03:41.798Z","updatedAt":"2026-10-05T19:03:41.798Z"} -->
 
 ## Scheduled
+
+- [30] Unclear non-clean repository error
+  <!-- hai:{"id":"simple-9657c54f-11fb-4412-a07f-b516ee58254c","priority":"none","labels":[],"createdAt":"2026-10-05T19:04:41.824Z","updatedAt":"2026-10-05T19:05:44.427Z"} -->
 
 ## In Progress
 
