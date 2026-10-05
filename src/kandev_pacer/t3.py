@@ -6,6 +6,7 @@ import importlib
 import json
 import logging
 import os
+import shlex
 import shutil
 import subprocess
 import tempfile
@@ -178,7 +179,13 @@ class T3Pacer:
         if git(root, "symbolic-ref", "--short", "HEAD") != self.config.t3_base_branch:
             raise Withheld("Schedule from the configured base branch")
         if git(root, "status", "--porcelain"):
-            raise Withheld("Scheduling requires a clean repository")
+            raise Withheld(
+                f"Scheduling blocked: repository {root} for tracker {tracker} "
+                "has staged, unstaged, or untracked changes. "
+                f"Inspect with: git -C {shlex.quote(str(root))} status --short. "
+                "Commit or stash your changes (including untracked files), "
+                "then retry scheduling."
+            )
         thread_id = str(uuid.uuid4())
         now = datetime.now(UTC).isoformat()
         inherited = {

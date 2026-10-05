@@ -262,9 +262,15 @@ select a supported provider instance in each configured T3 parent thread.
 
 ## Scheduling and recovery
 
-Scheduling requires a clean checkout on `t3_base_branch`. Pacer saves a private
-record, moves the issue to Scheduled through Hai's revision-checked API, and commits
-only the tracker. T3 then creates a worktree from that branch. The worker receives the
+Scheduling requires a clean checkout on `t3_base_branch`. The checkout is the
+directory containing the configured `TASKS.md`, before T3 creates a worktree.
+If it has staged, unstaged, or untracked changes, the error names that directory
+and tracker and provides a `git -C ... status --short` command. Inspect the changes,
+then commit or stash work you want to keep. Include untracked files when stashing
+with `git stash push --include-untracked`. Retry scheduling once status is empty.
+
+Pacer saves a private record, moves the issue to Scheduled through Hai's
+revision-checked API, and commits only the tracker. T3 then creates a worktree from that branch. The worker receives the
 issue description, root AGENTS.md, tracker rules, and instructions to use Hai for
 tracker changes. Implementation, validation, merge, and completion follow those
 repository rules. A finished turn never moves the tracker or checks acceptance.

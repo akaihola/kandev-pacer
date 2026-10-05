@@ -2,6 +2,7 @@
 
 import copy
 import json
+import shlex
 import subprocess
 
 import pytest
@@ -372,6 +373,38 @@ def test_real_gate_and_scoped_windows(setup, monkeypatch):
     assert pacer.admitted(
         {"provider": "claudeAgent", "model": "claude-other"}, Counter(), usage, {}, 0
     )
+
+
+@pytest.mark.parametrize("changes", ["staged", "unstaged", "untracked"])
+def test_dirty_repository_error_identifies_checkout_and_recovery(setup, changes):
+    pacer, path, server = setup
+    root = path.parent.with_name("repo with 'quotes'")
+    path.parent.rename(root)
+    path = root / path.name
+    pacer.config.t3_trackers = [{"tracker": str(path), "parent_thread": "parent"}]
+    server.data["projects"][0]["workspaceRoot"] = str(root)
+    pacer = t3.T3Pacer(pacer.config, server)
+    store = TasksStore(path)
+    head = t3.git(root, "rev-parse", "HEAD")
+    changed = root / ("new.txt" if changes == "untracked" else "docs/tasks/1.md")
+    changed.write_text("Work in progress\n")
+    if changes == "staged":
+        t3.git(root, "add", str(changed))
+    before = store.read()
+
+    with pytest.raises(t3.Withheld) as error:
+        pacer.tick()
+
+    message = str(error.value)
+    assert f"repository {root} for tracker {path}" in message
+    command = message.split("Inspect with: ", 1)[1].split(". Commit", 1)[0]
+    assert shlex.split(command) == ["git", "-C", str(root), "status", "--short"]
+    assert "Commit or stash your changes (including untracked files)" in message
+    assert "retry scheduling" in message
+    assert store.read()["revision"] == before["revision"]
+    assert t3.git(root, "rev-parse", "HEAD") == head
+    assert not server.calls
+    assert not list(pacer.state.glob("*.json"))
 
 
 def test_scheduled_before_backlog(setup):
