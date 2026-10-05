@@ -262,6 +262,18 @@ select a supported provider instance in each configured T3 parent thread.
 
 ## Scheduling and recovery
 
+If a tracker matches zero or multiple T3 projects, the pacer logs its path,
+the required `workspaceRoot`, and the match count. The required root is the
+resolved directory containing `TASKS.md`. It must equal exactly one project's
+`workspaceRoot` in the server selected by `t3_url`.
+
+For zero matches, open or add that directory as a project in that T3 server,
+or correct `t3_trackers[].tracker` to the intended project's `TASKS.md`.
+For multiple matches, inspect the projects and resolve duplicate workspace roots.
+This blocks new task launches for the current tick. Existing T3 threads continue
+running, and the pacer keeps reporting quota status and retries next tick.
+Trackers processed before the mismatch can still launch work on other ticks.
+
 Scheduling requires a clean checkout on `t3_base_branch`. The checkout is the
 directory containing the configured `TASKS.md`, before T3 creates a worktree.
 If it has staged, unstaged, or untracked changes, the error names that directory

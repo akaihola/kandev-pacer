@@ -494,7 +494,19 @@ class T3Pacer:
                 p for p in snapshot["projects"] if p["workspaceRoot"] == str(store.root)
             ]
             if len(projects) != 1:
-                raise Withheld("Tracker must match exactly one T3 project")
+                fix = (
+                    "Open or add this directory as a project in the T3 server selected "
+                    "by t3_url, or correct t3_trackers[].tracker to that project's TASKS.md"
+                    if not projects
+                    else "Inspect projects in the T3 server selected by t3_url and "
+                    "resolve duplicate workspace roots so exactly one project uses this directory"
+                )
+                raise Withheld(
+                    f"Cannot launch new tasks this tick: tracker {tracker!r} requires "
+                    f"exactly one T3 project with workspaceRoot {str(store.root)!r}; "
+                    f"found {len(projects)}. {fix}. Existing T3 threads continue; "
+                    "the pacer will retry next tick"
+                )
             if parent_id is not None and (
                 not parent or parent["projectId"] != projects[0]["id"]
             ):

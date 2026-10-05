@@ -905,12 +905,16 @@ def test_without_parent_requires_explicit_launch_settings(setup, missing):
 
 
 @pytest.mark.parametrize("problem", ["missing", "wrong-root", "duplicate"])
-def test_without_parent_requires_matching_project(setup, problem):
+@pytest.mark.parametrize("with_parent", [False, True])
+def test_tracker_requires_matching_project(setup, problem, with_parent):
     pacer, path, server = setup
     configure_models(pacer)
     pacer.config.t3_runtime_mode = "full-access"
     pacer.config.t3_interaction_mode = "default"
-    pacer.config.t3_trackers = [{"tracker": str(path)}]
+    if not with_parent:
+        pacer.config.t3_trackers = [{"tracker": str(path)}]
+        server.data["threads"] = []
+    project = copy.deepcopy(server.data["projects"][0])
     if problem == "missing":
         server.data["projects"] = []
     elif problem == "wrong-root":
@@ -919,11 +923,30 @@ def test_without_parent_requires_matching_project(setup, problem):
         server.data["projects"].append(
             {"id": "duplicate", "workspaceRoot": str(path.parent)}
         )
-    server.data["threads"] = []
-    with pytest.raises(t3.Withheld, match="exactly one T3 project"):
-        t3.T3Pacer(pacer.config, server).tick()
+    source = path.read_text()
+    pacer = t3.T3Pacer(pacer.config, server)
+    with pytest.raises(t3.Withheld, match="exactly one T3 project") as error:
+        pacer.tick()
+    message = str(error.value)
+    assert str(path) in message
+    assert f"workspaceRoot {str(path.parent)!r}" in message
+    assert f"found {2 if problem == 'duplicate' else 0}" in message
+    assert "Cannot launch new tasks this tick" in message
+    assert "Existing T3 threads continue" in message
+    assert "retry next tick" in message
+    assert "t3_url" in message
+    if problem == "duplicate":
+        assert "resolve duplicate workspace roots" in message
+    else:
+        assert "Open or add this directory as a project" in message
+        assert "t3_trackers[].tracker" in message
     assert not server.calls
     assert not list(pacer.state.glob("*.json"))
+    assert path.read_text() == source
+    assert t3.git(path.parent, "status", "--porcelain") == ""
+    server.data["projects"] = [project]
+    pacer.tick()
+    assert len(server.calls) == 1
 
 
 @pytest.mark.parametrize("parent", ["", "missing", "wrong-project"])
