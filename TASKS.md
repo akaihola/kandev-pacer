@@ -23,6 +23,13 @@ Rules for TASKS.md usage are at the bottom of the file.
 
 ## Completed / Accepted
 
+- [ ] [*] T3 pacer launched nothing for hours: T3 rejected the palindromi.fi [6]
+  launch after a failed worktree Git step, every retry hit the leftover
+  `pacer-<thread>` branch, and a later tracker merge made dispatch refuse the record.
+  A submitted launch now needs only its issue to stay eligible. A rejected launch
+  absent from T3 retries with a new thread ID, up to three times. A pending launch
+  waiting for capacity logs why nothing else launches.
+
 - [ ] [31] Dirty repo blocks all trackers
   <!-- hai:{"id":"simple-5569346b-76c6-4a78-ad00-4f62faa13598","priority":"none","labels":[],"createdAt":"2026-10-06T05:24:40.114Z","updatedAt":"2026-10-06T05:39:22.197Z"} -->
 
