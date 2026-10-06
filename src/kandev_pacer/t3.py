@@ -41,6 +41,10 @@ class Withheld(ValueError):
     """An admission failure with a safe, operator-facing explanation."""
 
 
+class CheckoutBlocked(Withheld):
+    """A tracker's own checkout is unusable; other trackers can still launch."""
+
+
 def eligible(snapshot):
     issues = snapshot["workspace"]["issues"]
     completed = {
@@ -177,9 +181,12 @@ class T3Pacer:
     def prepare(self, tracker, store, snapshot, issue, parent, project):
         root = store.root
         if git(root, "symbolic-ref", "--short", "HEAD") != self.config.t3_base_branch:
-            raise Withheld("Schedule from the configured base branch")
+            raise CheckoutBlocked(
+                f"Scheduling blocked: repository {root} for tracker {tracker} "
+                f"is not on the configured base branch {self.config.t3_base_branch}"
+            )
         if git(root, "status", "--porcelain"):
-            raise Withheld(
+            raise CheckoutBlocked(
                 f"Scheduling blocked: repository {root} for tracker {tracker} "
                 "has staged, unstaged, or untracked changes. "
                 f"Inspect with: git -C {shlex.quote(str(root))} status --short. "
@@ -518,9 +525,13 @@ class T3Pacer:
             for issue in eligible(source):
                 if (tracker, issue["id"]) in records:
                     continue
-                path, record = self.prepare(
-                    tracker, store, source, issue, parent, projects[0]
-                )
+                try:
+                    path, record = self.prepare(
+                        tracker, store, source, issue, parent, projects[0]
+                    )
+                except CheckoutBlocked as error:
+                    log.warning("T3 skipping tracker this tick: %s", error)
+                    break
                 self.schedule(path, record)
                 self.dispatch(path, record)
                 return

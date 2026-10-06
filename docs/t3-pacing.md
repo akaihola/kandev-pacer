@@ -276,10 +276,13 @@ Trackers processed before the mismatch can still launch work on other ticks.
 
 Scheduling requires a clean checkout on `t3_base_branch`. The checkout is the
 directory containing the configured `TASKS.md`, before T3 creates a worktree.
-If it has staged, unstaged, or untracked changes, the error names that directory
+If it has staged, unstaged, or untracked changes, the warning names that directory
 and tracker and provides a `git -C ... status --short` command. Inspect the changes,
 then commit or stash work you want to keep. Include untracked files when stashing
 with `git stash push --include-untracked`. Retry scheduling once status is empty.
+A dirty checkout, or one on another branch, blocks only its own tracker. The pacer
+logs a warning naming the checkout and moves on to the next tracker in the same tick,
+so other repositories keep launching work.
 
 Pacer saves a private record, moves the issue to Scheduled through Hai's
 revision-checked API, and commits only the tracker. T3 then creates a worktree from that branch. The worker receives the

@@ -376,7 +376,9 @@ def test_real_gate_and_scoped_windows(setup, monkeypatch):
 
 
 @pytest.mark.parametrize("changes", ["staged", "unstaged", "untracked"])
-def test_dirty_repository_error_identifies_checkout_and_recovery(setup, changes):
+def test_dirty_repository_error_identifies_checkout_and_recovery(
+    setup, changes, caplog
+):
     pacer, path, server = setup
     root = path.parent.with_name("repo with 'quotes'")
     path.parent.rename(root)
@@ -392,10 +394,9 @@ def test_dirty_repository_error_identifies_checkout_and_recovery(setup, changes)
         t3.git(root, "add", str(changed))
     before = store.read()
 
-    with pytest.raises(t3.Withheld) as error:
-        pacer.tick()
+    pacer.tick()
 
-    message = str(error.value)
+    [message] = [r.getMessage() for r in caplog.records if r.levelname == "WARNING"]
     assert f"repository {root} for tracker {path}" in message
     command = message.split("Inspect with: ", 1)[1].split(". Commit", 1)[0]
     assert shlex.split(command) == ["git", "-C", str(root), "status", "--short"]
@@ -405,6 +406,35 @@ def test_dirty_repository_error_identifies_checkout_and_recovery(setup, changes)
     assert t3.git(root, "rev-parse", "HEAD") == head
     assert not server.calls
     assert not list(pacer.state.glob("*.json"))
+
+
+@pytest.mark.parametrize("block", ["dirty", "branch"])
+def test_blocked_checkout_skips_only_its_tracker(setup, tmp_path, block, caplog):
+    pacer, first, server = setup
+    second = tracker(tmp_path / "repo2")
+    pacer.trackers[str(second)] = (TasksStore(second), "parent2")
+    server.data["projects"].append(
+        {"id": "project2", "workspaceRoot": str(second.parent)}
+    )
+    server.data["threads"].append(
+        {**server.data["threads"][0], "id": "parent2", "projectId": "project2"}
+    )
+    if block == "dirty":
+        (first.parent / "new.txt").write_text("Work in progress\n")
+    else:
+        t3.git(first.parent, "switch", "-c", "feature")
+    head = t3.git(first.parent, "rev-parse", "HEAD")
+    before = TasksStore(first).read()["revision"]
+
+    pacer.tick()
+
+    [record] = [json.loads(p.read_text()) for p in pacer.state.glob("*.json")]
+    assert record["tracker"] == str(second)
+    assert [c["threadId"] for c in server.calls] == [record["command"]["threadId"]]
+    assert TasksStore(first).read()["revision"] == before
+    assert t3.git(first.parent, "rev-parse", "HEAD") == head
+    [warning] = [r.getMessage() for r in caplog.records if r.levelname == "WARNING"]
+    assert str(first.parent) in warning
 
 
 def test_scheduled_before_backlog(setup):
