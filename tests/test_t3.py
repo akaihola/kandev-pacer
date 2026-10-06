@@ -659,7 +659,7 @@ def test_connection_error_is_logged_and_tick_retries(setup, monkeypatch, caplog)
     assert not list(pacer.state.glob("*.json"))
 
 
-def test_submitted_record_with_changed_tracker_withholds(setup):
+def test_submitted_record_for_moved_issue_withholds(setup):
     pacer, path, server = setup
     pacer.tick()
     record_path = next(pacer.state.glob("*.json"))
@@ -667,8 +667,14 @@ def test_submitted_record_with_changed_tracker_withholds(setup):
     record["phase"] = "submitted"
     t3.save(record_path, record)
     server.data["threads"].pop()
-    path.write_text(path.read_text() + "Changed while offline\n")
-    with pytest.raises(ValueError, match="changed before dispatch"):
+    store = TasksStore(path)
+    store.mutate(
+        "update",
+        store.read()["revision"],
+        id="task-1",
+        input={"sourceSection": "In Progress"},
+    )
+    with pytest.raises(ValueError, match="no longer eligible"):
         t3.T3Pacer(pacer.config, server).tick()
     assert len(server.calls) == 1
 
