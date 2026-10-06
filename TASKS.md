@@ -6,6 +6,9 @@ Rules for TASKS.md usage are at the bottom of the file.
 
 ## Ordered backlog
 
+- [31] Dirty repo blocks all trackers
+  <!-- hai:{"id":"simple-5569346b-76c6-4a78-ad00-4f62faa13598","priority":"none","labels":[],"createdAt":"2026-10-06T05:24:40.114Z","updatedAt":"2026-10-06T05:24:40.114Z"} -->
+
 ## Scheduled
 
 ## In Progress
@@ -165,16 +168,20 @@ Rules for TASKS.md usage are at the bottom of the file.
       the step does not advance.
     - Depends on: [13]
 
-- [ ] [*] Waive the heartbeat cooldown once a task has been launched since the last
+- [x] [*] Waive the heartbeat cooldown once a task has been launched since the last
       attempt, so a full backlog does not leave the board dry for half of every cycle.
     - Depends on: [2]
+  <!-- hai:{"id":"simple-88e03c0e1537dea8","updatedAt":"2026-10-06T05:26:03.871Z"} -->
 
-- [ ] [2] Call the Heartbeat webhook when an open provider gate is running out of work.
+- [x] [2] Call the Heartbeat webhook when an open provider gate is running out of work.
+  <!-- hai:{"updatedAt":"2026-10-06T05:25:57.872Z"} -->
 
-- [ ] [4] Collect archived session observations without model calls.
+- [x] [4] Collect archived session observations without model calls.
+  <!-- hai:{"updatedAt":"2026-10-06T05:25:39.325Z"} -->
 
-- [ ] [14] Enrol workflows through the step update API instead of writing the Kandev
+- [x] [14] Enrol workflows through the step update API instead of writing the Kandev
       database.
+  <!-- hai:{"updatedAt":"2026-10-06T05:25:28.371Z"} -->
 
 [1]: docs/tasks/1-quota-from-pebble-collector.md
 [2]: docs/tasks/2-heartbeat-webhook.md
@@ -200,7 +207,7 @@ Rules for TASKS.md usage are at the bottom of the file.
 
 [19]: docs/tasks/19-uv-source-path-documentation-unclear.md
 
-<!-- hai:reserved-numbers:1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,26,27,28,29,30 -->
+<!-- hai:reserved-numbers:1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,26,27,28,29,30,31 -->
 
 [20]: docs/tasks/20-command-not-found-error.md
 
@@ -221,6 +228,8 @@ Rules for TASKS.md usage are at the bottom of the file.
 [29]: docs/tasks/29-unclear-tracker-error.md
 
 [30]: docs/tasks/30-unclear-non-clean-repository-error.md
+
+[31]: docs/tasks/31-dirty-repo-blocks-all-trackers.md
 
 ## Rules
 
