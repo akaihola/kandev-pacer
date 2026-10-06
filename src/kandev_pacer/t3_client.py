@@ -25,6 +25,10 @@ class T3ConfigurationError(ValueError):
     """A configuration failure with an explanation safe to log."""
 
 
+class T3Rejected(RuntimeError):
+    """T3 answered the RPC with a failure instead of an acknowledgement."""
+
+
 class Server:
     """Keep a short-lived bearer session in memory for one invocation."""
 
@@ -178,7 +182,7 @@ class Server:
                 if message.get("_tag") == "Exit":
                     result = message["exit"]
                     if result.get("_tag") != "Success":
-                        raise RuntimeError("T3 rejected the RPC: " + json.dumps(result))
+                        raise T3Rejected("T3 rejected the RPC: " + json.dumps(result))
                     if stream:
                         msg = "T3 ended the stream without a snapshot"
                         raise RuntimeError(msg)

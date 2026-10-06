@@ -308,11 +308,26 @@ or acknowledged. An acknowledged thread missing from T3 blocks admission for ins
 Idle, failed, waiting, and completed threads retain their record and never relaunch
 automatically. Continue those threads manually when needed.
 
-Tracker conflicts, including a crash between Hai's update and saving its new revision,
-withhold the pending launch. Inspect TASKS.md, Git history, the saved record, and T3
-before repairing that record. Do not delete records to retry: that discards duplicate
-launch protection. Endpoint or tracker changes also require reconciling existing
-records before reusing the state directory.
+A pending launch blocks all new launches until it is dispatched. While its provider
+has no free capacity, each tick logs `T3 pending launch of ... waits for ...
+admission`. Once the scheduling commit is in, other workers may merge their own
+tracker updates; the launch still goes ahead as long as its issue is eligible.
+
+T3 can reject a launch after creating its worktree, for example when a Git step of
+worktree setup fails. T3 then deletes the thread but keeps the worktree and its
+`pacer-<thread ID>` branch, so the same thread ID can never launch. If the thread is
+absent from T3 after a rejection, the pacer gives the launch a new thread ID and
+retries on the next tick. The log shows T3's reason and the attempt count. After
+three rejections it stops and withholds all launches. Check the project's worktree
+setup in T3, remove the leftover worktrees under T3's worktree directory, then delete
+that launch record to retry.
+
+Tracker conflicts before the scheduling commit, including a crash between Hai's
+update and saving its new revision, withhold the pending launch. Inspect TASKS.md,
+Git history, the saved record, and T3 before repairing that record. Apart from the
+rejection case above, do not delete records to retry: that discards duplicate launch
+protection. Endpoint or tracker changes also require reconciling existing records
+before reusing the state directory.
 
 Run the integration fixtures with `uv run --extra t3 pytest tests/test_t3.py` and the
 transport tests with `uv run pytest tests/test_t3_client.py`. The default suite skips

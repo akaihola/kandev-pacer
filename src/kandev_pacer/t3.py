@@ -26,7 +26,7 @@ from .quota import (
     windows_by_provider,
 )
 from .selection import matched_scopes
-from .t3_client import Server, T3ConfigurationError, T3ConnectionError
+from .t3_client import Server, T3ConfigurationError, T3ConnectionError, T3Rejected
 
 log = logging.getLogger("kandev-pacer")
 PROVIDERS = {"codex": "openai", "claudeAgent": "anthropic"}
@@ -43,6 +43,10 @@ class Withheld(ValueError):
 
 class CheckoutBlocked(Withheld):
     """A tracker's own checkout is unusable; other trackers can still launch."""
+
+
+# Each rejected launch can leave a worktree behind, so stop retrying after a few.
+REJECTION_LIMIT = 3
 
 
 def eligible(snapshot):
@@ -488,12 +492,19 @@ class T3Pacer:
         # An unresolved launch blocks new admissions, even when its gate is closed.
         if pending:
             path, record = pending[0]
-            if self.admitted(
-                record["command"]["modelSelection"], running, usage, errors, now
-            ):
+            selection = record["command"]["modelSelection"]
+            if self.admitted(selection, running, usage, errors, now):
                 if record["phase"] in {"prepared", "scheduled"}:
                     self.schedule(path, record)
                 self.dispatch(path, record)
+            else:
+                log.info(
+                    "T3 pending launch of %s from %s waits for %s admission; "
+                    "new launches wait behind it",
+                    record["issue"],
+                    record["tracker"],
+                    selection_provider(selection),
+                )
             return
         for tracker, (store, parent_id) in self.trackers.items():
             parent = threads.get(parent_id) if parent_id is not None else {}
@@ -538,17 +549,40 @@ class T3Pacer:
 
     def dispatch(self, path, record):
         store, _ = self.trackers[record["tracker"]]
-        snapshot = store.read()
-        if snapshot["revision"] != record["revision"]:
-            raise Withheld(
-                "Tracker changed before dispatch; inspect pending launch record"
-            )
-        if not any(i["id"] == record["issue"] for i in eligible(snapshot)):
+        # The schedule commit is in, so workers merging their own tracker updates
+        # may move the revision on; only this issue leaving the queue withholds it.
+        if not any(i["id"] == record["issue"] for i in eligible(store.read())):
             raise Withheld("Pending issue is no longer eligible")
-        self.server.call("orchestration.dispatchCommand", record["command"])
+        rejections = record.get("rejections", 0)
+        if rejections >= REJECTION_LIMIT:
+            raise Withheld(
+                f"T3 rejected launching {record['issue']} from {record['tracker']} "
+                f"{rejections} times; inspect T3 worktree setup for that project, "
+                "then delete this pending launch record to retry"
+            )
+        command = record["command"]
+        try:
+            self.server.call("orchestration.dispatchCommand", command)
+        except T3Rejected as error:
+            threads = self.server.snapshot()["threads"]
+            if any(t["id"] == command["threadId"] for t in threads):
+                raise  # The next tick observes the thread instead of relaunching.
+            # T3 deletes a thread whose bootstrap fails but can keep its worktree
+            # and branch, so resending the same thread ID fails on that branch.
+            thread_id = str(uuid.uuid4())
+            command.update(threadId=thread_id, commandId=str(uuid.uuid4()))
+            command["message"]["messageId"] = str(uuid.uuid4())
+            command["bootstrap"]["prepareWorktree"]["branch"] = f"pacer-{thread_id}"
+            record["rejections"] = rejections + 1
+            save(path, record)
+            raise Withheld(
+                f"T3 rejected launching {record['issue']} from {record['tracker']} "
+                f"({record['rejections']}/{REJECTION_LIMIT}), retrying next tick "
+                f"with a new thread ID: {str(error)[:500]}"
+            ) from None
         record["phase"] = "accepted"
         save(path, record)
-        log.info("T3 launch accepted: %s", record["command"]["threadId"])
+        log.info("T3 launch accepted: %s", command["threadId"])
 
 
 def run(config, dump_order=False):

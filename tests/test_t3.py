@@ -22,6 +22,8 @@ class Server:
         self.data = {"projects": [], "threads": []}
         self.calls = []
         self.lose_reply = False
+        self.reject = 0
+        self.leftover_branches = set()
 
     def snapshot(self):
         return copy.deepcopy(self.data)
@@ -29,6 +31,13 @@ class Server:
     def call(self, method, command):
         assert method == "orchestration.dispatchCommand"
         self.calls.append(copy.deepcopy(command))
+        branch = command["bootstrap"]["prepareWorktree"]["branch"]
+        if self.reject or branch in self.leftover_branches:
+            # Like T3 0.0.44, a failed bootstrap deletes the thread but keeps the
+            # worktree branch, so the same branch name can never be created again.
+            self.reject = max(self.reject - 1, 0)
+            self.leftover_branches.add(branch)
+            raise t3.T3Rejected("T3 rejected the RPC: worktree setup failed")
         if not any(t["id"] == command["threadId"] for t in self.data["threads"]):
             self.data["threads"].append(
                 {
@@ -320,6 +329,44 @@ def test_absent_command_reuses_saved_ids(setup):
     server.data["threads"].pop()
     t3.T3Pacer(pacer.config, server).tick()
     assert server.calls[0] == server.calls[1]
+
+
+def test_rejected_launch_waits_and_retries_after_tracker_moves_on(setup, caplog):
+    caplog.set_level("INFO", logger="kandev-pacer")
+    pacer, path, server = setup
+    server.reject = 1
+    with pytest.raises(ValueError, match=r"task-1 .* \(1/3\), retrying next tick"):
+        pacer.tick()
+    # Another worker merges its own tracker update, and a thread fills the slot.
+    path.write_text(path.read_text() + "Another worker's note\n")
+    t3.git(path.parent, "commit", "-am", "docs(tasks): complete other work")
+    busy = {**server.data["threads"][0], "id": "busy"}
+    busy["session"] = {"status": "running", "activeTurnId": "turn"}
+    server.data["threads"].append(busy)
+    pacer.tick()
+    assert len(server.calls) == 1
+    assert "pending launch of task-1" in caplog.records[-1].getMessage()
+    busy["session"] = {"status": "idle", "activeTurnId": None}
+    pacer.tick()
+    first, second = server.calls
+    assert first["threadId"] != second["threadId"]
+    assert first["commandId"] != second["commandId"]
+    branch = second["bootstrap"]["prepareWorktree"]["branch"]
+    assert branch == f"pacer-{second['threadId']}"
+    assert first["message"]["text"] == second["message"]["text"]
+    record = json.loads(next(pacer.state.glob("*.json")).read_text())
+    assert record["phase"] == "accepted"
+
+
+def test_repeated_rejections_stop_retrying(setup):
+    pacer, _, server = setup
+    server.reject = 3
+    for attempt in range(1, 4):
+        with pytest.raises(ValueError, match=rf"\({attempt}/3\)"):
+            pacer.tick()
+    with pytest.raises(ValueError, match="task-1 from .* 3 times"):
+        pacer.tick()
+    assert len(server.calls) == 3
 
 
 def test_accepted_missing_thread_blocks_new_work(setup):
