@@ -8,10 +8,10 @@ Rules for TASKS.md usage are at the bottom of the file.
 
 ## Scheduled
 
-- [31] Dirty repo blocks all trackers
-  <!-- hai:{"id":"simple-5569346b-76c6-4a78-ad00-4f62faa13598","priority":"none","labels":[],"createdAt":"2026-10-06T05:24:40.114Z","updatedAt":"2026-10-06T05:37:40.900Z"} -->
-
 ## In Progress
+
+- [~] [31] Dirty repo blocks all trackers
+  <!-- hai:{"id":"simple-5569346b-76c6-4a78-ad00-4f62faa13598","priority":"none","labels":[],"createdAt":"2026-10-06T05:24:40.114Z","updatedAt":"2026-10-06T05:37:41.074Z"} -->
 
 - [16] Learn from session observation records: a lowest-priority Kandev task the
   Heartbeat creates when unread records exist, writing observations and proposed
