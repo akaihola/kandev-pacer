@@ -48,3 +48,23 @@ without this feature. Pebble mode now supplements its snapshot with cached live
 provider reads. While credits are available, live windows replace snapshot windows
 to avoid acting on pre-reset usage. Optional live-read failure falls back to Pebble.
 Redemption rechecks and confirms live quota regardless of the selected source.
+
+## Completion evidence, 2026-10-07
+
+Implemented shared reset-aware pacing and automatic redemption for Kandev and T3,
+including Pebble's live reset supplement. API-key cap bypass remains non-paced.
+Recovery records retain the same request ID across lost replies and restarts;
+provider admission stays closed until fresh quota and credit reduction confirm.
+
+Validation on the implementation tree: 773 Python tests passed, 20 opt-in live
+checks skipped; all 64 userscript tests passed. Differential Darker formatting,
+Graylint Ruff/type checks and whitespace checks passed. Rebase changed only tracker
+and plan documents; source and tests were identical to the validated tree. The
+merged main tree passed all 89 reset, quota and provider tests.
+
+Merged on main as `7c2b46e`. Tracker changes use revision-checked
+hai_tasks operations, preserve unrelated issues, and leave acceptance unchecked.
+No live reset was redeemed. No kandev-pacer user service was registered in this
+environment, and no running pacer was restarted. Existing processes need a restart
+to import the merged code. Throughput remains bounded by runnable work and provider
+short-window limits; the planner cannot guarantee using every expiring credit.
