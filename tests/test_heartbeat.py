@@ -3,6 +3,7 @@
 import copy
 import json
 import sqlite3
+from datetime import UTC, datetime
 
 import pytest
 from test_t3 import tracker as make_tracker
@@ -81,6 +82,7 @@ def insert(
     created=NOW,
     workspace="ws",
 ):
+    created = datetime.fromtimestamp(created, UTC).isoformat()
     with sqlite3.connect(db) as conn:
         conn.execute(
             "INSERT INTO tasks VALUES (?, ?, 'complex', ?, ?, ?, ?, ?, '')",
