@@ -14,12 +14,12 @@ Rules for TASKS.md usage are at the bottom of the file.
   automation prompt to use the new scripts.
   <!-- hai:{"id":"simple-3b8c36c856df2af8","updatedAt":"2026-10-07T15:38:04.813Z"} -->
 
-- [*] Look at
+## In Progress
+
+- [~] [*] Look at
   agent@gogo:prg/kandev-config/docs/2026-10-07-heartbeat-deterministic-script-research.md
   and do a similar analysis for the T3 heartbeat that Kandev-pacer is using
-  <!-- hai:{"id":"simple-1fc55ce1c4d74535","updatedAt":"2026-10-07T15:27:15.958Z"} -->
-
-## In Progress
+  <!-- hai:{"id":"simple-1fc55ce1c4d74535","updatedAt":"2026-10-07T15:38:29.624Z"} -->
 
 - [16] Learn from session observation records: a lowest-priority Kandev task the
   Heartbeat creates when unread records exist, writing observations and proposed
