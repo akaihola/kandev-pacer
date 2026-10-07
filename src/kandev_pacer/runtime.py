@@ -20,7 +20,7 @@ from logging.handlers import TimedRotatingFileHandler
 from pathlib import Path
 from typing import NamedTuple
 
-from . import client, progress, provider, resets
+from . import client, heartbeat, progress, provider, resets
 from .config import (
     API_KEY,
     BLOCKED_STATE,
@@ -705,6 +705,20 @@ class Pacer:
     def tick(self):
         """Run one tick. Returns whether any gate was open, for the caller."""
         snapshot = self.read()
+        if self.config.heartbeat_webhook_url and self.config.heartbeat_archive:
+            try:
+                cleanup = heartbeat.archive_finished(
+                    Path(self.config.heartbeat_db),
+                    self.config.heartbeat_workspace,
+                    apply=True,
+                )
+                if cleanup["task_ids"]:
+                    log.info(
+                        "heartbeat: archived finished runs %s", cleanup["task_ids"]
+                    )
+                    snapshot = self.read()
+            except Exception as error:
+                log.warning("heartbeat: cleanup failed: %s", error)
         self.reconcile_capacity(snapshot)
         self.check_signals(snapshot.now, snapshot)
         self.booked = prune_booked(
@@ -893,6 +907,29 @@ class Pacer:
             log.info("heartbeat: already running")
             return
         provider_name, launchable = dry
+        if config.heartbeat_preflight:
+            try:
+                repositories = [
+                    Path(path) for path in config.heartbeat_repositories
+                ] or [Path.home() / path for path in heartbeat.REPOSITORIES]
+                allowed, reason = heartbeat.gate(
+                    Path(config.heartbeat_db),
+                    repositories,
+                    Path(config.pebble_snapshot),
+                    config.heartbeat_workspace,
+                    Path(config.heartbeat_vault),
+                    now,
+                )
+                if not allowed:
+                    log.info("heartbeat: skipped; %s", reason)
+                    return
+                if reason.startswith("preflight needs attention"):
+                    log.warning("heartbeat: %s", reason)
+            except Exception as error:
+                # An unreadable source needs a report, not a silent empty-board decision.
+                log.warning(
+                    "heartbeat: preflight failed; running for diagnosis: %s", error
+                )
         proactive = (
             not idle_retry
             and not self._launched_since_heartbeat

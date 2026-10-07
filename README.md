@@ -256,6 +256,10 @@ already running. Enable it with
 `PACER_HEARTBEAT_WEBHOOK_URL` and `PACER_HEARTBEAT_WEBHOOK_SECRET`; see the
 [deployment instructions](docs/tasks/2-heartbeat-webhook.md#deploy-on-gogo).
 
+The pacer can skip empty Heartbeat passes and archive finished runs. See
+[Heartbeat scripts](docs/heartbeat-scripts.md) for preflight, MCP payloads, tracker
+scheduling, configuration and installation of the `heartbeat` extra.
+
 **A prompt you queued never runs.** Check it is on a session the pacer can see: it reads
 every *idle* session, so a prompt parked on a `RUNNING` one waits for that turn to finish.
 

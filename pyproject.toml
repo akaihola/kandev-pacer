@@ -15,11 +15,14 @@ dependencies = [
 
 [project.optional-dependencies]
 t3 = ["hai-tasks"]
+heartbeat = ["hai-tasks"]
 
 [project.scripts]
 kandev-pacer = "kandev_pacer.runtime:main"
 make-paced = "kandev_pacer.make_paced:main"
 kandev-learn = "kandev_pacer.learn:main"
+heartbeat = "kandev_pacer.heartbeat:main"
+tasks-md = "kandev_pacer.tasks_md:main"
 
 [dependency-groups]
 dev = [

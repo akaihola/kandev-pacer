@@ -170,6 +170,20 @@ class Settings(BaseSettings):
     heartbeat_min_launchable: int = Field(2, alias="PACER_HEARTBEAT_MIN_LAUNCHABLE", ge=0)
     # Seconds between attempts, waived once the pacer has launched a task since the last one.
     heartbeat_min_interval: int = Field(1800, alias="PACER_HEARTBEAT_MIN_INTERVAL", ge=0)
+    heartbeat_preflight: bool = Field(True, alias="PACER_HEARTBEAT_PREFLIGHT")
+    heartbeat_archive: bool = Field(True, alias="PACER_HEARTBEAT_ARCHIVE")
+    heartbeat_db: str = Field(
+        str(Path.home() / ".kandev/data/kandev.db"), alias="PACER_HEARTBEAT_DB"
+    )
+    heartbeat_workspace: str = Field(
+        "Default Workspace", alias="PACER_HEARTBEAT_WORKSPACE"
+    )
+    heartbeat_repositories: list[str] = Field(
+        default_factory=list, alias="PACER_HEARTBEAT_REPOSITORIES"
+    )
+    heartbeat_vault: str = Field(
+        str(Path.home() / "my-knowledge"), alias="PACER_HEARTBEAT_VAULT"
+    )
     secrets_file: str = Field("", alias="PACER_SECRETS_FILE")
     fallback_after: float = Field(0, alias="PACER_FALLBACK_AFTER", ge=0)
     fallback_profiles_raw: str = Field("", alias="PACER_FALLBACK_PROFILES")

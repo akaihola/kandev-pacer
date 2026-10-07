@@ -946,6 +946,8 @@ def heartbeat(monkeypatch):
     monkeypatch.setattr(settings, "heartbeat_webhook_secret", "s3cret")
     monkeypatch.setattr(settings, "heartbeat_min_launchable", 2)
     monkeypatch.setattr(settings, "heartbeat_min_interval", 1800)
+    monkeypatch.setattr(settings, "heartbeat_preflight", False)
+    monkeypatch.setattr(settings, "heartbeat_archive", False)
     class Posted(list):
         status = 200          # what the fake webhook answers; a test moves it
 
@@ -2092,3 +2094,49 @@ def test_reset_confirms_quota_before_launch_or_queued_prompt(
     pacer.tick()
     assert len(calls) == 1
     assert ("message.queue.drain" if parked else "session.launch") in actions(board)
+
+
+def test_runtime_gate_skips_without_booking_webhook(
+    pacer, board, heartbeat, monkeypatch, caplog
+):
+    monkeypatch.setattr(settings, "heartbeat_preflight", True)
+    monkeypatch.setattr(
+        runtime.heartbeat, "gate", lambda *a: (False, "no free eligible work")
+    )
+    caplog.set_level("INFO", logger="kandev-pacer")
+    tick(pacer, board, [], {}, {})
+    assert not heartbeat and pacer._last_heartbeat_at is None
+    assert "no free eligible work" in caplog.text
+
+
+def test_runtime_preflight_error_preserves_webhook_diagnostics(
+    pacer, board, heartbeat, monkeypatch, caplog
+):
+    monkeypatch.setattr(settings, "heartbeat_preflight", True)
+
+    def unavailable(*args):
+        raise OSError("database is unavailable")
+
+    monkeypatch.setattr(runtime.heartbeat, "gate", unavailable)
+    tick(pacer, board, [], {}, {})
+    assert len(heartbeat) == 1
+    assert "running for diagnosis: database is unavailable" in caplog.text
+
+
+def test_runtime_refreshes_after_archiving_before_pacing(
+    pacer, board, heartbeat, monkeypatch
+):
+    monkeypatch.setattr(settings, "heartbeat_archive", True)
+    reads = []
+    original_read = pacer.read
+
+    def read():
+        reads.append(True)
+        return original_read()
+
+    monkeypatch.setattr(pacer, "read", read)
+    monkeypatch.setattr(
+        runtime.heartbeat, "archive_finished", lambda *a, **kw: {"task_ids": ["old"]}
+    )
+    tick(pacer, board, [], {}, {})
+    assert len(reads) == 2 and len(heartbeat) == 1
