@@ -1066,3 +1066,35 @@ def test_supplied_parent_still_requires_valid_thread(setup, parent):
         t3.T3Pacer(pacer.config, server).tick()
     assert not server.calls
     assert not list(pacer.state.glob("*.json"))
+
+
+@pytest.mark.parametrize("bypass", [False, True])
+def test_reset_aware_t3_launch_and_bypass_do_not_share_redemption(
+    setup, monkeypatch, tmp_path, bypass
+):
+    from test_resets import NOW, envelope
+
+    from kandev_pacer import resets
+    from kandev_pacer.quota import quota_verdict
+
+    pacer, _, server = setup
+    before, after = envelope(), envelope(used=0, count=1, roll=NOW + 604800)
+    pacer.config.reset_state_dir = str(tmp_path / "resets")
+    if bypass:
+        pacer.config.agent_providers_raw = (
+            "codex-acp=__api_key__ hermes-acp=__api_key__"
+        )
+        pacer.config.apikey_policy = "cap"
+    monkeypatch.setattr(t3.time, "time", lambda: NOW)
+    monkeypatch.setattr(t3, "quota_verdict", quota_verdict)
+    monkeypatch.setattr(t3.provider, "read", lambda *a, **kw: (before, {}))
+    monkeypatch.setattr(resets, "_identity", lambda *a: ("account", "token"))
+    reads = iter([before, after])
+    monkeypatch.setattr(resets, "_fresh", lambda *a: next(reads))
+    calls = []
+    monkeypatch.setattr(
+        resets, "_post", lambda *a: calls.append(a) or {"code": "reset"}
+    )
+    pacer.tick()
+    assert len(server.calls) == 1
+    assert len(calls) == (0 if bypass else 1)

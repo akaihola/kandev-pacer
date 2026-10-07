@@ -32,6 +32,7 @@ is due to reopen.
 
 import base64
 import json
+import re
 import time
 import urllib.request
 from dataclasses import dataclass
@@ -40,8 +41,9 @@ from pathlib import Path
 
 from .config import WINDOW_DURATIONS, settings
 
-USAGE_URL = "https://api.anthropic.com/api/oauth/usage"
+USAGE_URL = "https://api.anthropic.com/api/oauth/usage?cedar_ember=1&skip_spend=1"
 BETA_HEADER = "oauth-2025-04-20"
+CLAUDE_USER_AGENT = "claude-cli/2.1.292 (external, cli)"
 # The name this module reports usage under, and so the value PACER_PROVIDER must match.
 # Anything else leaves `parse_windows` with nothing and the gate blind -- which is the
 # existing fail-closed behaviour for a provider the payload does not carry.
@@ -161,6 +163,12 @@ def usage_envelope(payload, now, plan=""):
                     "provider": PROVIDER,
                     "plan": plan,
                     "windows": claude_windows(payload, now),
+                    "reset_credits": (
+                        claude_reset_credits(payload, now)
+                        if isinstance(payload.get("cedar_ember"), dict)
+                        and payload["cedar_ember"].get("eligible") is True
+                        else None
+                    ),
                 },
             }
         ]
@@ -208,13 +216,92 @@ def _get(token):
     """The one HTTP call, alone in a function so a test can stand in for it."""
     request = urllib.request.Request(
         USAGE_URL,
-        headers={"Authorization": f"Bearer {token}", "anthropic-beta": BETA_HEADER},
+        headers={
+            "Authorization": f"Bearer {token}",
+            "anthropic-beta": BETA_HEADER,
+            "User-Agent": CLAUDE_USER_AGENT,
+        },
     )
     try:
         with urllib.request.urlopen(request, timeout=TIMEOUT) as response:
             return json.loads(response.read())
     except Exception as error:
         raise QuotaUnavailable(f"provider usage read failed: {error}") from error
+
+
+def claude_reset_credits(payload, now):
+    """Only grants the provider currently allows us to claim count as budget."""
+    if not isinstance(payload, dict):
+        return []
+    block = payload.get("cedar_ember") or {}
+    if not isinstance(block, dict) or block.get("eligible") is not True:
+        return []
+    credits = []
+    grants = block.get("grants") or []
+    if not isinstance(grants, list):
+        return []
+    for grant in grants:
+        if not isinstance(grant, dict):
+            continue
+        count = grant.get("resets_left")
+        if (
+            not isinstance(count, int)
+            or isinstance(count, bool)
+            or count <= 0
+            or grant.get("paused")
+            or grant.get("usable_now") is not True
+            or not isinstance(grant.get("id"), str)
+            or not re.fullmatch(r"[a-z0-9_-]{1,40}", grant["id"])
+        ):
+            continue
+        try:
+            expiry = _timestamp(grant.get("ends_at"))
+        except (TypeError, ValueError):
+            continue
+        if expiry is not None and expiry <= now:
+            continue
+        credits.append({"id": grant["id"], "count": count, "expires_at": expiry})
+    next_id = block.get("next_grant_id")
+    if not any(credit["id"] == next_id for credit in credits):
+        return []
+    return sorted(credits, key=lambda credit: credit["id"] != next_id)
+
+
+def _timestamp(value):
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        raise ValueError("reset expiry must be an ISO timestamp")
+    parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    if parsed.tzinfo is None:
+        raise ValueError("reset expiry must include a timezone")
+    return parsed.timestamp()
+
+
+CODEX_CREDITS_URL = "https://chatgpt.com/backend-api/wham/rate-limit-reset-credits"
+
+
+def codex_reset_credits(payload, now):
+    if not isinstance(payload, dict) or not isinstance(payload.get("credits"), list):
+        return []
+    credits = []
+    for credit in payload["credits"]:
+        if not isinstance(credit, dict):
+            continue
+        if (
+            credit.get("status") != "available"
+            or credit.get("reset_type") != "codex_rate_limits"
+            or not isinstance(credit.get("id"), str)
+        ):
+            continue
+        try:
+            expiry = _timestamp(credit.get("expires_at"))
+        except (TypeError, ValueError):
+            continue
+        if expiry is None or expiry <= now:
+            continue
+        credits.append({"id": credit["id"], "count": 1, "expires_at": expiry})
+    return sorted(credits, key=lambda credit: credit["expires_at"])
 
 
 def fetch(now, path=None):
@@ -336,10 +423,10 @@ def codex_access_token(tokens, now):
     return tokens["access_token"]
 
 
-def _codex_get(token, account_id):
+def _codex_get(token, account_id, url=CODEX_USAGE_URL):
     """The one Codex HTTP call, alone in a function so a test can stand in for it."""
     request = urllib.request.Request(
-        CODEX_USAGE_URL,
+        url,
         headers={
             "Authorization": f"Bearer {token}",
             "chatgpt-account-id": account_id or "",
@@ -405,7 +492,18 @@ def codex_fetch(now, path=None):
     tokens = read_codex_credentials(path or settings.codex_credentials_path)
     payload = _codex_get(codex_access_token(tokens, now), tokens.get("account_id"))
     # plan_type rides in the response body, not the credential -- cosmetic, for the log line.
-    return codex_envelope(payload, now, payload.get("plan_type") or "")
+    envelope = codex_envelope(payload, now, payload.get("plan_type") or "")
+    try:
+        credits = _codex_get(
+            codex_access_token(tokens, now), tokens.get("account_id"), CODEX_CREDITS_URL
+        )
+        envelope["agents"][0]["usage"]["reset_credits"] = codex_reset_credits(
+            credits, now
+        )
+    except QuotaUnavailable:
+        # Optional credits failing must not hide successfully read quota.
+        pass
+    return envelope
 
 
 # --- the cache in front of it ---
@@ -478,17 +576,7 @@ def codex_usage(fresh=False, now=None):
 SOURCE_PROVIDERS = {"anthropic", CODEX_PROVIDER, "codex"}
 
 
-def _read_source(name, fresh, now):
-    """One provider's usage envelope, from its source. Raises QuotaUnavailable like the sources."""
-    if settings.quota_source == "pebble":
-        envelope = pebble_fetch(now)
-        provider_name = "openai" if name in (CODEX_PROVIDER, "codex") else name
-        return {
-            "agents": [
-                agent for agent in envelope["agents"]
-                if agent["usage"].get("provider") == provider_name
-            ]
-        }
+def direct_read(name, fresh, now):
     if name == "anthropic":
         return usage(fresh=fresh, now=now)
     if name in (CODEX_PROVIDER, "codex"):
@@ -496,6 +584,33 @@ def _read_source(name, fresh, now):
     raise QuotaUnavailable(
         f"provider {name!r} has no usage source -- PACER_PROVIDERS names it but nothing reads it"
     )
+
+
+def _read_source(name, fresh, now):
+    """Read the configured source, supplementing Pebble with cached banked grants."""
+    if settings.quota_source != "pebble":
+        return direct_read(name, fresh, now)
+    envelope = pebble_fetch(now)
+    provider_name = "openai" if name in (CODEX_PROVIDER, "codex") else name
+    envelope = {
+        "agents": [
+            a for a in envelope["agents"] if a["usage"].get("provider") == provider_name
+        ]
+    }
+    try:
+        live = direct_read(name, fresh, now)
+    except QuotaUnavailable:
+        return envelope
+    for agent in live.get("agents", []):
+        credits = (agent.get("usage") or {}).get("reset_credits")
+        if credits:
+            # Resetting changes quota before the collector can publish a new
+            # snapshot. Use live windows while credits can affect admission.
+            return live
+        if credits is not None:
+            for snapshot_agent in envelope["agents"]:
+                snapshot_agent["usage"]["reset_credits"] = credits
+    return envelope
 
 
 def read(providers, fresh=False, now=None):

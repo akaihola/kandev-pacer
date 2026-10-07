@@ -310,6 +310,7 @@ def test_direct_quota_source_remains_the_default(monkeypatch):
 
 
 def test_pebble_quota_source_is_selected(monkeypatch):
+    monkeypatch.setattr(provider, "direct_read", lambda *a: {"agents": []})
     monkeypatch.setenv("PACER_QUOTA_SOURCE", "pebble")
     monkeypatch.setattr(settings, "quota_source", Settings().quota_source)
     envelope = {"agents": [{"usage": {"provider": "anthropic"}}]}
@@ -318,6 +319,7 @@ def test_pebble_quota_source_is_selected(monkeypatch):
 
 
 def test_pebble_source_filters_the_requested_provider(monkeypatch):
+    monkeypatch.setattr(provider, "direct_read", lambda *a: {"agents": []})
     monkeypatch.setattr(settings, "quota_source", "pebble")
     monkeypatch.setattr(provider, "pebble_fetch", lambda now: {"agents": [
         {"usage": {"provider": "anthropic"}}, {"usage": {"provider": "openai"}}

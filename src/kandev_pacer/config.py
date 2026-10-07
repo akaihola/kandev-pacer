@@ -91,6 +91,14 @@ class Settings(BaseSettings):
     )
     pebble_max_age: float = Field(900, alias="PACER_PEBBLE_MAX_AGE", ge=0)
 
+    reset_state_dir: str = Field(
+        str(Path.home() / ".local/state/kandev-pacer/resets"),
+        alias="PACER_RESET_STATE_DIR",
+    )
+    claude_account_path: str = Field(
+        str(Path.home() / ".claude.json"), alias="PACER_CLAUDE_ACCOUNT_PATH"
+    )
+
     # Running turns plus backend capacity deferrals, per provider. `concurrency_total` caps the sum
     # across providers -- the machine running the worktrees is the one genuinely shared thing.
     concurrency: int = Field(1, alias="PACER_CONCURRENCY", ge=1)

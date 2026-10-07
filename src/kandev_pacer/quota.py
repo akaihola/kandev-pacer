@@ -138,6 +138,56 @@ class Verdict:
         return self.gate == "open"
 
 
+def available_reset_credits(usage, now, provider):
+    return [
+        credit
+        for agent in usage.get("agents", [])
+        if (agent.get("usage") or {}).get("provider") == provider
+        for credit in (agent.get("usage") or {}).get("reset_credits") or []
+        if credit.get("expires_at") is None or credit["expires_at"] > now
+    ]
+
+
+def reset_plan(usage, windows, now, provider):
+    """Divide a weekly allowance over usable resets without spending future quota."""
+    credits = available_reset_credits(usage, now, provider)
+    weekly = [w for w in windows if w["duration_s"] == 7 * 86400 and not w.get("scope")]
+    if not credits or not weekly:
+        return windows, 0
+    roll = min(w["resets_at"] for w in weekly)
+    # Codex replaces the natural rollover. Save longer-lived credits until the
+    # last natural week before expiry; Claude can add budget to this week.
+    usable = [
+        credit
+        for credit in credits
+        if provider != "openai"
+        or credit.get("expires_at") is None
+        or credit["expires_at"] <= roll
+    ]
+    count = sum(credit["count"] for credit in usable)
+    if not count:
+        return windows, 0
+    deadline = min([roll, *(c["expires_at"] for c in usable if c.get("expires_at"))])
+    planned = []
+    for window in windows:
+        copy = dict(window)
+        if window["duration_s"] == 7 * 86400:
+            start = window["resets_at"] - window["duration_s"]
+            end = min(window["resets_at"], deadline)
+            duration = max(1.0, (end - start) / (count + 1))
+            copy.update(pace_resets_at=start + duration, pace_duration_s=duration)
+        planned.append(copy)
+    return planned, count
+
+
+def pacing_elapsed(window, now):
+    return elapsed_frac(
+        now,
+        window.get("pace_resets_at", window["resets_at"]),
+        window.get("pace_duration_s", window["duration_s"]),
+    )
+
+
 def quota_verdict(usage, windows, now, config, provider=None):
     """Read the usage payload against the burn line for one provider. Pure: no I/O, no state.
 
@@ -155,12 +205,13 @@ def quota_verdict(usage, windows, now, config, provider=None):
                 f"{sorted(usage_providers(usage))} -> WITHHOLDING (check PACER_PROVIDER)"
             ),
         )
+    windows, resets = reset_plan(usage, windows, now, provider)
     active = [window for window in windows if _window_active(window, now, config)]
     worst = min(
         (
             headroom(
                 window["consumed_frac"],
-                elapsed_frac(now, window["resets_at"], window["duration_s"]),
+                pacing_elapsed(window, now),
                 _window_alpha(window, config),
             )
             for window in active
@@ -174,23 +225,51 @@ def quota_verdict(usage, windows, now, config, provider=None):
         default=None,
     )
     # The hard ceiling first: it overrides the burn line, however much headroom says.
-    over = [w for w in windows if w["consumed_frac"] > config.backstop] \
-        if config.backstop < 1.0 else []
+    over = [
+        w
+        for w in windows
+        if (
+            w["consumed_frac"] >= 1.0
+            if "pace_resets_at" in w
+            else config.backstop < 1.0 and w["consumed_frac"] > config.backstop
+        )
+    ]
     if over:
         # A ceiling lifts only when the breaching window rolls -- it reads `c`, which does
         # not fall before then, whatever `e` does. The burn line still has to clear
         # afterwards, so the release is the later of the two.
         rolls = max(w["resets_at"] for w in over)
-        return Verdict("ceiling", worst, (
-            f"headroom={worst:+.3f} CEILING (consumed>{config.backstop:.2f}) "
-            "-> withholding"
-        ), max(rolls, healed or now))
+        reason = (
+            "reset budget exhausted"
+            if any("pace_resets_at" in w for w in over)
+            else f"consumed>{config.backstop:.2f}"
+        )
+        return Verdict(
+            "ceiling",
+            worst,
+            (f"headroom={worst:+.3f} CEILING ({reason}) -> withholding"),
+            max(rolls, healed or now),
+        )
+    available = sum(c["count"] for c in available_reset_credits(usage, now, provider))
+    note = ""
+    if resets:
+        target = min(w["pace_resets_at"] for w in windows if "pace_resets_at" in w)
+        note = (
+            f"; {resets} resets planned, redeem at weekly exhaustion, "
+            f"target ~{datetime.fromtimestamp(target):%Y-%m-%d %H:%M}"
+        )
+    elif available:
+        note = f"; {available} resets reserved to preserve natural rollover"
     if worst < 0:
-        return Verdict("paused", worst, f"headroom={worst:+.3f} PAUSED", healed)
-    return Verdict("open", worst, "")
+        return Verdict("paused", worst, f"headroom={worst:+.3f} PAUSED" + note, healed)
+    return Verdict(
+        "open", worst, f"headroom={worst:+.3f} open" + note if available else ""
+    )
 
 
 def _window_alpha(window, config):
+    if "pace_resets_at" in window:
+        return 1.0
     return config.alpha_5h if window["duration_s"] == 5 * 3600 else config.alpha
 
 
@@ -202,19 +281,31 @@ def _window_active(window, now, config):
 
 
 def _window_resume_at(window, now, config):
-    return window_resume_at(window, now, _window_alpha(window, config))
+    paced = {
+        **window,
+        "resets_at": window.get("pace_resets_at", window["resets_at"]),
+        "duration_s": window.get("pace_duration_s", window["duration_s"]),
+    }
+    return window_resume_at(paced, now, _window_alpha(window, config))
 
 
 def window_records(windows, now, alpha=1.0):
     records = []
     for window in windows:
-        elapsed = elapsed_frac(now, window["resets_at"], window["duration_s"])
+        elapsed = pacing_elapsed(window, now)
         records.append(
             {
                 "label": window.get("label"),
                 "c": round(window["consumed_frac"], 4),
                 "e": round(elapsed, 4),
-                "h": round(headroom(window["consumed_frac"], elapsed, alpha), 4),
+                "h": round(
+                    headroom(
+                        window["consumed_frac"],
+                        elapsed,
+                        1.0 if "pace_resets_at" in window else alpha,
+                    ),
+                    4,
+                ),
                 "d": window["duration_s"],
                 "resets_at": window["resets_at"],
             }

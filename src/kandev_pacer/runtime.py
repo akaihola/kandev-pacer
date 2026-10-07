@@ -14,13 +14,13 @@ import argparse
 import json
 import logging
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime
 from logging.handlers import TimedRotatingFileHandler
 from pathlib import Path
 from typing import NamedTuple
 
-from . import client, progress, provider
+from . import client, progress, provider, resets
 from .config import (
     API_KEY,
     BLOCKED_STATE,
@@ -38,6 +38,7 @@ from .quota import (
     class_windows,
     poll_interval,
     quota_verdict,
+    reset_plan,
     resume_note,
     scope_names,
     tick_record,
@@ -714,6 +715,50 @@ class Pacer:
         self.stalled = prune_stalls(self.stalled, snapshot.tasks, snapshot.sessions)
         self._spent = 0  # turns spent this tick, for the shared total cap
 
+        waiting = {
+            snapshot.task_providers[task["id"]]
+            for task in snapshot.tasks
+            if is_launchable(
+                task,
+                snapshot.sessions[task["id"]],
+                self.board,
+                self.skip_keys(snapshot.now),
+            )
+        } - {None, API_KEY}
+        # A queued prompt on a parked card also needs quota. Read queues only
+        # when an exhausted reset-assisted budget could otherwise hide that work.
+        exhausted = {
+            name
+            for name, windows in snapshot.windows.items()
+            if any(
+                w["consumed_frac"] >= 1 and "pace_resets_at" in w
+                for w in reset_plan(snapshot.usage, windows, snapshot.now, name)[0]
+            )
+        }
+        exhausted.update(resets.pending_providers(self.config))
+        parked = {
+            task["id"]: snapshot.sessions[task["id"]]
+            for task in snapshot.tasks
+            if snapshot.task_providers[task["id"]] in exhausted - waiting
+            and not is_capacity_deferred(task)
+        }
+        queued_for_reset = queued_counts(parked)
+        waiting.update(
+            snapshot.task_providers[task_id]
+            for task_id, sessions in parked.items()
+            if any(
+                (queued_for_reset.get(session["id"]) or 0) > 0 for session in sessions
+            )
+        )
+        usage, errors = resets.apply(
+            snapshot.usage, snapshot.quota_errors, waiting, self.config, snapshot.now
+        )
+        snapshot = replace(
+            snapshot,
+            usage=usage,
+            quota_errors=errors,
+            windows=windows_by_provider(usage),
+        )
         self.note_withheld(snapshot)
         self.note_provider_recoveries(snapshot)
         groups = self.gate_groups(snapshot)
@@ -934,26 +979,31 @@ class Pacer:
             ):  # a standing source outage is counted silently between restates
                 (log.warning if warn else log.info)(line)
             record = tick_record(
-                    now,
-                    gate,
-                    outcome.action,
-                    window_records(
+                now,
+                gate,
+                outcome.action,
+                window_records(
+                    reset_plan(
+                        snapshot.usage,
                         class_windows(
                             snapshot.windows.get(provider_name, []), group.scopes
                         ),
                         now,
-                        self.config.alpha,
-                    ),
-                    running,
-                    launchable_of(group),
-                    self.config.concurrency,
-                    len(self.booked),
-                    outcome.launched,
-                    round(self.interval, 1),
-                    provider=_provider_label(provider_name),
-                    scope="+".join(group.scopes) or None,
-                    fallback=bool(outcome.launched and outcome.launched.get("fallback")),
-                )
+                        provider_name,
+                    )[0],
+                    now,
+                    self.config.alpha,
+                ),
+                running,
+                launchable_of(group),
+                self.config.concurrency,
+                len(self.booked),
+                outcome.launched,
+                round(self.interval, 1),
+                provider=_provider_label(provider_name),
+                scope="+".join(group.scopes) or None,
+                fallback=bool(outcome.launched and outcome.launched.get("fallback")),
+            )
             record["deferred"] = deferred
             self.log_event(record)
             return gate == "open"
