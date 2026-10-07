@@ -6,12 +6,13 @@ Rules for TASKS.md usage are at the bottom of the file.
 
 ## Ordered backlog
 
+## Scheduled
+
 - [*] Look at
   agent@gogo:prg/kandev-config/docs/2026-10-07-heartbeat-deterministic-script-research.md
   and implement the scripts. Then add a ~/prg/kandev-config/ task to adapt the heartbeat
   automation prompt to use the new scripts.
-
-## Scheduled
+  <!-- hai:{"id":"simple-3b8c36c856df2af8","updatedAt":"2026-10-07T15:38:04.813Z"} -->
 
 - [*] Look at
   agent@gogo:prg/kandev-config/docs/2026-10-07-heartbeat-deterministic-script-research.md
