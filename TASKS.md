@@ -6,14 +6,14 @@ Rules for TASKS.md usage are at the bottom of the file.
 
 ## Ordered backlog
 
-- [32] Add reset-aware pacing
-    <!-- hai:{"id":"simple-a0c0911c-b11f-4e28-9b79-867593c381eb","priority":"none","labels":[],"createdAt":"2026-10-06T18:43:18.623Z","updatedAt":"2026-10-06T18:43:18.623Z"} -->
-
 - [*] Look at
   agent@gogo:prg/kandev-config/docs/2026-10-07-heartbeat-deterministic-script-research.md
   and do a similar analysis for the T3 heartbeat that Kandev-pacer is using
 
 ## Scheduled
+
+- [32] Add reset-aware pacing
+  <!-- hai:{"id":"simple-a0c0911c-b11f-4e28-9b79-867593c381eb","priority":"none","labels":[],"createdAt":"2026-10-06T18:43:18.623Z","updatedAt":"2026-10-07T15:20:36.160Z"} -->
 
 ## In Progress
 
