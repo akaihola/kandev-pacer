@@ -8,13 +8,13 @@ Rules for TASKS.md usage are at the bottom of the file.
 
 ## Scheduled
 
-- [*] Look at
+## In Progress
+
+- [~] [*] Look at
   agent@gogo:prg/kandev-config/docs/2026-10-07-heartbeat-deterministic-script-research.md
   and implement the scripts. Then add a ~/prg/kandev-config/ task to adapt the heartbeat
   automation prompt to use the new scripts.
-  <!-- hai:{"id":"simple-3b8c36c856df2af8","updatedAt":"2026-10-07T15:38:04.813Z"} -->
-
-## In Progress
+  <!-- hai:{"id":"simple-3b8c36c856df2af8","updatedAt":"2026-10-07T15:53:25.882Z"} -->
 
 - [16] Learn from session observation records: a lowest-priority Kandev task the
   Heartbeat creates when unread records exist, writing observations and proposed
