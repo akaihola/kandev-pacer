@@ -8,14 +8,15 @@ Rules for TASKS.md usage are at the bottom of the file.
 
 - [*] Look at
   agent@gogo:prg/kandev-config/docs/2026-10-07-heartbeat-deterministic-script-research.md
-  and do a similar analysis for the T3 heartbeat that Kandev-pacer is using
-
-- [*] Look at
-  agent@gogo:prg/kandev-config/docs/2026-10-07-heartbeat-deterministic-script-research.md
   and implement the scripts. Then add a ~/prg/kandev-config/ task to adapt the heartbeat
   automation prompt to use the new scripts.
 
 ## Scheduled
+
+- [*] Look at
+  agent@gogo:prg/kandev-config/docs/2026-10-07-heartbeat-deterministic-script-research.md
+  and do a similar analysis for the T3 heartbeat that Kandev-pacer is using
+  <!-- hai:{"id":"simple-1fc55ce1c4d74535","updatedAt":"2026-10-07T15:27:15.958Z"} -->
 
 - [32] Add reset-aware pacing
     <!-- hai:{"id":"simple-a0c0911c-b11f-4e28-9b79-867593c381eb","priority":"none","labels":[],"createdAt":"2026-10-06T18:43:18.623Z","updatedAt":"2026-10-07T15:20:36.160Z"} -->
