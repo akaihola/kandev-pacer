@@ -343,6 +343,12 @@ a configured model candidate to launch work. With inherited or fixed selection,
 the pacer waits for that model's gate. Automatic selection can switch providers
 when another configured candidate is available.
 
+Both modes now use [reset-aware pacing](reset-aware-pacing.md).
+The pacer reads banked credits, adjusts weekly pacing and redeems at budget exhaustion
+when work is waiting. Status shows planned resets and the current depletion target,
+or credits reserved to preserve Codex's natural rollover. A reset failure withholds
+its provider until fresh quota confirms recovery.
+
 To spend a quota reset without burn-line pacing, the Kandev workaround also works
 in T3 mode:
 

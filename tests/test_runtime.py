@@ -2059,3 +2059,36 @@ def test_dump_order_explains_consumer_last(pacer, board, capsys):
     assert text.index("Normal work") < text.index(OBSERVATION_CONSUMER_TITLE)
     assert "last among eligible launches of its provider" in text
     assert "static order" in text
+
+
+@pytest.mark.parametrize("parked", [False, True])
+def test_reset_confirms_quota_before_launch_or_queued_prompt(
+    pacer, board, monkeypatch, tmp_path, parked
+):
+    from test_resets import NOW, envelope
+
+    from kandev_pacer import resets
+
+    before = envelope("anthropic")
+    after = envelope("anthropic", used=0, count=1)
+    monkeypatch.setattr(runtime.time, "time", lambda: NOW)
+    monkeypatch.setattr(settings, "reset_state_dir", str(tmp_path / "resets"))
+    monkeypatch.setattr(pacer, "usage", lambda now: (before, {}))
+    monkeypatch.setattr(resets, "_identity", lambda *a: ("account", "token"))
+    reads = iter([before, after])
+    monkeypatch.setattr(resets, "_fresh", lambda *a: next(reads))
+    calls = []
+    monkeypatch.setattr(
+        resets, "_post", lambda *a: calls.append(a) or {"result": "reset"}
+    )
+    step = "review" if parked else "ip"
+    board.load(
+        [_task("t", step)],
+        {"t": _sess("s", "WAITING_FOR_INPUT")},
+        {"s": 1 if parked else 0},
+    )
+    pacer.read()
+    assert not calls
+    pacer.tick()
+    assert len(calls) == 1
+    assert ("message.queue.drain" if parked else "session.launch") in actions(board)

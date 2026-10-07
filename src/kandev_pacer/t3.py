@@ -16,7 +16,7 @@ from collections import Counter
 from datetime import UTC, datetime
 from pathlib import Path
 
-from . import provider
+from . import provider, resets
 from .config import API_KEY
 from .quota import (
     class_windows,
@@ -345,8 +345,7 @@ class T3Pacer:
             usage, class_windows(windows, scopes), now, self.config, provider=name
         )
 
-    def launch_settings(self, parent, running, usage, errors, now):
-        """Choose settings before preparing a durable launch record."""
+    def model_candidates(self, parent):
         configured = self.config.t3_model
         if configured == "automatic":
             candidates = [
@@ -356,9 +355,13 @@ class T3Pacer:
             candidates = [configured.model_dump(exclude_none=True)]
         else:
             candidates = [parent["modelSelection"]]
+        return candidates
+
+    def launch_settings(self, parent, running, usage, errors, now):
+        """Choose settings before preparing a durable launch record."""
         available = [
             selection
-            for selection in candidates
+            for selection in self.model_candidates(parent)
             if self.admitted(selection, running, usage, errors, now)
         ]
         if not available:
@@ -498,6 +501,26 @@ class T3Pacer:
                 raise Withheld("Unknown launch record phase; inspect state directory")
         now = time.time()
         usage, errors = provider.read(self.config.providers, now=now)
+        waiting = set()
+        if pending:
+            waiting.add(selection_provider(pending[0][1]["command"]["modelSelection"]))
+        else:
+            for tracker, (store, parent_id) in self.trackers.items():
+                if not any(
+                    (tracker, issue["id"]) not in records
+                    for issue in eligible(store.read())
+                ):
+                    continue
+                parent = threads.get(parent_id, {}) if parent_id else {}
+                waiting.update(
+                    selection_provider(model) for model in self.model_candidates(parent)
+                )
+        waiting = {
+            name
+            for name in waiting
+            if name in self.config.providers and not self.quota_bypassed(name)
+        }
+        usage, errors = resets.apply(usage, errors, waiting, self.config, now)
         self.report_status(running, usage, errors, now, threads)
         # An unresolved launch blocks new admissions, even when its gate is closed.
         if pending:

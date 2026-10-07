@@ -78,6 +78,11 @@ the workflows it is pacing and the ones it is not, with the reason, at startup a
 
 ## Configuration
 
+The pacer automatically plans around available banked resets and redeems
+one when weekly budget is exhausted and subscription work is waiting. Codex resets
+start new windows; Claude retains its natural weekly rollover. See
+[reset-aware pacing](docs/reset-aware-pacing.md) for scheduling and recovery.
+
 Configuration is read from `~/.config/kandev-pacer/config.toml`, environment variables,
 and command-line options, in that precedence order (later sources win). All values are
 validated at startup — a bad value stops the pacer with its name in the message.
@@ -92,7 +97,9 @@ long option such as `--interval` and `--concurrency`.
 | `KANDEV_WS_URL` | derived from `KANDEV_URL` | the `/ws` endpoint, if it differs |
 | `PACER_PROVIDER` | `anthropic` | which usage agent to gate on. A name matching nothing **fails closed** rather than pacing blind |
 | `PACER_PROVIDERS` | `$PACER_PROVIDER` | the subscriptions to pace, comma- or space-separated (e.g. `anthropic,openai`). Naming more than one turns on per-provider gating; see [Two subscriptions](#two-subscriptions) |
-| `PACER_QUOTA_SOURCE` | `direct` | `direct` reads provider endpoints; `pebble` reads the collector snapshot |
+| `PACER_QUOTA_SOURCE` | `direct` | `direct` reads provider endpoints; `pebble` reads snapshots with cached live reset data |
+| `PACER_RESET_STATE_DIR` | `~/.local/state/kandev-pacer/resets` | private account locks and pending reset request IDs shared by both modes |
+| `PACER_CLAUDE_ACCOUNT_PATH` | `~/.claude.json` | Claude organization record needed for reset redemption |
 | `PACER_PEBBLE_SNAPSHOT` | `~/.local/state/pebble-quota/latest.json` | collector snapshot path |
 | `PACER_PEBBLE_MAX_AGE` | `900` | maximum snapshot age in seconds |
 | `PACER_CONCURRENCY` | `1` | how many paced turns may run at once **per provider** |
@@ -103,7 +110,7 @@ long option such as `--interval` and `--concurrency`.
 | `PACER_ALPHA` | `1.0` | target burn line. Below 1 aims under steady, finishing each window with quota spare |
 | `PACER_ALPHA_5H` | `1.0` | target burn line for 5-hour windows only |
 | `PACER_INTERACTIVE_HOURS` | unset | hour range such as `08-23`; outside it, skip the 5-hour burn-line rule while weekly windows and the backstop still apply |
-| `PACER_BACKSTOP` | `0.97` | consumed fraction at which everything is withheld regardless. `1.0` disables |
+| `PACER_BACKSTOP` | `0.97` | consumed fraction at which work is withheld. Reset-assisted weekly segments can reach 100% for redemption; `1.0` disables the ordinary backstop |
 | `PACER_INTERVAL` | `30` | seconds between ticks while headroom is at or above the burn line. Below it the tick paces itself on the wait, in 5–120s — see below |
 | `PACER_REFUSAL_WINDOW` | `10` | how long a launch waits. Only long enough to catch a refusal — an accepted launch is answered minutes later, and waiting froze the loop |
 | `PACER_LAUNCH_LATENCY` | `90` | how long kandev may take to make an accepted launch visible. Bookings last three ticks at `PACER_INTERVAL` plus this |
