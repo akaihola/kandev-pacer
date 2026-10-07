@@ -40,3 +40,11 @@ The target maximizes available weekly allowance under sustained runnable work.
 Actual token throughput depends on task costs, provider limits and available work;
 a pacer cannot guarantee that every expiring reset will be exhausted. Session-only
 and unidentified reset types do not get a weekly acceleration plan.
+
+## Plan refinement, 2026-10-07
+
+The host configuration uses Pebble, so direct-only redemption would leave Kandev
+without this feature. Pebble mode now supplements its snapshot with cached live
+provider reads. While credits are available, live windows replace snapshot windows
+to avoid acting on pre-reset usage. Optional live-read failure falls back to Pebble.
+Redemption rechecks and confirms live quota regardless of the selected source.
