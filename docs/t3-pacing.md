@@ -343,18 +343,20 @@ a configured model candidate to launch work. With inherited or fixed selection,
 the pacer waits for that model's gate. Automatic selection can switch providers
 when another configured candidate is available.
 
-To spend a Codex reset without burn-line pacing, the Kandev workaround also works
+To spend a quota reset without burn-line pacing, the Kandev workaround also works
 in T3 mode:
 
 ```bash
-uv run --extra t3 --frozen kandev-pacer --config ~/.config/kandev-pacer/config-t3.toml --agent-providers-raw 'codex-acp=__api_key__ hermes-acp=__api_key__' --apikey-policy cap
+uv run --extra t3 --frozen kandev-pacer --config ~/.config/kandev-pacer/config-t3.toml --agent-providers-raw 'codex=__api_key__ claudeAgent=__api_key__' --apikey-policy cap
 ```
 
-`codex=__api_key__` also selects this bypass. `claudeAgent=__api_key__` bypasses
-Anthropic pacing. T3 instance names take precedence over the legacy `codex-acp`
-alias. The override changes pacing only; T3 authentication stays as configured.
+`codex=__api_key__` bypasses OpenAI pacing and `claudeAgent=__api_key__` bypasses
+Anthropic pacing. The Kandev agent names `codex-acp` and `claude-acp` work as
+aliases. If both names are set for one provider, the T3 instance name wins.
+The override changes pacing only; T3 authentication stays as configured.
 The log says `quota bypass, concurrency only`. Provider and total concurrency
 limits still apply, including pending launch retries. With `--apikey-policy
 withhold`, bypassed providers cannot launch. Remove the override to restore quota
-pacing after using the reset. `hermes-acp` has no effect in T3 mode because Hermes
-is not a supported T3 provider instance.
+pacing after using the reset. Any other key, such as `hermes-acp`, has no effect
+in T3 mode because Hermes is not a supported T3 provider instance. The pacer logs
+a warning at startup for each ignored entry.

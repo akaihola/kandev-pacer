@@ -778,15 +778,19 @@ def test_status_reports_quota_failure_even_without_parent(setup, monkeypatch, ca
 
 
 @pytest.mark.parametrize(
-    "overrides, expected",
+    "overrides, codex, claude",
     [
-        ("codex-acp=__api_key__", True),
-        ("codex-acp=__api_key__ codex=openai", False),
-        ("claudeAgent=__api_key__", False),
+        ("codex-acp=__api_key__", True, False),
+        ("codex=__api_key__", True, False),
+        ("codex-acp=__api_key__ codex=openai", False, False),
+        ("claude-acp=__api_key__", False, True),
+        ("claudeAgent=__api_key__", False, True),
+        ("claude-acp=__api_key__ claudeAgent=anthropic", False, False),
+        ("codex=__api_key__ claudeAgent=__api_key__", True, True),
     ],
 )
 def test_bypass_does_not_change_other_provider_gates(
-    setup, monkeypatch, overrides, expected
+    setup, monkeypatch, overrides, codex, claude
 ):
     from collections import Counter
 
@@ -798,11 +802,28 @@ def test_bypass_does_not_change_other_provider_gates(
     )
     assert (
         pacer.admitted({"instanceId": "codex", "model": "gpt"}, Counter(), {}, {}, 0)
-        is expected
+        is codex
     )
-    assert pacer.admitted(
-        {"instanceId": "claudeAgent", "model": "claude-fable"}, Counter(), {}, {}, 0
-    ) is (overrides == "claudeAgent=__api_key__")
+    assert (
+        pacer.admitted(
+            {"instanceId": "claudeAgent", "model": "claude-fable"}, Counter(), {}, {}, 0
+        )
+        is claude
+    )
+
+
+def test_unknown_override_keys_warn_at_startup(setup, caplog):
+    pacer, _, server = setup
+    pacer.config.agent_providers_raw = (
+        "codex=__api_key__ claudeAgent=__api_key__ codex-acp=__api_key__ "
+        "claude-acp=__api_key__ hermes-acp=__api_key__"
+    )
+    t3.T3Pacer(pacer.config, server)
+    assert [r.getMessage() for r in caplog.records if r.levelname == "WARNING"] == [
+        "T3 ignores --agent-providers-raw entry hermes-acp=__api_key__: it matches "
+        "no T3 provider instance. Use codex or claudeAgent, or the Kandev aliases "
+        "codex-acp or claude-acp"
+    ]
 
 
 def configure_models(pacer, model="automatic"):

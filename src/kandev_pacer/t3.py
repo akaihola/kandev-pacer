@@ -30,6 +30,9 @@ from .t3_client import Server, T3ConfigurationError, T3ConnectionError, T3Reject
 
 log = logging.getLogger("kandev-pacer")
 PROVIDERS = {"codex": "openai", "claudeAgent": "anthropic"}
+# Kandev agent names accepted in PACER_AGENT_PROVIDERS for the T3 instance, so the Kandev
+# quota-bypass workaround carries over. The instance name wins when both are set.
+KANDEV_ALIASES = {"codex": "codex-acp", "claudeAgent": "claude-acp"}
 
 
 def selection_provider(selection):
@@ -177,6 +180,17 @@ class T3Pacer:
             self.trackers[path] = (TasksStore(path), parent)
         self.state = Path(config.t3_state_dir).expanduser()
         self.state.mkdir(parents=True, exist_ok=True, mode=0o700)
+        known = {*PROVIDERS, *KANDEV_ALIASES.values()}
+        for agent, value in config.agent_provider_overrides.items():
+            if agent not in known:
+                log.warning(
+                    "T3 ignores --agent-providers-raw entry %s=%s: it matches no T3 "
+                    "provider instance. Use %s, or the Kandev aliases %s",
+                    agent,
+                    value,
+                    " or ".join(PROVIDERS),
+                    " or ".join(KANDEV_ALIASES.values()),
+                )
 
     def record_path(self, tracker, issue):
         key = hashlib.sha256((tracker + "\0" + issue).encode()).hexdigest()
@@ -370,12 +384,8 @@ class T3Pacer:
             (key for key, value in PROVIDERS.items() if value == name), None
         )
         overrides = self.config.agent_provider_overrides
-        return (
-            overrides.get(
-                instance, overrides.get("codex-acp") if instance == "codex" else None
-            )
-            == API_KEY
-        )
+        alias = overrides.get(KANDEV_ALIASES.get(instance))
+        return overrides.get(instance, alias) == API_KEY
 
     def report_status(self, running, usage, errors, now, threads):
         windows = windows_by_provider(usage)
