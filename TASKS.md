@@ -10,10 +10,15 @@ Rules for TASKS.md usage are at the bottom of the file.
   agent@gogo:prg/kandev-config/docs/2026-10-07-heartbeat-deterministic-script-research.md
   and do a similar analysis for the T3 heartbeat that Kandev-pacer is using
 
+- [*] Look at
+  agent@gogo:prg/kandev-config/docs/2026-10-07-heartbeat-deterministic-script-research.md
+  and implement the scripts. Then add a ~/prg/kandev-config/ task to adapt the heartbeat
+  automation prompt to use the new scripts.
+
 ## Scheduled
 
 - [32] Add reset-aware pacing
-  <!-- hai:{"id":"simple-a0c0911c-b11f-4e28-9b79-867593c381eb","priority":"none","labels":[],"createdAt":"2026-10-06T18:43:18.623Z","updatedAt":"2026-10-07T15:20:36.160Z"} -->
+    <!-- hai:{"id":"simple-a0c0911c-b11f-4e28-9b79-867593c381eb","priority":"none","labels":[],"createdAt":"2026-10-06T18:43:18.623Z","updatedAt":"2026-10-07T15:20:36.160Z"} -->
 
 ## In Progress
 
@@ -38,49 +43,49 @@ Rules for TASKS.md usage are at the bottom of the file.
       capacity logs why nothing else launches.
 
 - [ ] [31] Dirty repo blocks all trackers
-    <!-- hai:{"id":"simple-5569346b-76c6-4a78-ad00-4f62faa13598","priority":"none","labels":[],"createdAt":"2026-10-06T05:24:40.114Z","updatedAt":"2026-10-06T05:39:22.197Z"} -->
+      <!-- hai:{"id":"simple-5569346b-76c6-4a78-ad00-4f62faa13598","priority":"none","labels":[],"createdAt":"2026-10-06T05:24:40.114Z","updatedAt":"2026-10-06T05:39:22.197Z"} -->
 
 - [x] [29] Unclear tracker error
-    <!-- hai:{"id":"simple-deb4a03b-3449-4cf8-8d19-6efb79ccd008","priority":"none","labels":[],"createdAt":"2026-10-05T19:03:41.798Z","updatedAt":"2026-10-05T19:32:13.326Z"} -->
+      <!-- hai:{"id":"simple-deb4a03b-3449-4cf8-8d19-6efb79ccd008","priority":"none","labels":[],"createdAt":"2026-10-05T19:03:41.798Z","updatedAt":"2026-10-05T19:32:13.326Z"} -->
 
 - [x] [30] Unclear non-clean repository error
-    <!-- hai:{"id":"simple-9657c54f-11fb-4412-a07f-b516ee58254c","priority":"none","labels":[],"createdAt":"2026-10-05T19:04:41.824Z","updatedAt":"2026-10-05T19:30:54.689Z"} -->
+      <!-- hai:{"id":"simple-9657c54f-11fb-4412-a07f-b516ee58254c","priority":"none","labels":[],"createdAt":"2026-10-05T19:04:41.824Z","updatedAt":"2026-10-05T19:30:54.689Z"} -->
 
 - [x] [27] Unclear error on configuration mistake
-    <!-- hai:{"id":"simple-aeab5d07-0f79-4609-9483-4601cb894f99","priority":"none","labels":[],"createdAt":"2026-10-04T20:22:34.136Z","updatedAt":"2026-10-04T20:34:49.446Z"} -->
+      <!-- hai:{"id":"simple-aeab5d07-0f79-4609-9483-4601cb894f99","priority":"none","labels":[],"createdAt":"2026-10-04T20:22:34.136Z","updatedAt":"2026-10-04T20:34:49.446Z"} -->
 
 - [x] [28] Still requires `parent_thread`
-    <!-- hai:{"id":"simple-60f79b37-10ad-4c2e-9817-fcb8e3f11912","priority":"none","labels":[],"createdAt":"2026-10-04T20:24:37.536Z","updatedAt":"2026-10-04T20:33:05.030Z"} -->
+      <!-- hai:{"id":"simple-60f79b37-10ad-4c2e-9817-fcb8e3f11912","priority":"none","labels":[],"createdAt":"2026-10-04T20:24:37.536Z","updatedAt":"2026-10-04T20:33:05.030Z"} -->
 
 - [x] [26] JSON inside TOML configuration
-    <!-- hai:{"id":"simple-d5668741-e698-4a8a-b21d-32a2ff4ea0aa","priority":"none","labels":[],"createdAt":"2026-10-04T20:10:15.514Z","updatedAt":"2026-10-04T20:22:41.668Z"} -->
+      <!-- hai:{"id":"simple-d5668741-e698-4a8a-b21d-32a2ff4ea0aa","priority":"none","labels":[],"createdAt":"2026-10-04T20:10:15.514Z","updatedAt":"2026-10-04T20:22:41.668Z"} -->
 
 - [ ] [*] Configure T3 model selection as fixed or automatic by pacing headroom, and
       override runtime and interaction modes in the configuration file.
 
 - [x] [19] UV source path documentation unclear
-    <!-- hai:{"id":"simple-1ea5eea8-5a65-4a87-a84f-3f2ab01533b4","priority":"none","labels":[],"createdAt":"2026-10-04T18:44:41.879Z","updatedAt":"2026-10-04T19:43:02.979Z"} -->
+      <!-- hai:{"id":"simple-1ea5eea8-5a65-4a87-a84f-3f2ab01533b4","priority":"none","labels":[],"createdAt":"2026-10-04T18:44:41.879Z","updatedAt":"2026-10-04T19:43:02.979Z"} -->
 
 - [x] [24] Codex reset workaround broken, no Anthropic status
-    <!-- hai:{"id":"simple-1afb0e60-8d2e-4995-85eb-314807cfd60b","priority":"none","labels":[],"createdAt":"2026-10-04T19:13:34.534Z","updatedAt":"2026-10-04T19:24:14.956Z"} -->
+      <!-- hai:{"id":"simple-1afb0e60-8d2e-4995-85eb-314807cfd60b","priority":"none","labels":[],"createdAt":"2026-10-04T19:13:34.534Z","updatedAt":"2026-10-04T19:24:14.956Z"} -->
 
 - [x] [20] `Command not found` error
-    <!-- hai:{"id":"simple-b2087b50-35fc-4c18-8a87-3826565d0d60","priority":"none","labels":[],"createdAt":"2026-10-04T18:45:46.258Z","updatedAt":"2026-10-04T19:11:10.780Z"} -->
+      <!-- hai:{"id":"simple-b2087b50-35fc-4c18-8a87-3826565d0d60","priority":"none","labels":[],"createdAt":"2026-10-04T18:45:46.258Z","updatedAt":"2026-10-04T19:11:10.780Z"} -->
 
 - [x] [23] Unclear "unknown provider" error
-    <!-- hai:{"id":"simple-573cb9ef-fda8-47a8-904c-de914d45738a","priority":"none","labels":[],"createdAt":"2026-10-04T18:56:27.672Z","updatedAt":"2026-10-04T19:06:31.589Z"} -->
+      <!-- hai:{"id":"simple-573cb9ef-fda8-47a8-904c-de914d45738a","priority":"none","labels":[],"createdAt":"2026-10-04T18:56:27.672Z","updatedAt":"2026-10-04T19:06:31.589Z"} -->
 
 - [x] [22] Unclear ValueError
-    <!-- hai:{"id":"simple-04f2f10f-b85d-4318-8db4-1ea72176c3e1","priority":"none","labels":[],"createdAt":"2026-10-04T18:54:18.448Z","updatedAt":"2026-10-04T19:03:05.774Z"} -->
+      <!-- hai:{"id":"simple-04f2f10f-b85d-4318-8db4-1ea72176c3e1","priority":"none","labels":[],"createdAt":"2026-10-04T18:54:18.448Z","updatedAt":"2026-10-04T19:03:05.774Z"} -->
 
 - [ ] [21] Unclear URLError
-    <!-- hai:{"id":"simple-0ad93f1d-3593-46f0-b76c-5cea0e0cba6f","priority":"none","labels":[],"createdAt":"2026-10-04T18:47:10.449Z","updatedAt":"2026-10-04T18:47:10.449Z"} -->
+      <!-- hai:{"id":"simple-0ad93f1d-3593-46f0-b76c-5cea0e0cba6f","priority":"none","labels":[],"createdAt":"2026-10-04T18:47:10.449Z","updatedAt":"2026-10-04T18:47:10.449Z"} -->
 
 - [x] [18] Pace TASKS.md work through Hai's Python API and launch admitted tasks in T3
       Code.
     - Hai's `hai_tasks` Python module is ready to use; the API dependency is satisfied.
 
-    <!-- hai:{"updatedAt":"2026-10-04T19:25:53.624Z"} -->
+      <!-- hai:{"updatedAt":"2026-10-04T19:25:53.624Z"} -->
 
 - [ ] [*] Write `pages/PKB/Kandev Session Observations/index.md` from
       `kandev-learn sweep` in the same commit as new records, reading the JSON sidecar
@@ -190,17 +195,17 @@ Rules for TASKS.md usage are at the bottom of the file.
       attempt, so a full backlog does not leave the board dry for half of every cycle.
     - Depends on: [2]
 
-    <!-- hai:{"id":"simple-88e03c0e1537dea8","updatedAt":"2026-10-06T05:26:03.871Z"} -->
+      <!-- hai:{"id":"simple-88e03c0e1537dea8","updatedAt":"2026-10-06T05:26:03.871Z"} -->
 
 - [x] [2] Call the Heartbeat webhook when an open provider gate is running out of work.
-    <!-- hai:{"updatedAt":"2026-10-06T05:25:57.872Z"} -->
+      <!-- hai:{"updatedAt":"2026-10-06T05:25:57.872Z"} -->
 
 - [x] [4] Collect archived session observations without model calls.
-    <!-- hai:{"updatedAt":"2026-10-06T05:25:39.325Z"} -->
+      <!-- hai:{"updatedAt":"2026-10-06T05:25:39.325Z"} -->
 
 - [x] [14] Enrol workflows through the step update API instead of writing the Kandev
       database.
-    <!-- hai:{"updatedAt":"2026-10-06T05:25:28.371Z"} -->
+      <!-- hai:{"updatedAt":"2026-10-06T05:25:28.371Z"} -->
 
 [1]: docs/tasks/1-quota-from-pebble-collector.md
 [2]: docs/tasks/2-heartbeat-webhook.md
