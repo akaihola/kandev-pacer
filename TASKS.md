@@ -6,6 +6,9 @@ Rules for TASKS.md usage are at the bottom of the file.
 
 ## Ordered backlog
 
+- [33] Unclear "withheld" message
+  <!-- hai:{"id":"simple-a1d698f2-1b36-4d9d-8019-cebd176aa083","priority":"none","labels":[],"createdAt":"2026-10-07T19:50:25.573Z","updatedAt":"2026-10-07T19:50:25.573Z"} -->
+
 ## Scheduled
 
 ## In Progress
@@ -34,8 +37,8 @@ Rules for TASKS.md usage are at the bottom of the file.
   and do a similar analysis for the T3 heartbeat that Kandev-pacer is using
   <!-- hai:{"id":"simple-1fc55ce1c4d74535","updatedAt":"2026-10-07T15:38:58.261Z"} -->
 
-- [ ] [32] Add reset-aware pacing
-  <!-- hai:{"id":"simple-a0c0911c-b11f-4e28-9b79-867593c381eb","priority":"none","labels":[],"createdAt":"2026-10-06T18:43:18.623Z","updatedAt":"2026-10-07T15:37:32.925Z"} -->
+- [x] [32] Add reset-aware pacing
+  <!-- hai:{"id":"simple-a0c0911c-b11f-4e28-9b79-867593c381eb","priority":"none","labels":[],"createdAt":"2026-10-06T18:43:18.623Z","updatedAt":"2026-10-07T19:54:23.157Z"} -->
 
 - [ ] [*] T3 pacer launched nothing for hours: T3 rejected the palindromi.fi [6] launch
       after a failed worktree Git step, every retry hit the leftover `pacer-<thread>`
@@ -233,7 +236,7 @@ Rules for TASKS.md usage are at the bottom of the file.
 
 [19]: docs/tasks/19-uv-source-path-documentation-unclear.md
 
-<!-- hai:reserved-numbers:1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,26,27,28,29,30,31,32 -->
+<!-- hai:reserved-numbers:1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,26,27,28,29,30,31,32,33 -->
 
 [20]: docs/tasks/20-command-not-found-error.md
 [21]: docs/tasks/21-unclear-urlerror.md
@@ -247,6 +250,8 @@ Rules for TASKS.md usage are at the bottom of the file.
 [30]: docs/tasks/30-unclear-non-clean-repository-error.md
 [31]: docs/tasks/31-dirty-repo-blocks-all-trackers.md
 [32]: docs/tasks/32-add-reset-aware-pacing.md
+
+[33]: docs/tasks/33-unclear-withheld-message.md
 
 ## Rules
 
