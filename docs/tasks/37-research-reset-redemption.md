@@ -60,3 +60,11 @@ noticing.
 [Codex banked resets]: https://help.openai.com/en/articles/20001498-how-banked-codex-resets-work
 [Codex CLI]: https://github.com/openai/codex
 [T3 Code]: https://github.com/pingdotgg/t3code
+
+## Research completion, 2026-10-10
+
+[Research note](../reset-redemption-research.md) answers all seven questions and
+separates official evidence, third-party implementation and remaining unknowns.
+Codex request fields match official source. Claude needs an authenticated capture
+and provider permission review. Follow-ups 40 and 41 are unverified proposals.
+No live reset or OAuth redemption probe was performed.

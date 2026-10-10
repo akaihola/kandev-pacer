@@ -4,6 +4,12 @@ Rules for TASKS.md usage are at the bottom of the file.
 
 ## Unverified proposals
 
+- [41] Verify Claude reset contract and supervise useful reset trials
+  <!-- hai:{"id":"simple-75487633-ff73-4817-ac73-5364758dc38e","createdAt":"2026-10-10T10:59:20.476Z","updatedAt":"2026-10-10T10:59:20.476Z"} -->
+
+- [40] Make reset redemption outcomes and diagnostics provider-specific
+  <!-- hai:{"id":"simple-01626a87-ecf4-4d88-b00d-ba3c08a3686a","createdAt":"2026-10-10T10:59:20.368Z","updatedAt":"2026-10-10T10:59:20.368Z"} -->
+
 ## Ordered backlog
 
 - [35] Redeem Codex resets as early in the week as possible instead of pacing toward an
@@ -24,7 +30,7 @@ Rules for TASKS.md usage are at the bottom of the file.
 
 - [~] [37] Research how to redeem banked resets for the Claude and Codex subscriptions, and
   how to verify the pacer's untested redemption requests without wasting a reset.
-  <!-- hai:{"updatedAt":"2026-10-10T10:59:02.128Z"} -->
+  <!-- hai:{"updatedAt":"2026-10-10T10:59:14.248Z"} -->
 
 - [16] Learn from session observation records: a lowest-priority Kandev task the
   Heartbeat creates when unread records exist, writing observations and proposed
@@ -258,7 +264,7 @@ Rules for TASKS.md usage are at the bottom of the file.
 
 [19]: docs/tasks/19-uv-source-path-documentation-unclear.md
 
-<!-- hai:reserved-numbers:1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,26,27,28,29,30,31,32,33,34,35,36,37,38,39 -->
+<!-- hai:reserved-numbers:1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,26,27,28,29,30,31,32,33,34,35,36,37,38,39,40,41 -->
 
 [20]: docs/tasks/20-command-not-found-error.md
 [21]: docs/tasks/21-unclear-urlerror.md
@@ -281,6 +287,10 @@ Rules for TASKS.md usage are at the bottom of the file.
 
 [38]: docs/tasks/38-heavy-console-output.md
 [39]: docs/tasks/39-hold-failed-launch-pace-others.md
+
+[40]: docs/tasks/40-make-reset-redemption-outcomes-and-diagnostics-provider-specific.md
+
+[41]: docs/tasks/41-verify-claude-reset-contract-and-supervise-useful-reset-trials.md
 
 ## Rules
 
