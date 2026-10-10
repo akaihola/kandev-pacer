@@ -9,6 +9,9 @@ Rules for TASKS.md usage are at the bottom of the file.
 - [33] Unclear "withheld" message
   <!-- hai:{"id":"simple-a1d698f2-1b36-4d9d-8019-cebd176aa083","priority":"none","labels":[],"createdAt":"2026-10-07T19:50:25.573Z","updatedAt":"2026-10-07T19:50:25.573Z"} -->
 
+- [38] Heavy console output
+  <!-- hai:{"id":"simple-603d6a8b-d4a1-4ed1-869f-4f8c0439ef5e","priority":"none","labels":[],"createdAt":"2026-10-10T08:55:49.236Z","updatedAt":"2026-10-10T08:55:49.236Z"} -->
+
 - [37] Research how to redeem banked resets for the Claude and Codex subscriptions, and
   how to verify the pacer's untested redemption requests without wasting a reset.
 
@@ -250,7 +253,7 @@ Rules for TASKS.md usage are at the bottom of the file.
 
 [19]: docs/tasks/19-uv-source-path-documentation-unclear.md
 
-<!-- hai:reserved-numbers:1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,26,27,28,29,30,31,32,33,34,35,36,37 -->
+<!-- hai:reserved-numbers:1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,26,27,28,29,30,31,32,33,34,35,36,37,38 -->
 
 [20]: docs/tasks/20-command-not-found-error.md
 [21]: docs/tasks/21-unclear-urlerror.md
@@ -270,6 +273,8 @@ Rules for TASKS.md usage are at the bottom of the file.
 [35]: docs/tasks/35-redeem-codex-resets-early.md
 [36]: docs/tasks/36-keep-claude-resets-near-rollover.md
 [37]: docs/tasks/37-research-reset-redemption.md
+
+[38]: docs/tasks/38-heavy-console-output.md
 
 ## Rules
 
