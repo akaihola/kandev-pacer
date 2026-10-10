@@ -1,6 +1,7 @@
 # Does reset-aware pacing get the most tokens?
 
-> **Status: analysed 2026-10-10, fixes not implemented.** This checks the planner from
+> **Status: analysed 2026-10-10. The Codex fix ([task 35]) is implemented; the Claude
+> fix ([task 36]) is not yet.** This checks the planner from
 > [task 32] against the question it was built to answer: does it get the most tokens out
 > of a subscription with banked resets? Every number below comes from
 > [`scripts/simulate_reset_pacing.py`], which drives the real `reset_plan` and
@@ -11,9 +12,11 @@
 For Claude the plan does get the most tokens possible, with one gap. It will spend a reset
 in the last hours of a week even when that reset is still valid next week.
 
-For Codex it doesn't. Its even-split timing slows down the very thing that makes a Codex
-reset valuable. In a typical week that costs about 2/7 of a weekly allowance per reset.
-Its rule for saving resets can also let a reset expire unused.
+For Codex it didn't, before [task 35]. Its even-split timing slowed down the very thing
+that makes a Codex reset valuable. In a typical week that cost about 2/7 of a weekly
+allowance per reset. Its rule for saving resets could also let a reset expire unused.
+Since task 35 the pacer runs Codex with no weekly speed cap while a reset is unexpired
+and redeems at 100%, which is the `asap` policy below.
 
 Follow-up work is in [task 34], [task 35], [task 36] and [task 37].
 
@@ -117,7 +120,7 @@ worth. Slowing down on purpose costs tokens.
 
 ### Cost of the even split
 
-`reset_plan` slows Codex down on purpose. With one coupon that expires at the rollover, it
+Until task 35, `reset_plan` slowed Codex down on purpose. With one coupon that expires at the rollover, it
 caps speed so the tank runs out on day 3.5. With a 1.5-day burn time the coupon could
 instead be used on day 1.5:
 
@@ -130,7 +133,7 @@ same two days.
 
 ### Cost of saving coupons for their last week
 
-`reset_plan` saves a Codex coupon until the week whose rollover falls after the coupon's
+Until task 35, `reset_plan` saved a Codex coupon until the week whose rollover falls after the coupon's
 expiry. If the coupon expires 6 hours into next week, the pacer saves it this week. Next
 week the deadline is 6 hours away, but a tank takes 1.5 days to empty, so the coupon
 expires unused. Scenario D loses 0.815 tanks. Using the coupon this week on day 1.5 would
@@ -154,12 +157,18 @@ ahead. Using the coupon at the same point in a later week gains nothing. It only
 the tokens and risks the coupon expiring. The free rollover isn't lost, only moved
 earlier. A coupon is worth saving only when this week's tank runs dry close to the
 rollover and the coupon will still be valid after the next empty point.
-[Task 35] replaces both Codex rules.
+[Task 35] replaced both Codex rules with that single check, which needs the burn time
+from [task 34]. Scenario E below shows it: work arrives on day 5.9, the tank is empty
+on day 6.9, and a coupon valid for weeks waits for the free rollover instead of buying
+two hours.
 
 ## Simulation
 
-Run `uv run python scripts/simulate_reset_pacing.py`. `pacer` is the current code. `hold`
-is the Claude fix from [task 36]. `asap` is the Codex fix from [task 35].
+Run `uv run python scripts/simulate_reset_pacing.py`. `pacer` is the current code,
+given the scenario's burn time as its measured estimate. `hold` is the Claude fix from
+[task 36]. `asap` is the Codex rule from [task 35] written out by hand. Since that task
+landed, `pacer` matches `asap` in scenarios C and D; the `pacer` rows for C and D below
+are the pre-task-35 numbers, kept for the record.
 
 | Scenario | Policy | Tanks used | Redeemed on |
 |---|---|---|---|
@@ -170,6 +179,8 @@ is the Claude fix from [task 36]. `asap` is the Codex fix from [task 35].
 | | asap | 6.648 | day 1.50 |
 | D. Codex, coupon expires 6 h into next week, 1.5-day burn, 6 weeks | pacer | 5.833 | never, expired |
 | | asap | 6.648 | day 1.50 |
+| E. Codex, coupon valid 4 weeks, 1-day burn, work from day 5.9, 3 weeks | asap | 2.958 | day 6.91 |
+| | pacer (task 35) | 3.806 | day 8.01 |
 
 After the coupon is gone, each policy falls back to the pacer's ordinary weekly pacing.
 That's why full weeks show 0.97 tanks.
@@ -197,10 +208,11 @@ Then:
    coupons by expiry. For Claude the pacer uses the provider's advertised next grant.
 
 The pacer's log shows its intent. "N resets planned, redeem at weekly exhaustion, target
-~date" means it is working toward a redemption. "N resets reserved to preserve natural
-rollover" means the Codex saving rule is holding a coupon back. Check that coupon's
-expiry against rule 4 until [task 35] lands. Claude shows coupon expiry in
-Settings > Usage. Codex shows it in the usage settings of the app, CLI or web.
+~date" means Claude is working toward a redemption. "N resets usable, no weekly speed
+cap, redeem at weekly exhaustion" is the Codex rule running. "N resets held: 2h to
+rollover is under the ~7h burn time" means rule 3's wait is in effect. Claude shows
+coupon expiry in Settings > Usage. Codex shows it in the usage settings of the app, CLI
+or web.
 
 ## Open questions
 

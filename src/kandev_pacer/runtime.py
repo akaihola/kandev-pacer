@@ -567,6 +567,7 @@ class Pacer:
             snapshot.now,
             self.config,
             provider=group.provider,
+            burn=self.burn.seconds(group.provider, snapshot.now),
         )
 
     def hold_capacity(self, task, sessions, snapshot, group=None):
@@ -749,7 +750,13 @@ class Pacer:
             for name, windows in snapshot.windows.items()
             if any(
                 w["consumed_frac"] >= 1 and "pace_resets_at" in w
-                for w in reset_plan(snapshot.usage, windows, snapshot.now, name)[0]
+                for w in reset_plan(
+                    snapshot.usage,
+                    windows,
+                    snapshot.now,
+                    name,
+                    self.burn.seconds(name, snapshot.now),
+                )[0]
             )
         }
         exhausted.update(resets.pending_providers(self.config))
@@ -768,7 +775,12 @@ class Pacer:
             )
         )
         usage, errors = resets.apply(
-            snapshot.usage, snapshot.quota_errors, waiting, self.config, snapshot.now
+            snapshot.usage,
+            snapshot.quota_errors,
+            waiting,
+            self.config,
+            snapshot.now,
+            {name: self.burn.seconds(name, snapshot.now) for name in waiting},
         )
         snapshot = replace(
             snapshot,
@@ -1037,6 +1049,7 @@ class Pacer:
                         ),
                         now,
                         provider_name,
+                        self.burn.seconds(provider_name, now),
                     )[0],
                     now,
                     self.config.alpha,

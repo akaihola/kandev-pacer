@@ -453,8 +453,9 @@ when another configured candidate is available.
 
 Both modes now use [reset-aware pacing](reset-aware-pacing.md).
 The pacer reads banked credits, adjusts weekly pacing and redeems at budget exhaustion
-when work is waiting. Status shows planned resets and the current depletion target,
-or credits reserved to preserve Codex's natural rollover. A reset failure withholds
+when work is waiting. Status shows planned Claude resets and the current depletion target,
+usable Codex resets running with no weekly speed cap, or a Codex reset held because
+the rollover is less than one burn time away. A reset failure withholds
 its provider until fresh quota confirms recovery. Once the pacer has watched the weekly
 bar rise for at least five hours, each provider's status line also shows its measured
 [burn time](reset-aware-pacing.md#burn-time), and a separate line reports each time

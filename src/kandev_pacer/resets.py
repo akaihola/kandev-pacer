@@ -113,8 +113,11 @@ def _confirmed(record, usage, name):
     )
 
 
-def redeem(name, config, now):
-    """Lock, re-read, and keep a retry key until both credit and quota confirm."""
+def redeem(name, config, now, burn=None):
+    """Lock, re-read, and keep a retry key until both credit and quota confirm.
+
+    `burn` is the provider's measured burn time in seconds, or None; see `reset_plan`.
+    """
     account, token = _identity(name, config, now)
     directory = Path(config.reset_state_dir).expanduser()
     directory.mkdir(parents=True, exist_ok=True, mode=0o700)
@@ -129,7 +132,7 @@ def redeem(name, config, now):
             return usage
         if record is None:
             windows, count = reset_plan(
-                usage, windows_by_provider(usage).get(name, []), now, name
+                usage, windows_by_provider(usage).get(name, []), now, name, burn
             )
             exhausted = any(
                 w["consumed_frac"] >= 1
@@ -202,8 +205,12 @@ def pending_providers(config):
     }
 
 
-def apply(usage, errors, names, config, now):
-    """Redeem only for providers with waiting work, leaving bypassed providers alone."""
+def apply(usage, errors, names, config, now, burn=None):
+    """Redeem only for providers with waiting work, leaving bypassed providers alone.
+
+    `burn` maps a provider to its measured burn time in seconds; see `reset_plan`.
+    """
+    burn = burn or {}
     pending = pending_providers(config)
     for name in (pending & set(config.providers)) - names:
         errors.setdefault(
@@ -212,7 +219,7 @@ def apply(usage, errors, names, config, now):
         )
     for name in sorted(names - errors.keys()):
         windows, count = reset_plan(
-            usage, windows_by_provider(usage).get(name, []), now, name
+            usage, windows_by_provider(usage).get(name, []), now, name, burn.get(name)
         )
         if name not in pending and (
             not count
@@ -223,7 +230,7 @@ def apply(usage, errors, names, config, now):
         ):
             continue
         try:
-            fresh = redeem(name, config, now)
+            fresh = redeem(name, config, now, burn.get(name))
         except (provider.QuotaUnavailable, OSError, ValueError) as error:
             errors[name] = provider.QuotaUnavailable(str(error))
             continue

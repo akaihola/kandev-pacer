@@ -425,7 +425,12 @@ class T3Pacer:
         windows = windows_by_provider(usage).get(name, [])
         scopes = matched_scopes([selection["model"]], scope_names(windows))
         return quota_verdict(
-            usage, class_windows(windows, scopes), now, self.config, provider=name
+            usage,
+            class_windows(windows, scopes),
+            now,
+            self.config,
+            provider=name,
+            burn=self.burn.seconds(name, now),
         )
 
     def model_candidates(self, parent):
@@ -520,6 +525,7 @@ class T3Pacer:
                     now,
                     self.config,
                     provider=name,
+                    burn=self.burn.seconds(name, now),
                 )
                 label = name + (f" ({'+'.join(scopes)})" if scopes else "")
                 state = verdict.message or f"headroom={verdict.headroom:+.3f} open"
@@ -649,7 +655,14 @@ class T3Pacer:
             for name in waiting
             if name in self.config.providers and not self.quota_bypassed(name)
         }
-        usage, errors = resets.apply(usage, errors, waiting, self.config, now)
+        usage, errors = resets.apply(
+            usage,
+            errors,
+            waiting,
+            self.config,
+            now,
+            {name: self.burn.seconds(name, now) for name in waiting},
+        )
         self.report_status(running, usage, errors, now, threads)
         for path, record in held:
             log.warning("T3 HELD %s", self.hold_note(path, record, now))

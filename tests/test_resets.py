@@ -1,6 +1,7 @@
 """Reset planning and redemption, with no network or real subscription credentials."""
 
 import copy
+import importlib.util
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -54,12 +55,63 @@ def test_reset_budget_opens_weekly_gate_without_spending_future_allowance(name):
     assert windows[0].get("pace_resets_at") is None
 
 
-def test_codex_reserves_long_lived_credits_but_claude_can_use_them_this_week():
-    for name, expected in [("openai", 0), ("anthropic", 2)]:
-        usage = envelope(name, used=90, expiry=2 * WEEK)
-        planned, count = reset_plan(usage, parse_windows(usage, name), NOW, name)
-        assert count == expected
-        assert ("pace_resets_at" in planned[0]) == bool(expected)
+@pytest.mark.parametrize("name", ["openai", "anthropic"])
+def test_long_lived_credits_are_usable_this_week_for_both_providers(name):
+    """Saving a Codex reset for its last week gains nothing and risks expiry."""
+    usage = envelope(name, used=90, expiry=2 * WEEK)
+    planned, count = reset_plan(usage, parse_windows(usage, name), NOW, name)
+    assert count == 2
+    assert "pace_resets_at" in planned[0]
+
+
+def test_codex_has_no_weekly_speed_cap_while_a_reset_is_unexpired():
+    """Codex redeems on day 1.5 with a 1.5-day burn, not day 3.5; Claude keeps the split."""
+    early = WEEK / 14
+    for name, expected in [("openai", "open"), ("anthropic", "paused")]:
+        usage = envelope(name, used=99, count=1)
+        windows = parse_windows(usage, name)
+        verdict = quota_verdict(usage, windows, early, Settings(PACER_PROVIDER=name))
+        assert verdict.gate == expected
+    usage = envelope(used=99, count=3, expiry=3 * WEEK)
+    codex = quota_verdict(
+        usage, parse_windows(usage, "openai"), early, Settings(PACER_PROVIDER="openai")
+    )
+    assert "3 resets usable, no weekly speed cap" in codex.message
+    assert "natural rollover" not in codex.message
+
+
+def test_codex_holds_a_long_lived_reset_in_the_last_burn_time_before_rollover():
+    """With 1h to the rollover and a 2h burn time, a reset valid next week waits."""
+    now, burn = WEEK - 3600, 2 * 3600
+    config = Settings(PACER_PROVIDER="openai")
+    long_lived = envelope(count=1, expiry=3 * WEEK)
+    windows = parse_windows(long_lived, "openai")
+    assert reset_plan(long_lived, windows, now, "openai", burn)[1] == 0
+    assert reset_plan(long_lived, windows, now, "openai")[1] == 1
+    held = quota_verdict(long_lived, windows, now, config, burn=burn)
+    assert held.gate == "ceiling"
+    assert (
+        "1 resets held: 1h 00m 00s to rollover is under the ~2h 00m 00s burn time"
+        in (held.message)
+    )
+    assert held.resumes_at == WEEK
+    # A reset that would expire before the next refill could be emptied is still used.
+    dying = envelope(count=1, expiry=WEEK + 3600)
+    assert reset_plan(dying, windows, now, "openai", burn)[1] == 1
+    used = quota_verdict(dying, windows, now, config, burn=burn)
+    assert "reset budget exhausted" in used.message
+    # Early in the week nothing is held, whatever the burn time says.
+    assert reset_plan(long_lived, windows, NOW, "openai", burn)[1] == 1
+
+
+def test_held_reset_is_not_redeemed(redemption, monkeypatch):
+    monkeypatch.setattr(resets, "redeem", lambda *a: pytest.fail("held reset spent"))
+    usage = envelope(count=1, expiry=3 * WEEK)
+    now = WEEK - 3600
+    assert resets.apply(usage, {}, {"openai"}, redemption, now, {"openai": 7200}) == (
+        usage,
+        {},
+    )
 
 
 def test_expired_credits_and_session_only_limits_do_not_accelerate():
@@ -71,10 +123,10 @@ def test_expired_credits_and_session_only_limits_do_not_accelerate():
 
 
 def test_expiry_shortens_the_pace_and_resume_estimate():
-    usage = envelope(used=40, count=1, expiry=WEEK / 2)
-    windows = parse_windows(usage, "openai")
+    usage = envelope("anthropic", used=40, count=1, expiry=WEEK / 2)
+    windows = parse_windows(usage, "anthropic")
     verdict = quota_verdict(
-        usage, windows, WEEK / 20, Settings(PACER_PROVIDER="openai")
+        usage, windows, WEEK / 20, Settings(PACER_PROVIDER="anthropic")
     )
     assert verdict.gate == "paused"
     assert verdict.resumes_at == pytest.approx(WEEK / 10)
@@ -109,7 +161,44 @@ def test_claude_rollover_stays_fixed_and_codex_new_window_is_paced_from_new_star
     codex_plan, _ = reset_plan(codex, parse_windows(codex, "openai"), NOW, "openai")
     assert claude_plan[0]["resets_at"] == WEEK
     assert codex_plan[0]["resets_at"] == NOW + WEEK
-    assert claude_plan[0]["pace_resets_at"] < codex_plan[0]["pace_resets_at"]
+    assert claude_plan[0]["pace_resets_at"] == pytest.approx(WEEK / 2, abs=1)
+    # Codex's pace window ends now: its burn line is already at 100%.
+    assert codex_plan[0]["pace_resets_at"] == NOW
+    assert codex_plan[0]["pace_duration_s"] == 1.0
+
+
+def _simulation():
+    path = Path(__file__).parent.parent / "scripts" / "simulate_reset_pacing.py"
+    spec = importlib.util.spec_from_file_location("simulate_reset_pacing", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+@pytest.mark.parametrize("letter", ["C", "D"])
+def test_codex_simulation_redeems_as_early_as_the_asap_policy(letter):
+    """Scenarios C and D of docs/reset-pacing-optimality.md: pacer and asap rows match."""
+    sim = _simulation()
+    title, setup, limits, policies = next(
+        s for s in sim.SCENARIOS if s[0].startswith(f"{letter}.")
+    )
+    assert policies == ["pacer", "asap"]
+    pacer = sim.simulate(policy="pacer", **setup, **limits)
+    asap = sim.simulate(policy="asap", **setup, **limits)
+    assert pacer[0] == pytest.approx(asap[0])
+    assert pacer[1] == asap[1] == "day 1.50"
+    assert pacer[2] == "all spent"
+
+
+def test_codex_simulation_holds_a_reset_that_outlives_the_week():
+    """Scenario E: work from day 5.9 with a 1-day burn waits for the free rollover."""
+    sim = _simulation()
+    _, setup, limits, _ = next(s for s in sim.SCENARIOS if s[0].startswith("E."))
+    asap = sim.simulate(policy="asap", **setup, **limits)
+    pacer = sim.simulate(policy="pacer", **setup, **limits)
+    assert asap[1] == "day 6.91"
+    assert pacer[1] == "day 8.01"
+    assert pacer[0] > asap[0] + 0.5
 
 
 def test_claude_grants_filter_unusable_expired_and_malformed_entries():

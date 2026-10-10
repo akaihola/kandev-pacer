@@ -1,32 +1,54 @@
 # Reset-aware pacing
 
-> **Known gaps, 2026-10-10.** The [optimality review] found that the Codex timing
-> below gives away tokens and that Claude can spend a long-lived reset just before the
-> rollover. Tasks 34 to 36 fix this. Until then, read that review for when a
-> redemption pays off.
+> **Known gap, 2026-10-10.** The [optimality review] found that Claude can spend a
+> long-lived reset just before the rollover. Task 36 fixes this. The Codex timing it
+> also found wanting was fixed by task 35; see [Codex: as early as possible](#codex-as-early-as-possible).
 
 Both Kandev and T3 read available banked resets and
 use them automatically for waiting subscription work. Ordinary five-hour pacing,
 model scopes and concurrency caps still constrain launches. The pacer never buys
 resets or usage credits.
 
-The providers report allowance percentages rather than remaining token counts.
-With N usable resets, the planner divides the weekly burn interval by N + 1.
-It shortens that interval to the earliest credit expiry when necessary. The
-current allowance can then be exhausted sooner, followed by a reset. Each fresh
-quota reading updates the plan with remaining credits and the provider's actual
-window timestamps.
+The providers report allowance percentages rather than remaining token counts, and
+the two subscriptions apply a reset differently, so the planner has one rule per
+provider.
 
-For example, Claude halfway through its week with one usable reset can finish
-its current allowance now, redeem, and use the refreshed allowance before the
-normal weekly rollover. A Codex credit expiring after this week's rollover stays
-reserved until its final natural week. A credit expiring within this week instead
-accelerates the current allowance so it can be redeemed before expiry.
+[Claude keeps its scheduled weekly rollover after a reset](https://support.claude.com/en/articles/17007452-what-is-a-limit-reset),
+so a Claude reset adds budget to this week. With N usable resets, the planner paces
+the current allowance to run out 1/(N + 1) of the way to the deadline: the rollover
+or the earliest credit expiry, whichever is first. After each redemption it
+recalculates from the start of the week with one reset fewer, so later allowances get
+a looser cap. For example, Claude halfway through its week with one usable reset can
+finish its current allowance now, redeem, and use the refreshed allowance before the
+normal weekly rollover. Each fresh quota reading updates the plan with remaining
+credits and the provider's actual window timestamps.
 
-[Claude keeps its scheduled weekly rollover after a reset](https://support.claude.com/en/articles/17007452-what-is-a-limit-reset).
+### Codex: as early as possible
+
 [Codex starts new five-hour and weekly windows after a full banked reset](https://help.openai.com/en/articles/20001498-how-banked-codex-resets-work).
-Using a Codex reset early would replace a free upcoming rollover, so preserving
-natural rollovers is part of the plan.
+A Codex reset is worth the part of the week it lets you skip: used on day d, it
+brings every later free refill (7 − d) days earlier, so it is worth (7 − d)/7 of an
+allowance. Pacing toward an even split or saving a reset for a later week only
+delays those tokens; the [optimality review] measured 2/7 of an allowance lost per
+reset by the even split, and a whole reset lost when saving let it expire. So while
+an unexpired Codex reset exists, the pacer drops the weekly speed cap: the weekly
+burn line sits at 100% and the agents run as fast as the five-hour limits, model
+scopes and concurrency caps allow. At 100% weekly it redeems right away, earliest
+expiry first, and several resets get used back to back.
+
+The one exception needs the measured [burn time](#burn-time). When less than one
+burn time remains before the rollover and the reset would still be valid after the
+refilled allowance could run out again (rollover plus one burn time), the pacer holds
+the reset and lets the free rollover refill the allowance. Used in those last hours it
+would move the clock by almost nothing. A reset that would expire before then is used
+anyway. Without a burn time estimate nothing is held. The status line says what is
+happening: "N resets usable, no weekly speed cap, redeem at weekly exhaustion" while
+the plan is active, and "N resets held: 2h 10m to rollover is under the ~7h burn time"
+while one waits.
+
+This uses the Codex allowance faster than the even split did, leaving less for
+interactive use until the next refill. There is no setting for that today; if it
+matters, it needs one of its own rather than a return to the even split.
 
 Reset-assisted weekly segments target the full allowance, temporarily replacing
 weekly `alpha` and `backstop` reserves. At 100% consumed, launches stop until
@@ -80,8 +102,8 @@ page for that period. The stdout line `[openai] burn time ~7h 14m 51s per weekly
 allowance (rose 69% in 5h 00m 03s to 04 17:42)` appears whenever the estimate changes,
 in both Kandev and T3 modes. `burn` is `null` until a rise of at least five points
 over at least five hours has been seen; a fresh install, or a month with no sustained
-work, has no estimate. Tasks 35 and 36 keep today's behaviour in that case rather than
-guess.
+work, has no estimate. The redemption rules keep today's behaviour in that case rather
+than guess.
 
 **Where it lives.** `PACER_BURN_STATE`, default `~/.local/state/kandev-pacer/burn.json`,
 keeps the readings and the best rises seen, so a restart continues the measurement
@@ -94,6 +116,10 @@ Replaying the real log from 2026-09-19 to 2026-10-04 through the estimator gave 
 burn time of about 52 hours for the Claude subscription, from a 10% rise over 5h 15m
 on 2026-09-20, and about 7 hours for Codex, from a 69% rise in 5 hours on 2026-10-04
 after a reset. The two faulty 100% readings in that log were skipped.
+
+Since task 35 the Codex rule above uses the estimate to decide whether to hold a reset
+in the last hours of a week. Task 36 will do the same for Claude. Without an estimate
+both providers redeem at weekly exhaustion as before.
 
 ## Reading grants
 

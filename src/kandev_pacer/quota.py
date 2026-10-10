@@ -148,22 +148,40 @@ def available_reset_credits(usage, now, provider):
     ]
 
 
-def reset_plan(usage, windows, now, provider):
-    """Divide a weekly allowance over usable resets without spending future quota."""
+def reset_plan(usage, windows, now, provider, burn=None):
+    """Plan this week's allowance around usable resets without spending future quota.
+
+    The two providers' resets behave differently (docs/reset-pacing-optimality.md):
+
+    - A Claude reset refills the allowance and keeps the weekly rollover, so it adds budget
+      to *this* week. The first allowance is paced to run out 1/(N+1) of the way to the
+      deadline (the rollover or the earliest expiry); each redemption recalculates from
+      the start of the week with one reset fewer.
+    - A Codex reset refills the allowance and restarts the weekly clock, so it is worth
+      the part of the week it lets you skip: (7 - d)/7 of an allowance when used on day
+      d. Slowing down costs tokens, so Codex gets no weekly speed cap while a reset is
+      unexpired -- the pace window ends now, which puts the burn line at 100% -- and the
+      pacer redeems as soon as the allowance is empty, earliest expiry first.
+
+    `burn` is the measured burn time in seconds (burn.py), or None. With it, a Codex
+    reset is held back while less than one burn time remains before the rollover, if it
+    stays valid past the point where the refill after that rollover would run out again
+    (`roll + burn`). Used in those last hours it would buy almost nothing. A reset that
+    would expire before then is still used. Without an estimate nothing is held.
+    """
     credits = available_reset_credits(usage, now, provider)
     weekly = [w for w in windows if w["duration_s"] == 7 * 86400 and not w.get("scope")]
     if not credits or not weekly:
         return windows, 0
     roll = min(w["resets_at"] for w in weekly)
-    # Codex replaces the natural rollover. Save longer-lived credits until the
-    # last natural week before expiry; Claude can add budget to this week.
-    usable = [
-        credit
-        for credit in credits
-        if provider != "openai"
-        or credit.get("expires_at") is None
-        or credit["expires_at"] <= roll
-    ]
+    usable = credits
+    if provider == "openai" and burn is not None and roll - now < burn:
+        usable = [
+            credit
+            for credit in credits
+            if credit.get("expires_at") is not None
+            and credit["expires_at"] <= roll + burn
+        ]
     count = sum(credit["count"] for credit in usable)
     if not count:
         return windows, 0
@@ -173,11 +191,29 @@ def reset_plan(usage, windows, now, provider):
         copy = dict(window)
         if window["duration_s"] == 7 * 86400:
             start = window["resets_at"] - window["duration_s"]
-            end = min(window["resets_at"], deadline)
-            duration = max(1.0, (end - start) / (count + 1))
-            copy.update(pace_resets_at=start + duration, pace_duration_s=duration)
+            if provider == "openai":
+                copy.update(pace_resets_at=now, pace_duration_s=max(1.0, now - start))
+            else:
+                end = min(window["resets_at"], deadline)
+                duration = max(1.0, (end - start) / (count + 1))
+                copy.update(pace_resets_at=start + duration, pace_duration_s=duration)
         planned.append(copy)
     return planned, count
+
+
+def held_resets_note(usage, windows, now, provider, burn, planned):
+    """Why usable-looking resets are not in the plan, for the log; empty when they are."""
+    if planned or burn is None:
+        return ""
+    available = sum(c["count"] for c in available_reset_credits(usage, now, provider))
+    weekly = [w for w in windows if w["duration_s"] == 7 * 86400 and not w.get("scope")]
+    if not available or not weekly:
+        return ""
+    roll = min(w["resets_at"] for w in weekly)
+    return (
+        f"; {available} resets held: {format_wait(roll - now)} to rollover is under "
+        f"the ~{format_wait(burn)} burn time"
+    )
 
 
 def pacing_elapsed(window, now):
@@ -188,12 +224,13 @@ def pacing_elapsed(window, now):
     )
 
 
-def quota_verdict(usage, windows, now, config, provider=None):
+def quota_verdict(usage, windows, now, config, provider=None, burn=None):
     """Read the usage payload against the burn line for one provider. Pure: no I/O, no state.
 
     Defaults to the configured single provider, so the pre-plural callers are unchanged; the
     runtime passes each provider explicitly. The fail-closed `blind` branch is per provider:
     a provider missing from the merged envelope withholds its own tasks and leaves the rest.
+    `burn` is the provider's measured burn time in seconds, or None; see `reset_plan`.
     """
     provider = config.provider if provider is None else provider
     if not windows and provider_missing(usage, provider):
@@ -205,7 +242,8 @@ def quota_verdict(usage, windows, now, config, provider=None):
                 f"{sorted(usage_providers(usage))} -> WITHHOLDING (check PACER_PROVIDER)"
             ),
         )
-    windows, resets = reset_plan(usage, windows, now, provider)
+    windows, resets = reset_plan(usage, windows, now, provider, burn)
+    held = held_resets_note(usage, windows, now, provider, burn, resets)
     active = [window for window in windows if _window_active(window, now, config)]
     worst = min(
         (
@@ -247,24 +285,21 @@ def quota_verdict(usage, windows, now, config, provider=None):
         return Verdict(
             "ceiling",
             worst,
-            (f"headroom={worst:+.3f} CEILING ({reason}) -> withholding"),
+            (f"headroom={worst:+.3f} CEILING ({reason}) -> withholding" + held),
             max(rolls, healed or now),
         )
-    available = sum(c["count"] for c in available_reset_credits(usage, now, provider))
-    note = ""
-    if resets:
+    note = held
+    if resets and provider == "openai":
+        note = f"; {resets} resets usable, no weekly speed cap, redeem at weekly exhaustion"
+    elif resets:
         target = min(w["pace_resets_at"] for w in windows if "pace_resets_at" in w)
         note = (
             f"; {resets} resets planned, redeem at weekly exhaustion, "
             f"target ~{datetime.fromtimestamp(target):%Y-%m-%d %H:%M}"
         )
-    elif available:
-        note = f"; {available} resets reserved to preserve natural rollover"
     if worst < 0:
         return Verdict("paused", worst, f"headroom={worst:+.3f} PAUSED" + note, healed)
-    return Verdict(
-        "open", worst, f"headroom={worst:+.3f} open" + note if available else ""
-    )
+    return Verdict("open", worst, f"headroom={worst:+.3f} open" + note if note else "")
 
 
 def _window_alpha(window, config):

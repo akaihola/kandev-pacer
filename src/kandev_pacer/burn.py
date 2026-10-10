@@ -151,6 +151,11 @@ class BurnMeter:
             "to": best["to"],
         }
 
+    def seconds(self, provider, now):
+        """The burn time in seconds, or None: the shape `reset_plan` takes."""
+        estimate = self.estimate(provider, now)
+        return None if estimate is None else estimate["s"]
+
     def _save(self):
         if not self.path:
             return

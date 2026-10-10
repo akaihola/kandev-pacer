@@ -33,10 +33,11 @@ def envelope(name, consumed, roll, credits):
 def simulate(name, expires_at, burn_days, weeks, policy="pacer", count=1, work_from=0):
     """Weekly allowances used and what happened to the resets.
 
-    `pacer` is the current code: its gate, and redemption at weekly exhaustion.
-    `asap` is the proposed Codex rule: no weekly speed cap while a reset is unexpired,
-    and redemption at 100%. `hold` is the proposed Claude rule: skip redemption when
-    less than one burn time is left and the reset outlives the next empty point.
+    `pacer` is the current code: its gate, and redemption at weekly exhaustion, with
+    `burn_days` passed in as the measured burn time. `asap` is the reference Codex rule
+    since task 35: no weekly speed cap while a reset is unexpired, and redemption at
+    100%. `hold` is the proposed Claude rule (task 36): skip redemption when less than
+    one burn time is left and the reset outlives the next empty point.
     """
     config = Settings(PACER_PROVIDER=name)
     burn = burn_days * DAY
@@ -48,7 +49,7 @@ def simulate(name, expires_at, burn_days, weeks, policy="pacer", count=1, work_f
         live = [dict(credit)] if credit["count"] and expires_at > now else []
         usage = envelope(name, consumed, roll, live)
         windows = parse_windows(usage, name)
-        _, planned = reset_plan(usage, windows, now, name)
+        _, planned = reset_plan(usage, windows, now, name, burn)
         redeem = consumed >= 1 and bool(live if policy == "asap" else planned)
         if policy == "hold" and roll - now < burn and expires_at > roll + burn:
             redeem = False
@@ -62,7 +63,7 @@ def simulate(name, expires_at, burn_days, weeks, policy="pacer", count=1, work_f
         if policy == "asap" and live:
             gate_open = consumed < 1
         else:
-            gate_open = quota_verdict(usage, windows, now, config).is_open
+            gate_open = quota_verdict(usage, windows, now, config, burn=burn).is_open
         if gate_open and now >= START + work_from * DAY:
             step = min(STEP / burn, 1 - consumed)
             consumed += step
@@ -97,6 +98,12 @@ SCENARIOS = [
         {"name": "openai", "expires_at": START + WEEK + 6 * HOUR},
         {"burn_days": 1.5, "weeks": 6},
         ["pacer", "asap"],
+    ),
+    (
+        "E. Codex, reset valid 4 weeks, 1-day burn, work starts day 5.9, 3 weeks",
+        {"name": "openai", "expires_at": START + 4 * WEEK, "work_from": 5.9},
+        {"burn_days": 1, "weeks": 3},
+        ["asap", "pacer"],
     ),
 ]
 
