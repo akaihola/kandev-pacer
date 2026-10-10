@@ -20,10 +20,10 @@ Rules for TASKS.md usage are at the bottom of the file.
   refill.
     - Depends on: [34]
 
-- [42] Name the `hai-tasks` CLI and its path in the T3 worker prompt.
-  <!-- hai:{"id":"simple-e5032b10-0e74-4f0f-b56c-1a32930f34fc","createdAt":"2026-10-10T11:06:14.580Z","updatedAt":"2026-10-10T11:06:14.580Z"} -->
-
 ## Scheduled
+
+- [42] Name the `hai-tasks` CLI and its path in the T3 worker prompt.
+  <!-- hai:{"id":"simple-e5032b10-0e74-4f0f-b56c-1a32930f34fc","createdAt":"2026-10-10T11:06:14.580Z","updatedAt":"2026-10-10T11:08:52.074Z"} -->
 
 - [34] Measure how fast agents can empty a weekly allowance, per provider, from quota
   readings.
