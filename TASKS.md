@@ -12,6 +12,12 @@ Rules for TASKS.md usage are at the bottom of the file.
 
 ## Ordered backlog
 
+- [43] A missing launched thread stops pacing for every project
+  <!-- hai:{"id":"simple-1f8ce88a-69b8-4ee1-b03d-37b4e2793501","createdAt":"2026-10-10T19:31:24.723Z","updatedAt":"2026-10-10T19:31:24.723Z"} -->
+
+- [44] A tracker dropped from the config or T3 stops pacing for every project
+  <!-- hai:{"id":"simple-3b44f53e-4b5a-4948-8f65-7003544a3dfb","createdAt":"2026-10-10T19:31:24.931Z","updatedAt":"2026-10-10T19:31:24.931Z"} -->
+
 ## Scheduled
 
 ## In Progress
@@ -269,7 +275,7 @@ Rules for TASKS.md usage are at the bottom of the file.
 
 [19]: docs/tasks/19-uv-source-path-documentation-unclear.md
 
-<!-- hai:reserved-numbers:1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,26,27,28,29,30,31,32,33,34,35,36,37,38,39,40,41,42 -->
+<!-- hai:reserved-numbers:1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,26,27,28,29,30,31,32,33,34,35,36,37,38,39,40,41,42,43,44 -->
 
 [20]: docs/tasks/20-command-not-found-error.md
 [21]: docs/tasks/21-unclear-urlerror.md
@@ -298,6 +304,10 @@ Rules for TASKS.md usage are at the bottom of the file.
 [41]: docs/tasks/41-verify-claude-reset-contract-and-supervise-useful-reset-trials.md
 
 [42]: docs/tasks/42-name-the-hai-tasks-cli-and-its-path-in-the-t3-worker-prompt.md
+
+[43]: docs/tasks/43-a-missing-launched-thread-stops-pacing-for-every-project.md
+
+[44]: docs/tasks/44-a-tracker-dropped-from-the-config-or-t3-stops-pacing-for-every-project.md
 
 ## Rules
 
