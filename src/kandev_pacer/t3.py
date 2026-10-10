@@ -20,6 +20,7 @@ from . import provider, resets
 from .config import API_KEY
 from .quota import (
     class_windows,
+    format_wait,
     quota_verdict,
     resume_note,
     scope_names,
@@ -48,8 +49,38 @@ class CheckoutBlocked(Withheld):
     """A tracker's own checkout is unusable; other trackers can still launch."""
 
 
+class Held(Withheld):
+    """A pending launch that waits for a person or a cooldown while other work goes on.
+
+    A tracker hold stops new launches from its whole tracker, because a broken project
+    setup would fail the next issue the same way. An issue hold covers only the issue.
+    """
+
+    def __init__(self, reason, scope="tracker", retry_at=None, detail=""):
+        super().__init__(reason)
+        self.scope, self.retry_at, self.detail = scope, retry_at, detail
+
+
 # Each rejected launch can leave a worktree behind, so stop retrying after a few.
 REJECTION_LIMIT = 3
+# Space retries out so that a short hiccup, such as another process holding the
+# project's .git/config.lock for two minutes, cannot use up every attempt.
+REJECTION_COOLDOWN = 3600
+NOT_ELIGIBLE = (
+    "Pending issue is no longer eligible; "
+    "check its section and dependencies in TASKS.md"
+)
+
+
+def stamp(seconds):
+    return datetime.fromtimestamp(seconds, UTC).isoformat()
+
+
+def rejected_reason(issue, rejections):
+    reason = f"T3 rejected launching {issue} ({rejections}/{REJECTION_LIMIT})"
+    if rejections >= REJECTION_LIMIT:
+        reason += "; check the project's T3 worktree setup"
+    return reason
 
 
 def eligible(snapshot):
@@ -196,13 +227,16 @@ class T3Pacer:
         key = hashlib.sha256((tracker + "\0" + issue).encode()).hexdigest()
         return self.state / (key + ".json")
 
-    def prepare(self, tracker, store, snapshot, issue, parent, project):
-        root = store.root
+    def require_base_branch(self, tracker, root):
         if git(root, "symbolic-ref", "--short", "HEAD") != self.config.t3_base_branch:
             raise CheckoutBlocked(
                 f"Scheduling blocked: repository {root} for tracker {tracker} "
                 f"is not on the configured base branch {self.config.t3_base_branch}"
             )
+
+    def prepare(self, tracker, store, snapshot, issue, parent, project):
+        root = store.root
+        self.require_base_branch(tracker, root)
         if git(root, "status", "--porcelain"):
             raise CheckoutBlocked(
                 f"Scheduling blocked: repository {root} for tracker {tracker} "
@@ -281,17 +315,16 @@ class T3Pacer:
         store, _ = self.trackers[record["tracker"]]
         snapshot = store.read()
         if record["revision"] != snapshot["revision"]:
-            raise Withheld("Tracker revision changed; inspect pending launch record")
+            raise Held(
+                "Tracker revision changed before scheduling; "
+                "inspect TASKS.md and its Git history"
+            )
         issue = next(
             (i for i in eligible(snapshot) if i["id"] == record["issue"]), None
         )
         if issue is None:
-            raise Withheld("Pending issue is no longer eligible")
-        if (
-            git(store.root, "symbolic-ref", "--short", "HEAD")
-            != self.config.t3_base_branch
-        ):
-            raise Withheld("Tracker is no longer on the configured base branch")
+            raise Held(NOT_ELIGIBLE, scope="issue")
+        self.require_base_branch(record["tracker"], store.root)
         if record["phase"] == "prepared":
             result = store.mutate(
                 "update",
@@ -302,7 +335,9 @@ class T3Pacer:
             record.update(revision=result["revision"], phase="scheduled")
             save(path, record)
         if store.read()["revision"] != record["revision"]:
-            raise Withheld("Tracker changed during scheduling; inspect launch record")
+            raise Held(
+                "Tracker changed during scheduling; inspect TASKS.md and its Git history"
+            )
         # Restrict the commit to TASKS.md, including after an interrupted commit.
         if git(store.root, "diff", "HEAD", "--", store.tasks_file.name):
             git(store.root, "add", "--", store.tasks_file.name)
@@ -316,7 +351,9 @@ class T3Pacer:
                 store.tasks_file.name,
             )
         if store.read()["revision"] != record["revision"]:
-            raise Withheld("Tracker changed during commit; inspect launch record")
+            raise Held(
+                "Tracker changed during commit; inspect TASKS.md and its Git history"
+            )
         record["phase"] = "submitted"
         save(path, record)
 
@@ -465,7 +502,8 @@ class T3Pacer:
                         "T3 provider instances. See docs/t3-pacing.md#unknown-providers."
                     )
                 running[name] += 1
-        records, pending = {}, []
+        now = time.time()
+        records, pending, held = {}, [], []
         for path in sorted(self.state.glob("*.json")):
             record = json.loads(path.read_text())
             if (
@@ -496,17 +534,32 @@ class T3Pacer:
             elif record["phase"] in {"observed", "accepted"}:
                 raise Withheld("Previously accepted thread is missing; inspect T3")
             elif record["phase"] in {"prepared", "scheduled", "submitted"}:
+                hold = record.get("hold")
+                if hold and (
+                    hold["retry_at"] is None
+                    or datetime.fromisoformat(hold["retry_at"]).timestamp() > now
+                ):
+                    held.append((path, record))
+                    continue
+                if hold:
+                    del record["hold"]
+                    save(path, record)
+                    log.info(
+                        "T3 hold on %s from %s ended; retrying its launch",
+                        record["issue"],
+                        record["tracker"],
+                    )
                 pending.append((path, record))
             else:
                 raise Withheld("Unknown launch record phase; inspect state directory")
-        now = time.time()
+        skipped = {r["tracker"] for _, r in held if r["hold"]["scope"] == "tracker"}
         usage, errors = provider.read(self.config.providers, now=now)
         waiting = set()
         if pending:
             waiting.add(selection_provider(pending[0][1]["command"]["modelSelection"]))
         else:
             for tracker, (store, parent_id) in self.trackers.items():
-                if not any(
+                if tracker in skipped or not any(
                     (tracker, issue["id"]) not in records
                     for issue in eligible(store.read())
                 ):
@@ -522,15 +575,13 @@ class T3Pacer:
         }
         usage, errors = resets.apply(usage, errors, waiting, self.config, now)
         self.report_status(running, usage, errors, now, threads)
+        for path, record in held:
+            log.warning("T3 HELD %s", self.hold_note(path, record, now))
         # An unresolved launch blocks new admissions, even when its gate is closed.
-        if pending:
-            path, record = pending[0]
+        # A held launch is not unresolved: it blocks only its own tracker or issue.
+        for path, record in pending:
             selection = record["command"]["modelSelection"]
-            if self.admitted(selection, running, usage, errors, now):
-                if record["phase"] in {"prepared", "scheduled"}:
-                    self.schedule(path, record)
-                self.dispatch(path, record)
-            else:
+            if not self.admitted(selection, running, usage, errors, now):
                 log.info(
                     "T3 pending launch of %s from %s waits for %s admission; "
                     "new launches wait behind it",
@@ -538,8 +589,12 @@ class T3Pacer:
                     record["tracker"],
                     selection_provider(selection),
                 )
-            return
+                return
+            if self.launch(path, record, skipped, now):
+                return
         for tracker, (store, parent_id) in self.trackers.items():
+            if tracker in skipped:
+                continue
             parent = threads.get(parent_id) if parent_id is not None else {}
             projects = [
                 p for p in snapshot["projects"] if p["workspaceRoot"] == str(store.root)
@@ -576,23 +631,71 @@ class T3Pacer:
                 except CheckoutBlocked as error:
                     log.warning("T3 skipping tracker this tick: %s", error)
                     break
-                self.schedule(path, record)
-                self.dispatch(path, record)
-                return
+                if self.launch(path, record, skipped, now):
+                    return
+                break
 
-    def dispatch(self, path, record):
+    def launch(self, path, record, skipped, now):
+        """Schedule and dispatch a record; return whether T3 accepted it.
+
+        When the launch is held or its checkout is blocked, add the tracker to
+        `skipped` if no other issue from it should launch this tick.
+        """
+        try:
+            if record["phase"] in {"prepared", "scheduled"}:
+                self.schedule(path, record)
+            self.dispatch(path, record, now)
+            return True
+        except CheckoutBlocked as error:
+            log.warning("T3 skipping tracker this tick: %s", error)
+            skipped.add(record["tracker"])
+        except Held as error:
+            record["hold"] = {
+                "scope": error.scope,
+                "reason": str(error),
+                "since": stamp(now),
+                "retry_at": stamp(error.retry_at) if error.retry_at else None,
+            }
+            save(path, record)
+            log.warning(
+                "T3 holding %s", self.hold_note(path, record, now, error.detail)
+            )
+            if error.scope == "tracker":
+                skipped.add(record["tracker"])
+        return False
+
+    def hold_note(self, path, record, now, detail=""):
+        """Say on one line what is held, since when, why, and what releases it."""
+        hold = record["hold"]
+        what = (
+            f"tracker {record['tracker']}"
+            if hold["scope"] == "tracker"
+            else f"issue {record['issue']} from {record['tracker']}"
+        )
+        since = datetime.fromisoformat(hold["since"]).astimezone()
+        release = f"rm {shlex.quote(str(path))}"
+        if hold["retry_at"]:
+            retry = datetime.fromisoformat(hold["retry_at"]).timestamp()
+            release = (
+                f"retries automatically in ~{format_wait(retry - now)} "
+                f"(~{datetime.fromtimestamp(retry):%H:%M}); to retry now: {release}"
+            )
+        else:
+            release = "to release: " + release
+        return (
+            f"{what} since {since:%Y-%m-%d %H:%M}: {hold['reason']}{detail}; {release}"
+        )
+
+    def dispatch(self, path, record, now):
         store, _ = self.trackers[record["tracker"]]
         # The schedule commit is in, so workers merging their own tracker updates
         # may move the revision on; only this issue leaving the queue withholds it.
         if not any(i["id"] == record["issue"] for i in eligible(store.read())):
-            raise Withheld("Pending issue is no longer eligible")
+            raise Held(NOT_ELIGIBLE, scope="issue")
         rejections = record.get("rejections", 0)
         if rejections >= REJECTION_LIMIT:
-            raise Withheld(
-                f"T3 rejected launching {record['issue']} from {record['tracker']} "
-                f"{rejections} times; inspect T3 worktree setup for that project, "
-                "then delete this pending launch record to retry"
-            )
+            # Records saved before holds existed can reach the limit unheld.
+            raise Held(rejected_reason(record["issue"], rejections))
         command = record["command"]
         try:
             self.server.call("orchestration.dispatchCommand", command)
@@ -602,16 +705,31 @@ class T3Pacer:
                 raise  # The next tick observes the thread instead of relaunching.
             # T3 deletes a thread whose bootstrap fails but can keep its worktree
             # and branch, so resending the same thread ID fails on that branch.
+            # Keep T3's reason: its own logs rotate away within days.
+            worktree = command["bootstrap"]["prepareWorktree"]
+            record.setdefault("rejected", []).append(
+                {
+                    "branch": worktree["branch"],
+                    "at": stamp(now),
+                    "error": str(error)[:4000],
+                }
+            )
             thread_id = str(uuid.uuid4())
             command.update(threadId=thread_id, commandId=str(uuid.uuid4()))
             command["message"]["messageId"] = str(uuid.uuid4())
-            command["bootstrap"]["prepareWorktree"]["branch"] = f"pacer-{thread_id}"
+            worktree["branch"] = f"pacer-{thread_id}"
             record["rejections"] = rejections + 1
             save(path, record)
-            raise Withheld(
-                f"T3 rejected launching {record['issue']} from {record['tracker']} "
-                f"({record['rejections']}/{REJECTION_LIMIT}), retrying next tick "
-                f"with a new thread ID: {str(error)[:500]}"
+            leftovers = ", ".join(r["branch"] for r in record["rejected"])
+            raise Held(
+                rejected_reason(record["issue"], record["rejections"]),
+                retry_at=(
+                    now + REJECTION_COOLDOWN
+                    if record["rejections"] < REJECTION_LIMIT
+                    else None
+                ),
+                detail=f": {str(error)[:500]}; leftover worktree branches in "
+                f"{store.root}: {leftovers}",
             ) from None
         record["phase"] = "accepted"
         save(path, record)
