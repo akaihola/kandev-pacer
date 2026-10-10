@@ -6,9 +6,6 @@ Rules for TASKS.md usage are at the bottom of the file.
 
 ## Ordered backlog
 
-- [37] Research how to redeem banked resets for the Claude and Codex subscriptions, and
-  how to verify the pacer's untested redemption requests without wasting a reset.
-
 - [34] Measure how fast agents can empty a weekly allowance, per provider, from quota
   readings.
 
@@ -21,6 +18,10 @@ Rules for TASKS.md usage are at the bottom of the file.
     - Depends on: [34]
 
 ## Scheduled
+
+- [37] Research how to redeem banked resets for the Claude and Codex subscriptions, and
+  how to verify the pacer's untested redemption requests without wasting a reset.
+  <!-- hai:{"updatedAt":"2026-10-10T10:55:30.120Z"} -->
 
 - [38] Heavy console output
   <!-- hai:{"id":"simple-603d6a8b-d4a1-4ed1-869f-4f8c0439ef5e","priority":"none","labels":[],"createdAt":"2026-10-10T08:55:49.236Z","updatedAt":"2026-10-10T10:52:56.648Z"} -->
