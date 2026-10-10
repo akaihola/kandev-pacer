@@ -126,6 +126,34 @@ def git(root, *args):
     ).strip()
 
 
+def thread_note(record):
+    """Sum up an observed thread on one line: whose it is, where it stands, what it needs.
+
+    The full snapshot stays in the launch record on disk and in the DEBUG log, so the
+    INFO line only keeps what a person watching the console acts on: the issue and
+    tracker, the provider, the session and turn states, flags that wait for a human,
+    and T3's last error text.
+    """
+    thread = record["thread"]
+    session = thread.get("session") or {}
+    turn = thread.get("latestTurn") or {}
+    parts = [f"session {session.get('status', 'unknown')}"]
+    if turn:
+        parts.append(f"turn {turn.get('state', 'unknown')}")
+    if thread.get("hasPendingApprovals"):
+        parts.append("needs approval")
+    if thread.get("hasPendingUserInput"):
+        parts.append("needs input")
+    provider = session.get("providerName")
+    note = (
+        f"{record['issue']} from {record['tracker']} on {thread['id']}"
+        f"{f' ({provider})' if provider else ''}: {', '.join(parts)}"
+    )
+    if session.get("lastError"):
+        note += f"; error: {session['lastError']}"
+    return note
+
+
 def activity(thread):
     session, turn = thread.get("session"), thread.get("latestTurn")
     if session and session.get("status") not in {
@@ -548,7 +576,8 @@ class T3Pacer:
                     )
                 }
                 save(path, record)
-                log.info("T3 %s: %s", thread["id"], json.dumps(record["thread"]))
+                log.info("T3 %s", thread_note(record))
+                log.debug("T3 %s: %s", thread["id"], json.dumps(record["thread"]))
                 if not thread.get("session") and not thread.get("latestTurn"):
                     raise Withheld("Launched thread state is unknown; withholding work")
             elif record["phase"] in {"observed", "accepted"}:

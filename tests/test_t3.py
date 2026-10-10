@@ -239,6 +239,51 @@ def test_finished_turn_never_relaunches_or_accepts(setup, state):
     )
 
 
+def test_observed_thread_logs_one_readable_line_and_keeps_json_at_debug(setup, caplog):
+    pacer, path, server = setup
+    pacer.tick()
+    thread = server.data["threads"][-1]
+    thread.update(
+        session={
+            "status": "stopped",
+            "providerName": "codex",
+            "lastError": "workspace folder no longer exists",
+        },
+        latestTurn={"state": "completed", "turnId": "turn-1"},
+        hasPendingUserInput=True,
+    )
+    caplog.set_level("DEBUG", logger="kandev-pacer")
+    pacer.tick()
+    [info] = [
+        r.getMessage()
+        for r in caplog.records
+        if r.levelname == "INFO" and thread["id"] in r.getMessage()
+    ]
+    assert info == (
+        f"T3 task-1 from {path.resolve()} on {thread['id']} (codex): "
+        "session stopped, turn completed, needs input; "
+        "error: workspace folder no longer exists"
+    )
+    assert "{" not in info
+    [debug] = [
+        r.getMessage()
+        for r in caplog.records
+        if r.levelname == "DEBUG" and thread["id"] in r.getMessage()
+    ]
+    assert json.loads(debug.split(": ", 1)[1])["latestTurn"]["turnId"] == "turn-1"
+
+
+def test_thread_note_without_turn_or_provider():
+    record = {
+        "issue": "task-9",
+        "tracker": "/repo/TASKS.md",
+        "thread": {"id": "abc", "session": {"status": "starting"}, "latestTurn": None},
+    }
+    assert t3.thread_note(record) == (
+        "task-9 from /repo/TASKS.md on abc: session starting"
+    )
+
+
 @pytest.mark.parametrize("flag", ["hasPendingApprovals", "hasPendingUserInput"])
 def test_waiting_occupies_capacity(setup, flag):
     pacer, _, server = setup

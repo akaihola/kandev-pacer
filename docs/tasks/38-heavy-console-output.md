@@ -10,3 +10,31 @@ T3 f79c9366-cca4-4561-b65a-657c1d2dff35: {"id": "f79c9366-cca4-4561-b65a-657c1d2
 T3 e06a9686-844b-468f-be02-1c6a587279c9: {"id": "e06a9686-844b-468f-be02-1c6a587279c9", "branch": "pacer-e06a9686-844b-468f-be02-1c6a587279c9", "worktreePath": "/home/agent/.t3/worktrees/filemill/pacer-e06a9686-844b-468f-be02-1c6a587279c9", "session": {"threadId": "e06a9686-844b-468f-be02-1c6a587279c9", "status": "stopped", "providerName": "claudeAgent", "providerInstanceId": "claudeAgent", "runtimeMode": "full-access", "activeTurnId": null, "lastError": null, "updatedAt": "2026-10-07T05:13:51.119Z"}, "latestTurn": {"turnId": "d82a00e7-5250-4574-9728-01f470bf5246", "state": "completed", "requestedAt": "2026-10-07T04:38:04.875Z", "startedAt": "2026-10-07T04:38:04.875Z", "completedAt": "2026-10-07T04:40:07.331Z", "assistantMessageId": "assistant:1958e959-4134-49ab-b0e7-7f16feff9b0d"}, "hasPendingApprovals": false, "hasPendingUserInput": false}
 T3 withheld: Launch record does not match endpoint/trackers
 ```
+
+## Decision (2026-10-10)
+
+The per-thread JSON came from the pacer logging the whole `thread` section of the launch
+record after every tick. The same data is already saved to the record file, so printing it
+again only told a person that "something was observed" at the cost of a 900-character
+line, repeated for every thread on every tick.
+
+What a person watching the console acts on:
+
+- which issue and tracker the thread belongs to, and the thread ID to find it in T3
+- the provider, because quota and capacity are per subscription
+- `session.status` and `latestTurn.state`, which say whether work is running, done or
+  stopped
+- `hasPendingApprovals` / `hasPendingUserInput`, which mean the thread waits for a human
+- `session.lastError`, the only free-text clue when something went wrong
+
+What was hidden from INFO (still in the record file and in the DEBUG log):
+
+- `id` and `session.threadId` (duplicates of the thread ID already in the line)
+- `branch` and `worktreePath` (derivable from the thread ID and the project)
+- `providerInstanceId`, `runtimeMode`, `activeTurnId`, `updatedAt`
+- `latestTurn.turnId`, `requestedAt`, `startedAt`, `completedAt`, `assistantMessageId`
+
+The INFO line is now `T3 <issue> from <tracker> on <thread ID> (<provider>): session
+<status>, turn <state>[, needs approval][, needs input][; error: <lastError>]`. The
+`T3 withheld: Launch record does not match endpoint/trackers` line in the example is a
+separate issue, tracked as [33].

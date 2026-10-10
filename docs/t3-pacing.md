@@ -309,6 +309,19 @@ or acknowledged. An acknowledged thread missing from T3 blocks admission for ins
 Idle, failed, waiting, and completed threads retain their record and never relaunch
 automatically. Continue those threads manually when needed.
 
+Each tick logs one line per observed thread at INFO level, for example:
+
+```
+T3 task-7 from /home/agent/prg/filemill/TASKS.md on e06a9686-... (claudeAgent): session stopped, turn completed
+```
+
+The line names the issue, tracker, thread ID and provider, then the session status, the
+latest turn state, `needs approval` or `needs input` when the thread waits for a person,
+and T3's `lastError` text when there is one. Everything else T3 reports about the thread
+(branch, worktree path, turn and message IDs, timestamps, runtime mode) is in the launch
+record under `thread` and in the same line at DEBUG level, so the console stays readable
+while the detail is one `jq .thread RECORD` away.
+
 A pending launch blocks all new launches until it is dispatched or held. While its
 provider has no free capacity, each tick logs `T3 pending launch of ... waits for ...
 admission`. Once the scheduling commit is in, other workers may merge their own
