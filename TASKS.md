@@ -28,10 +28,6 @@ Rules for TASKS.md usage are at the bottom of the file.
 
 ## In Progress
 
-- [~] [37] Research how to redeem banked resets for the Claude and Codex subscriptions, and
-  how to verify the pacer's untested redemption requests without wasting a reset.
-  <!-- hai:{"updatedAt":"2026-10-10T10:59:14.248Z"} -->
-
 - [16] Learn from session observation records: a lowest-priority Kandev task the
   Heartbeat creates when unread records exist, writing observations and proposed
   solution prompts to the right repository's unreviewed section.
@@ -44,6 +40,10 @@ Rules for TASKS.md usage are at the bottom of the file.
   before resuming tasks.
 
 ## Completed / Accepted
+
+- [ ] [37] Research how to redeem banked resets for the Claude and Codex subscriptions, and
+  how to verify the pacer's untested redemption requests without wasting a reset.
+  <!-- hai:{"updatedAt":"2026-10-10T10:59:30.550Z"} -->
 
 - [ ] [38] Heavy console output
   <!-- hai:{"id":"simple-603d6a8b-d4a1-4ed1-869f-4f8c0439ef5e","priority":"none","labels":[],"createdAt":"2026-10-10T08:55:49.236Z","updatedAt":"2026-10-10T10:52:56.648Z"} -->
