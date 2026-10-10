@@ -16,11 +16,6 @@ Rules for TASKS.md usage are at the bottom of the file.
 
 ## In Progress
 
-- [~] [36] Keep long-lived Claude resets when the weekly rollover is too close to use the
-  refill.
-    - Depends on: [34]
-  <!-- hai:{"updatedAt":"2026-10-10T12:33:33.258Z"} -->
-
 - [16] Learn from session observation records: a lowest-priority Kandev task the
   Heartbeat creates when unread records exist, writing observations and proposed
   solution prompts to the right repository's unreviewed section.
@@ -33,6 +28,11 @@ Rules for TASKS.md usage are at the bottom of the file.
   before resuming tasks.
 
 ## Completed / Accepted
+
+- [ ] [36] Keep long-lived Claude resets when the weekly rollover is too close to use the
+  refill.
+    - Depends on: [34]
+  <!-- hai:{"updatedAt":"2026-10-10T12:35:25.848Z"} -->
 
 - [ ] [35] Redeem Codex resets as early in the week as possible instead of pacing toward an
   even split or saving them for their last week.
