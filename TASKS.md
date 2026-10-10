@@ -22,14 +22,14 @@ Rules for TASKS.md usage are at the bottom of the file.
 
 ## Scheduled
 
-- [42] Name the `hai-tasks` CLI and its path in the T3 worker prompt.
-  <!-- hai:{"id":"simple-e5032b10-0e74-4f0f-b56c-1a32930f34fc","createdAt":"2026-10-10T11:06:14.580Z","updatedAt":"2026-10-10T11:08:52.074Z"} -->
-
 - [34] Measure how fast agents can empty a weekly allowance, per provider, from quota
   readings.
   <!-- hai:{"updatedAt":"2026-10-10T10:58:05.227Z"} -->
 
 ## In Progress
+
+- [~] [42] Name the `hai-tasks` CLI and its path in the T3 worker prompt.
+  <!-- hai:{"id":"simple-e5032b10-0e74-4f0f-b56c-1a32930f34fc","createdAt":"2026-10-10T11:06:14.580Z","updatedAt":"2026-10-10T11:09:24.232Z"} -->
 
 - [16] Learn from session observation records: a lowest-priority Kandev task the
   Heartbeat creates when unread records exist, writing observations and proposed
