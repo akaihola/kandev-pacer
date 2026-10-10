@@ -45,6 +45,16 @@ uv run --extra t3 python -c 'import hai_tasks; print(hai_tasks.__file__)'
 ```
 
 The second command should print a file inside the Hai checkout you selected.
+
+At startup, T3 mode looks for the `hai-tasks` CLI on `PATH` with `shutil.which`.
+If it is absent, it checks for an executable `hai-tasks` script next to
+`sys.executable`. With `uv run --extra t3`, this is `.venv/bin/hai-tasks`,
+installed by the `t3` extra. The lookup runs once, and worker prompts include the
+absolute command path with `read` and revision-checked `update` examples.
+`hai_tasks` names Hai's Python package; `hai-tasks` is the CLI workers should run.
+If neither lookup finds an executable, T3 mode refuses to start and names `PATH`
+and the interpreter's script path in the error.
+
 `uv sync` updates the environment and, when needed, `uv.lock`. After changing the
 source path, run it without `--frozen` so the lockfile can record the new source.
 If uv reports that the source directory or its `pyproject.toml` is missing, check

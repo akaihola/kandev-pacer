@@ -9,6 +9,7 @@ import os
 import shlex
 import shutil
 import subprocess
+import sys
 import tempfile
 import time
 import uuid
@@ -192,6 +193,16 @@ def activity(thread):
 
 class T3Pacer:
     def __init__(self, config, server):
+        cli = shutil.which("hai-tasks")
+        if cli is None:
+            fallback = Path(sys.executable).with_name("hai-tasks")
+            if not fallback.is_file() or not os.access(fallback, os.X_OK):
+                raise Withheld(
+                    f"hai-tasks CLI not found: looked on PATH and at {fallback}. "
+                    "Install it with uv sync --extra t3."
+                )
+            cli = str(fallback)
+        self.hai_tasks_command = shlex.quote(str(Path(cli).absolute()))
         TasksStore = importlib.import_module("hai_tasks").TasksStore
 
         self.config, self.server = config, server
@@ -291,7 +302,11 @@ class T3Pacer:
             + "\n\nTracker workflow:\n"
             + snapshot["parsed"]["source"].split("## Rules", 1)[1]
             + "\n\nScope: this issue and its required tests and documentation. "
-            "Use hai_tasks for tracker updates with revision checks. The issue is already "
+            "`hai_tasks` is Hai's Python package, not a tool. Update the tracker with "
+            f"`{self.hai_tasks_command} read <repo>`, then "
+            f"`{self.hai_tasks_command} update <repo> <id> "
+            "--revision <rev> --json <patch>`. Load the `hai-tasks` skill if it is listed. "
+            "The issue is already "
             "scheduled and committed on the base branch. Follow repository rules for "
             "moving it to In Progress in this worktree, validation, merge, and completion. "
             "Do not check user acceptance [x]. Do not send messages to others. "

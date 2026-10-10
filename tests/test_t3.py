@@ -149,6 +149,57 @@ def setup(tmp_path, monkeypatch):
     return t3.T3Pacer(config, server), path, server
 
 
+@pytest.mark.parametrize("on_path", [True, False])
+def test_worker_prompt_names_resolved_cli(setup, tmp_path, monkeypatch, on_path):
+    pacer, _, server = setup
+    path_bin = tmp_path / "path bin"
+    venv_bin = tmp_path / "venv bin"
+    for directory in (path_bin, venv_bin):
+        directory.mkdir()
+    fallback = venv_bin / "hai-tasks"
+    fallback.write_text("#!/bin/sh\n")
+    fallback.chmod(0o755)
+    selected = fallback
+    if on_path:
+        selected = path_bin / "hai-tasks"
+        selected.write_text("#!/bin/sh\n")
+        selected.chmod(0o755)
+    with monkeypatch.context() as lookup:
+        lookup.setenv("PATH", str(path_bin))
+        lookup.setattr(t3.sys, "executable", str(venv_bin / "python"))
+        pacer = t3.T3Pacer(pacer.config, server)
+    # Changing the lookup result after startup must not change worker commands.
+    monkeypatch.setattr(t3.shutil, "which", lambda name: None)
+    pacer.tick()
+    prompt = server.calls[0]["message"]["text"]
+    command = shlex.quote(str(selected))
+    assert f"`{command} read <repo>`" in prompt
+    assert f"`{command} update <repo> <id> --revision <rev> --json <patch>`" in prompt
+    assert "`hai_tasks` is Hai's Python package, not a tool" in prompt
+    assert "Load the `hai-tasks` skill if it is listed" in prompt
+
+
+@pytest.mark.parametrize("fallback_kind", ["missing", "directory", "not executable"])
+def test_startup_requires_hai_tasks_cli(
+    setup, tmp_path, monkeypatch, caplog, fallback_kind
+):
+    pacer, _, server = setup
+    scripts = tmp_path / "scripts"
+    scripts.mkdir()
+    fallback = scripts / "hai-tasks"
+    if fallback_kind == "directory":
+        fallback.mkdir()
+    elif fallback_kind == "not executable":
+        fallback.touch(mode=0o644)
+    monkeypatch.setenv("PATH", str(scripts))
+    monkeypatch.setattr(t3.sys, "executable", str(scripts / "python"))
+    assert t3.run(pacer.config, dump_order=True) == 1
+    assert "T3 startup failed: hai-tasks CLI not found: looked on PATH" in caplog.text
+    assert str(fallback) in caplog.text
+    assert "uv sync --extra t3" in caplog.text
+    assert server.calls == []
+
+
 @pytest.mark.parametrize(
     "wrong_url,wrong_tracker", [(True, False), (False, True), (True, True)]
 )
