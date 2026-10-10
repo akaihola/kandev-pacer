@@ -1,5 +1,10 @@
 # Reset-aware pacing
 
+> **Known gaps, 2026-10-10.** The [optimality review] found that the Codex timing
+> below gives away tokens and that Claude can spend a long-lived reset just before the
+> rollover. Tasks 34 to 36 fix this. Until then, read that review for when a
+> redemption pays off.
+
 Both Kandev and T3 read available banked resets and
 use them automatically for waiting subscription work. Ordinary five-hour pacing,
 model scopes and concurrency caps still constrain launches. The pacer never buys
@@ -81,3 +86,5 @@ In T3, `codex-acp` aliases `codex`; `hermes-acp` is ignored because T3 pacing
 supports Codex and Claude instances. `--apikey-policy withhold` still prevents
 bypassed launches. Remove the overrides to restore reset-aware subscription pacing.
 Inspection reads do not redeem resets.
+
+[optimality review]: reset-pacing-optimality.md

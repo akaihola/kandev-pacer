@@ -9,6 +9,20 @@ Rules for TASKS.md usage are at the bottom of the file.
 - [33] Unclear "withheld" message
   <!-- hai:{"id":"simple-a1d698f2-1b36-4d9d-8019-cebd176aa083","priority":"none","labels":[],"createdAt":"2026-10-07T19:50:25.573Z","updatedAt":"2026-10-07T19:50:25.573Z"} -->
 
+- [37] Research how to redeem banked resets for the Claude and Codex subscriptions, and
+  how to verify the pacer's untested redemption requests without wasting a reset.
+
+- [34] Measure how fast agents can empty a weekly allowance, per provider, from quota
+  readings.
+
+- [35] Redeem Codex resets as early in the week as possible instead of pacing toward an
+  even split or saving them for their last week.
+    - Depends on: [34]
+
+- [36] Keep long-lived Claude resets when the weekly rollover is too close to use the
+  refill.
+    - Depends on: [34]
+
 ## Scheduled
 
 ## In Progress
@@ -236,7 +250,7 @@ Rules for TASKS.md usage are at the bottom of the file.
 
 [19]: docs/tasks/19-uv-source-path-documentation-unclear.md
 
-<!-- hai:reserved-numbers:1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,26,27,28,29,30,31,32,33 -->
+<!-- hai:reserved-numbers:1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,26,27,28,29,30,31,32,33,34,35,36,37 -->
 
 [20]: docs/tasks/20-command-not-found-error.md
 [21]: docs/tasks/21-unclear-urlerror.md
@@ -252,6 +266,10 @@ Rules for TASKS.md usage are at the bottom of the file.
 [32]: docs/tasks/32-add-reset-aware-pacing.md
 
 [33]: docs/tasks/33-unclear-withheld-message.md
+[34]: docs/tasks/34-measure-burn-time.md
+[35]: docs/tasks/35-redeem-codex-resets-early.md
+[36]: docs/tasks/36-keep-claude-resets-near-rollover.md
+[37]: docs/tasks/37-research-reset-redemption.md
 
 ## Rules
 
