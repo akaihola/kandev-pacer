@@ -510,7 +510,27 @@ class T3Pacer:
                 record["url"] != self.server.url
                 or record["tracker"] not in self.trackers
             ):
-                raise Withheld("Launch record does not match endpoint/trackers")
+                mismatches = []
+                if record["url"] != self.server.url:
+                    mismatches.append(
+                        "saved T3 server URL differs from t3_url (PACER_T3_URL)"
+                    )
+                if record["tracker"] not in self.trackers:
+                    mismatches.append(
+                        f"saved TASKS.md path {json.dumps(record['tracker'])} is absent "
+                        "from t3_trackers (PACER_T3_TRACKERS)"
+                    )
+                raise Withheld(
+                    f"No new tasks will launch this tick; existing T3 threads continue. "
+                    f"Saved launch record {path} for issue {record['issue']} "
+                    "remembers a launch to prevent duplicate threads, but "
+                    + "; ".join(mismatches)
+                    + ". Restore the intended server/tracker settings and restart. "
+                    "If this record is obsolete, stop the pacer, inspect its threadId "
+                    "in the original T3 server, then move only this file outside "
+                    "t3_state_dir before restarting. Removing a record for queued "
+                    "work can launch it again. See docs/t3-pacing.md#launch-record-mismatch."
+                )
             records[(record["tracker"], record["issue"])] = record
             thread = threads.get(record["command"]["threadId"])
             if thread:

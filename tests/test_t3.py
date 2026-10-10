@@ -149,6 +149,51 @@ def setup(tmp_path, monkeypatch):
     return t3.T3Pacer(config, server), path, server
 
 
+@pytest.mark.parametrize(
+    "wrong_url,wrong_tracker", [(True, False), (False, True), (True, True)]
+)
+def test_launch_record_mismatch_explains_recovery_without_mutating_work(
+    setup, wrong_url, wrong_tracker
+):
+    pacer, tracker_path, server = setup
+    pacer.tick()
+    [record_path] = pacer.state.glob("*.json")
+    record = json.loads(record_path.read_text())
+    if wrong_url:
+        record["url"] = "https://user:secret@old-server:3773/private?token=secret"
+    if wrong_tracker:
+        record["tracker"] = str(tracker_path.parent / "old" / "TASKS.md")
+    t3.save(record_path, record)
+    before_record = record_path.read_bytes()
+    before_tracker = tracker_path.read_bytes()
+    before_server = copy.deepcopy(server.data)
+    before_calls = copy.deepcopy(server.calls)
+
+    with pytest.raises(t3.Withheld) as error:
+        pacer.tick()
+
+    message = str(error.value)
+    assert "No new tasks will launch this tick; existing T3 threads continue" in message
+    assert str(record_path) in message
+    assert record["issue"] in message
+    assert "prevent duplicate threads" in message
+    assert ("saved T3 server URL differs" in message) == wrong_url
+    assert ("is absent from t3_trackers" in message) == wrong_tracker
+    if wrong_tracker:
+        assert record["tracker"] in message
+    assert "secret" not in message
+    assert "private" not in message
+    assert "Restore the intended server/tracker settings and restart" in message
+    assert "stop the pacer, inspect its threadId" in message
+    assert "move only this file outside t3_state_dir" in message
+    assert "can launch it again" in message
+    assert "docs/t3-pacing.md#launch-record-mismatch" in message
+    assert record_path.read_bytes() == before_record
+    assert tracker_path.read_bytes() == before_tracker
+    assert server.data == before_server
+    assert server.calls == before_calls
+
+
 def test_lost_reply_restart_preserves_one_thread_and_settings(setup):
     pacer, path, server = setup
     server.lose_reply = True
