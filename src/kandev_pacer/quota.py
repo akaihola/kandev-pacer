@@ -163,7 +163,7 @@ def reset_plan(usage, windows, now, provider, burn=None):
       unexpired -- the pace window ends now, which puts the burn line at 100% -- and the
       pacer redeems as soon as the allowance is empty, earliest expiry first.
 
-    `burn` is the measured burn time in seconds (burn.py), or None. With it, a Codex
+    `burn` is the measured burn time in seconds (burn.py), or None. With it, a
     reset is held back while less than one burn time remains before the rollover, if it
     stays valid past the point where the refill after that rollover would run out again
     (`roll + burn`). Used in those last hours it would buy almost nothing. A reset that
@@ -175,7 +175,7 @@ def reset_plan(usage, windows, now, provider, burn=None):
         return windows, 0
     roll = min(w["resets_at"] for w in weekly)
     usable = credits
-    if provider == "openai" and burn is not None and roll - now < burn:
+    if burn is not None and roll - now < burn:
         usable = [
             credit
             for credit in credits

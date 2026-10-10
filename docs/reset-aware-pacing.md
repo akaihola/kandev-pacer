@@ -1,9 +1,5 @@
 # Reset-aware pacing
 
-> **Known gap, 2026-10-10.** The [optimality review] found that Claude can spend a
-> long-lived reset just before the rollover. Task 36 fixes this. The Codex timing it
-> also found wanting was fixed by task 35; see [Codex: as early as possible](#codex-as-early-as-possible).
-
 Both Kandev and T3 read available banked resets and
 use them automatically for waiting subscription work. Ordinary five-hour pacing,
 model scopes and concurrency caps still constrain launches. The pacer never buys
@@ -15,13 +11,23 @@ provider.
 
 [Claude keeps its scheduled weekly rollover after a reset](https://support.claude.com/en/articles/17007452-what-is-a-limit-reset),
 so a Claude reset adds budget to this week. With N usable resets, the planner paces
-the current allowance to run out 1/(N + 1) of the way to the deadline: the rollover
+only the first allowance to run out 1/(N + 1) of the way to the deadline: the rollover
 or the earliest credit expiry, whichever is first. After each redemption it
 recalculates from the start of the week with one reset fewer, so later allowances get
-a looser cap. For example, Claude halfway through its week with one usable reset can
-finish its current allowance now, redeem, and use the refreshed allowance before the
-normal weekly rollover. Each fresh quota reading updates the plan with remaining
+a looser cap. With two resets, the redemption targets are 1/3 and then 1/2 of the
+way to the deadline, not 1/3 and 2/3. For example, Claude halfway through its week
+with one usable reset can finish its current allowance now, redeem, and use the
+refreshed allowance before the normal weekly rollover. Each fresh quota reading updates the plan with remaining
 credits and the provider's actual window timestamps.
+
+When less than one measured [burn time](#burn-time) remains before the weekly
+rollover, Claude holds a reset that stays valid past rollover plus one burn time.
+The free rollover can then refill the allowance, and the reset is still available
+when that allowance runs out. At 100% consumed the gate stays shut until rollover.
+A reset that expires at or before that next empty point is redeemed anyway, including
+one expiring before rollover. Without a burn time estimate, redemption keeps its
+existing timing. The status line logs both times, for example "1 resets held: 2h 10m
+to rollover is under the ~7h burn time".
 
 ### Codex: as early as possible
 
@@ -117,9 +123,8 @@ burn time of about 52 hours for the Claude subscription, from a 10% rise over 5h
 on 2026-09-20, and about 7 hours for Codex, from a 69% rise in 5 hours on 2026-10-04
 after a reset. The two faulty 100% readings in that log were skipped.
 
-Since task 35 the Codex rule above uses the estimate to decide whether to hold a reset
-in the last hours of a week. Task 36 will do the same for Claude. Without an estimate
-both providers redeem at weekly exhaustion as before.
+Both providers use the estimate to decide whether to hold a reset in the last hours
+of a week. Without an estimate both providers redeem at weekly exhaustion as before.
 
 ## Reading grants
 

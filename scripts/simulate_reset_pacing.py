@@ -36,7 +36,7 @@ def simulate(name, expires_at, burn_days, weeks, policy="pacer", count=1, work_f
     `pacer` is the current code: its gate, and redemption at weekly exhaustion, with
     `burn_days` passed in as the measured burn time. `asap` is the reference Codex rule
     since task 35: no weekly speed cap while a reset is unexpired, and redemption at
-    100%. `hold` is the proposed Claude rule (task 36): skip redemption when less than
+    100%. `hold` is the reference Claude rule from task 36: skip redemption when less than
     one burn time is left and the reset outlives the next empty point.
     """
     config = Settings(PACER_PROVIDER=name)

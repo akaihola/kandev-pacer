@@ -80,14 +80,15 @@ def test_codex_has_no_weekly_speed_cap_while_a_reset_is_unexpired():
     assert "natural rollover" not in codex.message
 
 
-def test_codex_holds_a_long_lived_reset_in_the_last_burn_time_before_rollover():
+@pytest.mark.parametrize("name", ["openai", "anthropic"])
+def test_holds_a_long_lived_reset_in_the_last_burn_time_before_rollover(name):
     """With 1h to the rollover and a 2h burn time, a reset valid next week waits."""
     now, burn = WEEK - 3600, 2 * 3600
-    config = Settings(PACER_PROVIDER="openai")
-    long_lived = envelope(count=1, expiry=3 * WEEK)
-    windows = parse_windows(long_lived, "openai")
-    assert reset_plan(long_lived, windows, now, "openai", burn)[1] == 0
-    assert reset_plan(long_lived, windows, now, "openai")[1] == 1
+    config = Settings(PACER_PROVIDER=name)
+    long_lived = envelope(name, count=1, expiry=3 * WEEK)
+    windows = parse_windows(long_lived, name)
+    assert reset_plan(long_lived, windows, now, name, burn)[1] == 0
+    assert reset_plan(long_lived, windows, now, name)[1] == 1
     held = quota_verdict(long_lived, windows, now, config, burn=burn)
     assert held.gate == "ceiling"
     assert (
@@ -96,22 +97,50 @@ def test_codex_holds_a_long_lived_reset_in_the_last_burn_time_before_rollover():
     )
     assert held.resumes_at == WEEK
     # A reset that would expire before the next refill could be emptied is still used.
-    dying = envelope(count=1, expiry=WEEK + 3600)
-    assert reset_plan(dying, windows, now, "openai", burn)[1] == 1
+    dying = envelope(name, count=1, expiry=WEEK + 3600)
+    assert reset_plan(dying, windows, now, name, burn)[1] == 1
     used = quota_verdict(dying, windows, now, config, burn=burn)
     assert "reset budget exhausted" in used.message
     # Early in the week nothing is held, whatever the burn time says.
-    assert reset_plan(long_lived, windows, NOW, "openai", burn)[1] == 1
+    assert reset_plan(long_lived, windows, NOW, name, burn)[1] == 1
+    assert reset_plan(long_lived, windows, WEEK - burn, name, burn)[1] == 1
+    long_lived["agents"][0]["usage"]["reset_credits"][0]["expires_at"] = None
+    assert reset_plan(long_lived, windows, now, name, burn)[1] == 0
 
 
-def test_held_reset_is_not_redeemed(redemption, monkeypatch):
-    monkeypatch.setattr(resets, "redeem", lambda *a: pytest.fail("held reset spent"))
-    usage = envelope(count=1, expiry=3 * WEEK)
+@pytest.mark.parametrize("name", ["openai", "anthropic"])
+def test_held_reset_is_not_redeemed(redemption, monkeypatch, name):
+    monkeypatch.setattr(resets, "_post", lambda *a: pytest.fail("held reset spent"))
+    usage = envelope(name, count=1, expiry=3 * WEEK)
+    monkeypatch.setattr(resets, "_fresh", lambda *a: usage)
     now = WEEK - 3600
-    assert resets.apply(usage, {}, {"openai"}, redemption, now, {"openai": 7200}) == (
+    assert resets.apply(usage, {}, {name}, redemption, now, {name: 7200}) == (
         usage,
         {},
     )
+    assert resets.redeem(name, redemption, now, 7200) == usage
+
+
+@pytest.mark.parametrize(
+    "expiry,burn",
+    [(WEEK - 1, 7200), (WEEK + 3600, 7200), (WEEK + 7200, 7200), (3 * WEEK, None)],
+)
+def test_claude_redeems_near_rollover_when_expiring_or_burn_unknown(
+    redemption, monkeypatch, expiry, burn
+):
+    before = envelope("anthropic", count=1, expiry=expiry)
+    after = envelope("anthropic", used=0, count=0)
+    reads = iter([before, after])
+    monkeypatch.setattr(resets, "_fresh", lambda *a: next(reads))
+    calls = []
+    monkeypatch.setattr(
+        resets, "_post", lambda *a: calls.append(a) or {"result": "reset"}
+    )
+    assert resets.apply(
+        before, {}, {"anthropic"}, redemption, WEEK - 3600, {"anthropic": burn}
+    ) == (after, {})
+    assert len(calls) == 1
+    assert parse_windows(after, "anthropic")[0]["resets_at"] == WEEK
 
 
 def test_expired_credits_and_session_only_limits_do_not_accelerate():
@@ -173,6 +202,17 @@ def _simulation():
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
+
+
+def test_claude_simulation_holds_a_reset_that_outlives_the_next_empty_point():
+    """Scenario B: saving the late-week refill buys a full allowance next week."""
+    sim = _simulation()
+    _, setup, limits, _ = next(s for s in sim.SCENARIOS if s[0].startswith("B."))
+    pacer = sim.simulate(policy="pacer", **setup, **limits)
+    held = sim.simulate(policy="hold", **setup, **limits)
+    assert pacer == held
+    assert pacer[0] == pytest.approx(2.9444444444)
+    assert pacer[1:] == ("day 10.51", "all spent")
 
 
 @pytest.mark.parametrize("letter", ["C", "D"])

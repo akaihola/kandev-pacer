@@ -1,7 +1,7 @@
 # Does reset-aware pacing get the most tokens?
 
-> **Status: analysed 2026-10-10. The Codex fix ([task 35]) is implemented; the Claude
-> fix ([task 36]) is not yet.** This checks the planner from
+> **Status: analysed 2026-10-10. The Codex fix ([task 35]) and Claude fix
+> ([task 36]) are implemented.** This records the review of the planner from
 > [task 32] against the question it was built to answer: does it get the most tokens out
 > of a subscription with banked resets? Every number below comes from
 > [`scripts/simulate_reset_pacing.py`], which drives the real `reset_plan` and
@@ -9,8 +9,9 @@
 
 ## Short answer
 
-For Claude the plan does get the most tokens possible, with one gap. It will spend a reset
-in the last hours of a week even when that reset is still valid next week.
+Before [task 36], Claude would spend a long-lived reset in the last hours of a week.
+It now holds that reset when less than one burn time remains and the reset stays
+valid past rollover plus one burn time. Expiring resets are still redeemed.
 
 For Codex it didn't, before [task 35]. Its even-split timing slowed down the very thing
 that makes a Codex reset valuable. In a typical week that cost about 2/7 of a weekly
@@ -81,13 +82,14 @@ So whenever N+1 tanks fit in the week, the pacer gets them. Scenario A below sho
 coupons and a 1-day burn time. It gets 2.97 tanks. That's the maximum minus the 3% the
 pacer always holds back on the last tank (`PACER_BACKSTOP = 0.97`).
 
-The recalculation also means [reset-aware-pacing.md] describes the schedule wrongly. Only
+The review found that [reset-aware-pacing.md] described the schedule wrongly;
+[task 36] corrected it. Only
 the first tank follows the N+1 split. With two coupons, the redemptions in scenario A land
 on day 2.34 and day 3.51, not day 2.33 and day 4.67. This costs no tokens.
 
 ### Gap: spending a long-lived coupon late in the week
 
-The pacer redeems whenever the weekly tank is empty and a coupon is usable, however close
+Before task 36, the pacer redeemed whenever the weekly tank was empty and a coupon was usable, however close
 the rollover is. Suppose work only arrives late in the week, for example because the
 backlog was empty or the pacer was down. Scenario B uses a 1-day burn time, a coupon valid
 for four more weeks, and work starting on day 5.9. The tank runs dry on day 6.9 and the
@@ -168,7 +170,10 @@ Run `uv run python scripts/simulate_reset_pacing.py`. `pacer` is the current cod
 given the scenario's burn time as its measured estimate. `hold` is the Claude fix from
 [task 36]. `asap` is the Codex rule from [task 35] written out by hand. Since that task
 landed, `pacer` matches `asap` in scenarios C and D; the `pacer` rows for C and D below
-are the pre-task-35 numbers, kept for the record.
+are the pre-task-35 numbers, kept for the record. The B rows also retain the original
+review figures. After task 36, both B policies use 2.944 allowances and redeem on day
+10.51. Holding the reset restores ordinary reserves before rollover, which accounts
+for the difference from the original `hold` total.
 
 | Scenario | Policy | Tanks used | Redeemed on |
 |---|---|---|---|
