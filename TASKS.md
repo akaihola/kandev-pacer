@@ -22,11 +22,11 @@ Rules for TASKS.md usage are at the bottom of the file.
 
 ## Scheduled
 
-- [34] Measure how fast agents can empty a weekly allowance, per provider, from quota
-  readings.
-  <!-- hai:{"updatedAt":"2026-10-10T10:58:05.227Z"} -->
-
 ## In Progress
+
+- [~] [34] Measure how fast agents can empty a weekly allowance, per provider, from quota
+  readings.
+  <!-- hai:{"updatedAt":"2026-10-10T11:04:20.310Z"} -->
 
 - [16] Learn from session observation records: a lowest-priority Kandev task the
   Heartbeat creates when unread records exist, writing observations and proposed
