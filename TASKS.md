@@ -30,9 +30,6 @@ Rules for TASKS.md usage are at the bottom of the file.
 
 ## In Progress
 
-- [~] [39] One failed launch stops pacing for every project
-  <!-- hai:{"updatedAt":"2026-10-10T10:28:18.090Z"} -->
-
 - [16] Learn from session observation records: a lowest-priority Kandev task the
   Heartbeat creates when unread records exist, writing observations and proposed
   solution prompts to the right repository's unreviewed section.
@@ -45,6 +42,9 @@ Rules for TASKS.md usage are at the bottom of the file.
   before resuming tasks.
 
 ## Completed / Accepted
+
+- [ ] [39] One failed launch stops pacing for every project
+  <!-- hai:{"updatedAt":"2026-10-10T10:37:29.278Z"} -->
 
 - [x] [*] Look at
   agent@gogo:prg/kandev-config/docs/2026-10-07-heartbeat-deterministic-script-research.md
