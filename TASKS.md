@@ -20,11 +20,11 @@ Rules for TASKS.md usage are at the bottom of the file.
   readings.
   <!-- hai:{"updatedAt":"2026-10-10T10:58:05.227Z"} -->
 
-- [37] Research how to redeem banked resets for the Claude and Codex subscriptions, and
-  how to verify the pacer's untested redemption requests without wasting a reset.
-  <!-- hai:{"updatedAt":"2026-10-10T10:55:30.120Z"} -->
-
 ## In Progress
+
+- [~] [37] Research how to redeem banked resets for the Claude and Codex subscriptions, and
+  how to verify the pacer's untested redemption requests without wasting a reset.
+  <!-- hai:{"updatedAt":"2026-10-10T10:59:02.128Z"} -->
 
 - [16] Learn from session observation records: a lowest-priority Kandev task the
   Heartbeat creates when unread records exist, writing observations and proposed
