@@ -21,11 +21,6 @@ Rules for TASKS.md usage are at the bottom of the file.
 
 ## In Progress
 
-- [~] [35] Redeem Codex resets as early in the week as possible instead of pacing toward an
-  even split or saving them for their last week.
-    - Depends on: [34]
-  <!-- hai:{"updatedAt":"2026-10-10T11:20:45.656Z"} -->
-
 - [16] Learn from session observation records: a lowest-priority Kandev task the
   Heartbeat creates when unread records exist, writing observations and proposed
   solution prompts to the right repository's unreviewed section.
@@ -38,6 +33,11 @@ Rules for TASKS.md usage are at the bottom of the file.
   before resuming tasks.
 
 ## Completed / Accepted
+
+- [ ] [35] Redeem Codex resets as early in the week as possible instead of pacing toward an
+  even split or saving them for their last week.
+    - Depends on: [34]
+  <!-- hai:{"updatedAt":"2026-10-10T11:28:57.623Z"} -->
 
 - [ ] [34] Measure how fast agents can empty a weekly allowance, per provider, from quota
   readings.
