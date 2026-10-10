@@ -25,10 +25,10 @@ Rules for TASKS.md usage are at the bottom of the file.
 - [38] Heavy console output
   <!-- hai:{"id":"simple-603d6a8b-d4a1-4ed1-869f-4f8c0439ef5e","priority":"none","labels":[],"createdAt":"2026-10-10T08:55:49.236Z","updatedAt":"2026-10-10T10:52:56.648Z"} -->
 
-- [33] Unclear "withheld" message
-  <!-- hai:{"id":"simple-a1d698f2-1b36-4d9d-8019-cebd176aa083","priority":"none","labels":[],"createdAt":"2026-10-07T19:50:25.573Z","updatedAt":"2026-10-10T10:52:25.597Z"} -->
-
 ## In Progress
+
+- [~] [33] Unclear "withheld" message
+  <!-- hai:{"id":"simple-a1d698f2-1b36-4d9d-8019-cebd176aa083","priority":"none","labels":[],"createdAt":"2026-10-07T19:50:25.573Z","updatedAt":"2026-10-10T10:54:25.840Z"} -->
 
 - [16] Learn from session observation records: a lowest-priority Kandev task the
   Heartbeat creates when unread records exist, writing observations and proposed
