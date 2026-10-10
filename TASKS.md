@@ -28,9 +28,6 @@ Rules for TASKS.md usage are at the bottom of the file.
 
 ## In Progress
 
-- [~] [42] Name the `hai-tasks` CLI and its path in the T3 worker prompt.
-  <!-- hai:{"id":"simple-e5032b10-0e74-4f0f-b56c-1a32930f34fc","createdAt":"2026-10-10T11:06:14.580Z","updatedAt":"2026-10-10T11:09:24.232Z"} -->
-
 - [16] Learn from session observation records: a lowest-priority Kandev task the
   Heartbeat creates when unread records exist, writing observations and proposed
   solution prompts to the right repository's unreviewed section.
@@ -43,6 +40,9 @@ Rules for TASKS.md usage are at the bottom of the file.
   before resuming tasks.
 
 ## Completed / Accepted
+
+- [ ] [42] Name the `hai-tasks` CLI and its path in the T3 worker prompt.
+  <!-- hai:{"id":"simple-e5032b10-0e74-4f0f-b56c-1a32930f34fc","createdAt":"2026-10-10T11:06:14.580Z","updatedAt":"2026-10-10T11:10:55.953Z"} -->
 
 - [ ] [37] Research how to redeem banked resets for the Claude and Codex subscriptions, and
   how to verify the pacer's untested redemption requests without wasting a reset.
