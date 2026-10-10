@@ -6,6 +6,8 @@ Rules for TASKS.md usage are at the bottom of the file.
 
 ## Ordered backlog
 
+- [39] One failed launch stops pacing for every project
+
 - [33] Unclear "withheld" message
   <!-- hai:{"id":"simple-a1d698f2-1b36-4d9d-8019-cebd176aa083","priority":"none","labels":[],"createdAt":"2026-10-07T19:50:25.573Z","updatedAt":"2026-10-07T19:50:25.573Z"} -->
 
@@ -253,7 +255,7 @@ Rules for TASKS.md usage are at the bottom of the file.
 
 [19]: docs/tasks/19-uv-source-path-documentation-unclear.md
 
-<!-- hai:reserved-numbers:1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,26,27,28,29,30,31,32,33,34,35,36,37,38 -->
+<!-- hai:reserved-numbers:1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,26,27,28,29,30,31,32,33,34,35,36,37,38,39 -->
 
 [20]: docs/tasks/20-command-not-found-error.md
 [21]: docs/tasks/21-unclear-urlerror.md
@@ -275,6 +277,7 @@ Rules for TASKS.md usage are at the bottom of the file.
 [37]: docs/tasks/37-research-reset-redemption.md
 
 [38]: docs/tasks/38-heavy-console-output.md
+[39]: docs/tasks/39-hold-failed-launch-pace-others.md
 
 ## Rules
 
