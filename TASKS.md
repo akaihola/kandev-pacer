@@ -20,6 +20,9 @@ Rules for TASKS.md usage are at the bottom of the file.
   refill.
     - Depends on: [34]
 
+- [42] Name the `hai-tasks` CLI and its path in the T3 worker prompt.
+  <!-- hai:{"id":"simple-e5032b10-0e74-4f0f-b56c-1a32930f34fc","createdAt":"2026-10-10T11:06:14.580Z","updatedAt":"2026-10-10T11:06:14.580Z"} -->
+
 ## Scheduled
 
 - [34] Measure how fast agents can empty a weekly allowance, per provider, from quota
@@ -264,7 +267,7 @@ Rules for TASKS.md usage are at the bottom of the file.
 
 [19]: docs/tasks/19-uv-source-path-documentation-unclear.md
 
-<!-- hai:reserved-numbers:1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,26,27,28,29,30,31,32,33,34,35,36,37,38,39,40,41 -->
+<!-- hai:reserved-numbers:1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,26,27,28,29,30,31,32,33,34,35,36,37,38,39,40,41,42 -->
 
 [20]: docs/tasks/20-command-not-found-error.md
 [21]: docs/tasks/21-unclear-urlerror.md
@@ -291,6 +294,8 @@ Rules for TASKS.md usage are at the bottom of the file.
 [40]: docs/tasks/40-make-reset-redemption-outcomes-and-diagnostics-provider-specific.md
 
 [41]: docs/tasks/41-verify-claude-reset-contract-and-supervise-useful-reset-trials.md
+
+[42]: docs/tasks/42-name-the-hai-tasks-cli-and-its-path-in-the-t3-worker-prompt.md
 
 ## Rules
 
