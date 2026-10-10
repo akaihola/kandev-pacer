@@ -12,15 +12,16 @@ Rules for TASKS.md usage are at the bottom of the file.
 
 ## Ordered backlog
 
-- [35] Redeem Codex resets as early in the week as possible instead of pacing toward an
-  even split or saving them for their last week.
-    - Depends on: [34]
-
 - [36] Keep long-lived Claude resets when the weekly rollover is too close to use the
   refill.
     - Depends on: [34]
 
 ## Scheduled
+
+- [35] Redeem Codex resets as early in the week as possible instead of pacing toward an
+  even split or saving them for their last week.
+    - Depends on: [34]
+  <!-- hai:{"updatedAt":"2026-10-10T11:17:38.369Z"} -->
 
 ## In Progress
 
