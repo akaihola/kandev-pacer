@@ -14,12 +14,12 @@ Rules for TASKS.md usage are at the bottom of the file.
 
 ## Scheduled
 
-- [36] Keep long-lived Claude resets when the weekly rollover is too close to use the
+## In Progress
+
+- [~] [36] Keep long-lived Claude resets when the weekly rollover is too close to use the
   refill.
     - Depends on: [34]
-  <!-- hai:{"updatedAt":"2026-10-10T11:25:58.926Z"} -->
-
-## In Progress
+  <!-- hai:{"updatedAt":"2026-10-10T12:33:33.258Z"} -->
 
 - [16] Learn from session observation records: a lowest-priority Kandev task the
   Heartbeat creates when unread records exist, writing observations and proposed
