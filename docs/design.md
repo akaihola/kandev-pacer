@@ -449,7 +449,9 @@ Three record kinds, append-only, ~300 KB/day at the default 120s tick:
   windows: `h=0.1` is 30 minutes of slack on the 5-hour window and 16.8 hours on the 7-day.
   `d` is what converts back to seconds. `launchable` counts launch candidates only — counting
   drains too would need a `queued_counts()` WebSocket round trip on every tick, including the
-  paused ones the record exists to capture.
+  paused ones the record exists to capture. `burn` is the measured burn time for the
+  provider (`burn.py`), or `null` until enough history exists; see
+  [reset-aware-pacing.md](reset-aware-pacing.md#burn-time).
 - `failure` — a launch or drain kandev refused, with the reason and the consecutive-failure
   count. Its own kind rather than a tick outcome, for the same reason `Pacer.failed` is not
   `Pacer.booked`: a refused launch spends no quota, and the tick goes on to the next candidate.

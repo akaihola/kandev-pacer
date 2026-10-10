@@ -179,7 +179,8 @@ That's why full weeks show 0.97 tanks.
 First find your burn time: how long it takes to go from 0% to 100% on the weekly bar with
 agents running flat out. One fully used five-hour session gives a rough estimate. If a full
 session moves the weekly bar 10%, a tank takes 10 sessions, about 50 hours back to back.
-[Task 34] makes the pacer measure this from its own quota readings.
+Since [task 34] the pacer measures this from its own quota readings and logs it; see
+[burn time] in reset-aware-pacing.md for how to read it.
 
 Then:
 
@@ -216,5 +217,6 @@ the pacer's requests without wasting a coupon.
 [`resets.py`]: ../src/kandev_pacer/resets.py
 [`quota.py`]: ../src/kandev_pacer/quota.py
 [reset-aware-pacing.md]: reset-aware-pacing.md
+[burn time]: reset-aware-pacing.md#burn-time
 [Claude help page]: https://support.claude.com/en/articles/17007452-what-is-a-limit-reset
 [Codex help page]: https://help.openai.com/en/articles/20001498-how-banked-codex-resets-work

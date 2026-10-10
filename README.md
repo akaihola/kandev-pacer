@@ -100,6 +100,7 @@ long option such as `--interval` and `--concurrency`.
 | `PACER_QUOTA_SOURCE` | `direct` | `direct` reads provider endpoints; `pebble` reads snapshots with cached live reset data |
 | `PACER_RESET_STATE_DIR` | `~/.local/state/kandev-pacer/resets` | private account locks and pending reset request IDs shared by both modes |
 | `PACER_CLAUDE_ACCOUNT_PATH` | `~/.claude.json` | Claude organization record needed for reset redemption |
+| `PACER_BURN_STATE` | `~/.local/state/kandev-pacer/burn.json` | the measured burn time per provider, kept across restarts and shared by both modes. Empty keeps it in memory only — see [Reset-aware pacing](docs/reset-aware-pacing.md#burn-time) |
 | `PACER_PEBBLE_SNAPSHOT` | `~/.local/state/pebble-quota/latest.json` | collector snapshot path |
 | `PACER_PEBBLE_MAX_AGE` | `900` | maximum snapshot age in seconds |
 | `PACER_CONCURRENCY` | `1` | how many paced turns may run at once **per provider** |
@@ -223,7 +224,8 @@ rotation keeps one 50 MB file and four weekly or size-based backups:
   separately, plus `running`, `launchable`, `cap`, `booked`, `interval` (how long until the
   next tick, so a varying cadence does not read as a stall), and a per-window breakdown.
   The question worth asking of it is `gate=open, action=nothing, launchable>0`: quota going
-  unspent while work waits.
+  unspent while work waits. `burn` is the measured burn time for the provider, or `null`
+  until there is enough history — see [Reset-aware pacing](docs/reset-aware-pacing.md#burn-time).
 - **`failure`** — a launch or drain kandev refused, with the reason and the consecutive count.
 - **`start` / `error`** — run configuration, so analysis can segment by cap/alpha/order, and
   loop failures.
@@ -383,6 +385,7 @@ src/kandev_pacer/
   selection.py  which task goes next, whether we may, what we already spent (pure)
   client.py     every kandev HTTP and WebSocket call
   provider.py   the quota, read from each provider directly (Anthropic, Codex) — kandev stopped answering for it
+  burn.py       how fast the agents can empty a weekly allowance, measured from those readings
   runtime.py    the Pacer object, the loop, the CLI
   make_paced.py the enrollment tool (`make-paced`)
 tests/          one file per module, over conftest.py's fake kandev and builders

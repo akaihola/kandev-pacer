@@ -331,6 +331,7 @@ def tick_record(
     provider=None,
     scope=None,
     fallback=False,
+    burn=None,
 ):
     return {
         "t": round(now, 3),
@@ -357,6 +358,10 @@ def tick_record(
         # stalls, now that the interval moves with the estimated wait.
         "interval": interval,
         "fallback": fallback,
+        # The measured burn time for this provider -- `{s, rise, span, from, to}` from
+        # burn.py -- or None until enough history exists. Logged on every tick so an
+        # operator can check it against the provider's usage page.
+        "burn": burn,
     }
 
 

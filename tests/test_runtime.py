@@ -7,6 +7,7 @@ No real kandev, no agent turn, no quota.
 import json
 import logging
 import re
+import time
 from dataclasses import replace
 from datetime import UTC, datetime
 
@@ -2140,3 +2141,22 @@ def test_runtime_refreshes_after_archiving_before_pacing(
     )
     tick(pacer, board, [], {}, {})
     assert len(reads) == 2 and len(heartbeat) == 1
+
+
+def test_tick_records_carry_the_measured_burn_time(pacer, board, monkeypatch):
+    """`burn` is null until there is history, then the estimate the reset rules read."""
+    written = records_of(pacer, monkeypatch)
+    tick(pacer, board, [], {}, {})
+    assert written[0]["burn"] is None
+    start = time.time() - 6 * 3600
+    weekly = {"label": "7-day", "scope": None, "duration_s": 7 * 86400,
+              "resets_at": start + 7 * 86400}
+    for index in range(0, 5 * 3600 + 1, 30):              # 0% -> 50% in five hours
+        pacer.burn.observe(
+            board.provider, [{**weekly, "consumed_frac": index / (10 * 3600)}],
+            start + index,
+        )
+    tick(pacer, board, [], {}, {})
+    assert written[-1]["burn"]["rise"] == pytest.approx(0.5)
+    assert written[-1]["burn"]["s"] == pytest.approx(10 * 3600, rel=0.01)
+

@@ -455,7 +455,10 @@ Both modes now use [reset-aware pacing](reset-aware-pacing.md).
 The pacer reads banked credits, adjusts weekly pacing and redeems at budget exhaustion
 when work is waiting. Status shows planned resets and the current depletion target,
 or credits reserved to preserve Codex's natural rollover. A reset failure withholds
-its provider until fresh quota confirms recovery.
+its provider until fresh quota confirms recovery. Once the pacer has watched the weekly
+bar rise for at least five hours, each provider's status line also shows its measured
+[burn time](reset-aware-pacing.md#burn-time), and a separate line reports each time
+that estimate changes.
 
 To spend a quota reset without burn-line pacing, the Kandev workaround also works
 in T3 mode:

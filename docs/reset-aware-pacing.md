@@ -40,6 +40,61 @@ Task costs, short-window limits and an empty backlog can prevent a credit from
 being exhausted before expiry. Reset targets in the log are pacing targets,
 not promises about how quickly a particular task will consume tokens.
 
+## Burn time
+
+The redemption rules in the [optimality review] need to know how fast the agents can
+empty one weekly allowance: the **burn time**. The pacer measures it from the quota
+readings it already makes every tick, in `burn.py`.
+
+**What it measures.** Every tick records the shared weekly window's consumed
+fraction. The estimate is the fastest sustained rise seen in the last four weeks over
+any span of at least five hours, one five-hour window, scaled to a full allowance.
+Weekly rising 46% in five hours means one allowance lasts about 11 hours at that pace.
+It is a lower bound on how fast the agents *can* go: the pacer's own burn-line pacing
+and an empty backlog both slow them down, and the fastest-seen number is what the
+redemption rules need to avoid redeeming when the refill cannot be used in time.
+
+**Why not the five-hour window.** The log from September and October 2026 showed
+that Claude's five-hour bar rarely got past 30%, and that its reset time moves with
+the first request of each session, so "how much the weekly bar moves while one
+five-hour window fills" almost never gets a sample. Codex reports no five-hour window
+at all. A trailing-rise measurement works for both.
+
+**What it ignores.** Readings are whole percent, so a rise under five points is not
+trusted. A jump of more than five points between two consecutive readings is not
+agents working: the log showed the weekly bar jumping from 0% to 100% after a
+credential expiry and sitting there for a day. Such a jump, a drop (a rollover or a
+redemption), or more than an hour without readings ends the run being measured, and
+a new run starts from the next reading. Readings from a scoped window such as
+`7-day (Fable)` are not used; only the shared weekly window counts.
+
+**Reading it in the log.** Each `tick` record in `PACER_LOG` carries `burn`:
+
+```json
+"burn": {"s": 26091, "rise": 0.69, "span": 18003, "from": 1791466920, "to": 1791484923}
+```
+
+`s` is the burn time in seconds. `rise` over `span` seconds, ending at `to`, is the
+reading that produced it, so the number can be checked against the provider's usage
+page for that period. The stdout line `[openai] burn time ~7h 14m 51s per weekly
+allowance (rose 69% in 5h 00m 03s to 04 17:42)` appears whenever the estimate changes,
+in both Kandev and T3 modes. `burn` is `null` until a rise of at least five points
+over at least five hours has been seen; a fresh install, or a month with no sustained
+work, has no estimate. Tasks 35 and 36 keep today's behaviour in that case rather than
+guess.
+
+**Where it lives.** `PACER_BURN_STATE`, default `~/.local/state/kandev-pacer/burn.json`,
+keeps the readings and the best rises seen, so a restart continues the measurement
+instead of starting over. Kandev and T3 pacers on the same machine share it, as they
+share the reset state; they read the same accounts and so measure the same thing. An
+unreadable file is ignored with a warning and rewritten. Setting the path empty keeps
+the estimate in memory only.
+
+Replaying the real log from 2026-09-19 to 2026-10-04 through the estimator gave a
+burn time of about 52 hours for the Claude subscription, from a 10% rise over 5h 15m
+on 2026-09-20, and about 7 hours for Codex, from a 69% rise in 5 hours on 2026-10-04
+after a reset. The two faulty 100% readings in that log were skipped.
+
 ## Reading grants
 
 Codex reads `/backend-api/wham/rate-limit-reset-credits` with the local subscription

@@ -18,6 +18,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from . import provider, resets
+from .burn import BurnMeter, burn_note
 from .config import API_KEY
 from .quota import (
     class_windows,
@@ -250,6 +251,8 @@ class T3Pacer:
             self.trackers[path] = (TasksStore(path), parent)
         self.state = Path(config.t3_state_dir).expanduser()
         self.state.mkdir(parents=True, exist_ok=True, mode=0o700)
+        # How fast the agents have been seen to empty a weekly allowance, per provider.
+        self.burn = BurnMeter(config.burn_state_path)
         known = {*PROVIDERS, *KANDEV_ALIASES.values()}
         for agent, value in config.agent_provider_overrides.items():
             if agent not in known:
@@ -472,6 +475,13 @@ class T3Pacer:
 
     def report_status(self, running, usage, errors, now, threads):
         windows = windows_by_provider(usage)
+        for name, provider_windows in windows.items():
+            if self.burn.observe(name, provider_windows, now):
+                log.info(
+                    "T3 [%s] burn time %s",
+                    name,
+                    burn_note(self.burn.estimate(name, now)),
+                )
         parents = {
             selection_provider(threads[parent].get("modelSelection", {}))
             for _, parent in self.trackers.values()
@@ -513,12 +523,14 @@ class T3Pacer:
                 )
                 label = name + (f" ({'+'.join(scopes)})" if scopes else "")
                 state = verdict.message or f"headroom={verdict.headroom:+.3f} open"
+                burn = self.burn.estimate(name, now)
                 log.info(
-                    "T3 [%s] %s%s%s, next tick in %ss",
+                    "T3 [%s] %s%s%s%s, next tick in %ss",
                     label,
                     state,
                     capacity,
                     resume_note(verdict.resumes_at, now),
+                    f", burn {burn_note(burn)}" if burn and not scopes else "",
                     self.config.interval,
                 )
 

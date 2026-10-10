@@ -98,6 +98,13 @@ class Settings(BaseSettings):
     claude_account_path: str = Field(
         str(Path.home() / ".claude.json"), alias="PACER_CLAUDE_ACCOUNT_PATH"
     )
+    # Where the measured burn time (see burn.py) is kept across restarts. Shared by the
+    # Kandev and T3 loops like the reset state: both read the same accounts, so they
+    # measure the same thing. Empty keeps the estimate in memory only.
+    burn_state_path: str = Field(
+        str(Path.home() / ".local/state/kandev-pacer/burn.json"),
+        alias="PACER_BURN_STATE",
+    )
 
     # Running turns plus backend capacity deferrals, per provider. `concurrency_total` caps the sum
     # across providers -- the machine running the worktrees is the one genuinely shared thing.

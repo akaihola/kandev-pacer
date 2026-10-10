@@ -1379,3 +1379,29 @@ def test_reset_aware_t3_launch_and_bypass_do_not_share_redemption(
     pacer.tick()
     assert len(server.calls) == 1
     assert len(calls) == (0 if bypass else 1)
+
+
+def test_status_shows_the_measured_burn_time(setup, monkeypatch, caplog):
+    """The T3 loop measures burn time from the same readings and says when it changes."""
+    from kandev_pacer.quota import quota_verdict
+
+    pacer, _, _ = setup
+    monkeypatch.setattr(t3, "quota_verdict", quota_verdict)
+    monkeypatch.setattr(t3.time, "time", lambda: 0)
+    window = {"duration_s": 604800, "resets_at": 302400, "consumed_frac": 0.8}
+    monkeypatch.setattr(t3, "windows_by_provider", lambda usage: {"openai": [window]})
+    caplog.set_level("INFO", logger="kandev-pacer")
+    pacer.tick()
+    assert "burn" not in caplog.text, "no history yet, so nothing to say"
+    # Readings before this tick: 28% -> 78% over five hours, ending ten minutes ago.
+    # The tick's 80% then makes the fastest pair the five hours ending now.
+    for index in range(0, 5 * 3600 + 1, 30):
+        pacer.burn.observe(
+            "openai", [{**window, "consumed_frac": 0.28 + index / (10 * 3600)}],
+            index - 5 * 3600 - 600,
+        )
+    pacer.tick()
+    assert "T3 [openai] burn time ~9h 56m" in caplog.text
+    assert "per weekly allowance (rose 50% in 5h 00m 00s to " in caplog.text
+    assert "PAUSED (0/1 running), resumes in" in caplog.text
+    assert ", burn ~9h 56m" in caplog.text

@@ -30,6 +30,9 @@ def _load_test_modules():
         for key in tuple(os.environ):
             if key.upper().startswith(("PACER_", "KANDEV_")):
                 _operator_settings.delenv(key)
+        # The burn-time meter persists by default. Offline tests keep it in memory, so a
+        # fixture tick cannot write a made-up rise into the operator's real history.
+        _operator_settings.setenv("PACER_BURN_STATE", "")
         default_config = Path.home() / ".config" / "kandev-pacer" / "config.toml"
         is_file = Path.is_file
         _operator_settings.setattr(

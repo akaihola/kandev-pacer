@@ -21,6 +21,7 @@ from pathlib import Path
 from typing import NamedTuple
 
 from . import client, heartbeat, progress, provider, resets
+from .burn import BurnMeter, burn_note
 from .config import (
     API_KEY,
     BLOCKED_STATE,
@@ -265,6 +266,8 @@ class Pacer:
         self.stalled = {}    # key -> {fingerprint, count, flagged}
         self.deferred: dict[str, DeferredLaunch] = {}
         self.pending_signals = {}  # key -> (deadline, untouched turns)
+        # How fast the agents have been seen to empty a weekly allowance, per provider.
+        self.burn = BurnMeter(config.burn_state_path)
         # Seconds run() waits after the current tick. Each tick sets it from what the
         # quota says is coming, so a long pause is not polled at a short gate's rate.
         self.interval = config.interval
@@ -773,6 +776,13 @@ class Pacer:
             quota_errors=errors,
             windows=windows_by_provider(usage),
         )
+        for name, windows in snapshot.windows.items():
+            if self.burn.observe(name, windows, snapshot.now):
+                log.info(
+                    "[%s] burn time %s",
+                    _provider_label(name),
+                    burn_note(self.burn.estimate(name, snapshot.now)),
+                )
         self.note_withheld(snapshot)
         self.note_provider_recoveries(snapshot)
         groups = self.gate_groups(snapshot)
@@ -1040,6 +1050,7 @@ class Pacer:
                 provider=_provider_label(provider_name),
                 scope="+".join(group.scopes) or None,
                 fallback=bool(outcome.launched and outcome.launched.get("fallback")),
+                burn=self.burn.estimate(provider_name, now),
             )
             record["deferred"] = deferred
             self.log_event(record)
