@@ -6,8 +6,6 @@ Rules for TASKS.md usage are at the bottom of the file.
 
 ## Ordered backlog
 
-- [39] One failed launch stops pacing for every project
-
 - [33] Unclear "withheld" message
   <!-- hai:{"id":"simple-a1d698f2-1b36-4d9d-8019-cebd176aa083","priority":"none","labels":[],"createdAt":"2026-10-07T19:50:25.573Z","updatedAt":"2026-10-07T19:50:25.573Z"} -->
 
@@ -31,6 +29,9 @@ Rules for TASKS.md usage are at the bottom of the file.
 ## Scheduled
 
 ## In Progress
+
+- [~] [39] One failed launch stops pacing for every project
+  <!-- hai:{"updatedAt":"2026-10-10T10:28:18.090Z"} -->
 
 - [16] Learn from session observation records: a lowest-priority Kandev task the
   Heartbeat creates when unread records exist, writing observations and proposed
