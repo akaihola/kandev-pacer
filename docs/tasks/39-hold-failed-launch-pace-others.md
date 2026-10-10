@@ -55,3 +55,66 @@ nothing in any of its 17 trackers:
 
 [31]: 31-dirty-repo-blocks-all-trackers.md
 [38]: 38-heavy-console-output.md
+
+## Implementation, 2026-10-10
+
+A pending launch that fails in a way covered below is now held. The pacer writes a
+`hold` into its launch record, logs one `T3 holding ...` warning with the full reason,
+and admits the next eligible issue in the same tick. Each later tick logs one
+`T3 HELD ...` line per hold with the scope, tracker, start time, short reason and the
+`rm` command for its record. Deleting the record is the release for every hold. The
+record path was already the documented fix for the rejection case, and a new CLI
+command would only have wrapped `rm`.
+
+Scope decisions:
+
+- T3 rejections hold the whole tracker, as proposed. So do TASKS.md changes between
+  saving the record and the scheduling commit, which used to withhold everything.
+- An issue that leaves the queue before T3 accepts it holds only that issue. The
+  tracker is fine, so its next issue launches.
+- A pending record whose checkout left the base branch skips its tracker for that
+  tick, like [31]'s check on new launches. It used to block every tracker.
+
+Rejections now wait an hour between attempts instead of retrying on the next tick.
+The first and second rejection hold the tracker with an automatic retry. The third
+holds it until a person deletes the record. With this, the filemill lock on
+2026-10-07 would most likely have cost one attempt instead of all three. I kept the
+limit at three, so the number of leftover worktrees per tracker stays the same.
+
+The record keeps a `rejected` list with each rejected branch, the time and T3's error
+text (first 4000 characters). The `T3 holding` warning lists the leftover branches.
+The pacer does not delete leftover worktrees. Doing it from the pacer would mean
+writing to the same `.git` that just failed, and the dotfiles T3 copies into each
+worktree make a plain `git worktree remove` refuse anyway. docs/t3-pacing.md gives
+the commands to find and remove them.
+
+The live record `aa394114….json` has `rejections: 3` and no hold. After a restart, the
+new code holds filemill's tracker on its first tick and paces the other trackers.
+
+### Trade-off
+
+Before, three rejections anywhere stopped all launches, so a broken T3 left at most
+three leftover worktrees in total. Now each tracker gets its own three attempts. If T3
+itself breaks and rejects every launch, each project can collect up to three. I left
+out a server-wide limit because it would bring back the blocking this task removes.
+
+### Still blocking every tracker
+
+These failures outside pending launches still withhold the whole tick. They are
+candidates for follow-up tasks:
+
+- A record whose accepted or observed thread is missing from T3. Deleting an old
+  pacer thread in T3 would trigger this.
+- A tracker that matches zero or several T3 projects, and a parent thread from
+  another project.
+- Git or Hai errors during the scheduling commit, such as an `index.lock`, and lost
+  dispatch replies. These retry on the next tick, so they block only while they last.
+
+### Validation
+
+`HOME=$TMPDIR/home XDG_CONFIG_HOME=$TMPDIR/home/.config uv run --extra t3 --frozen
+pytest -q`: 802 passed, 20 skipped. `darker --check`, `graylint` and `ty check` on the
+changed files pass. New tests in tests/test_t3.py replay the stuck filemill record,
+check that a rejected tracker lets another tracker launch in the same tick, and cover
+the hourly retry, the hold after three rejections and release by `rm`, the issue-level
+hold, and the off-branch pending record.

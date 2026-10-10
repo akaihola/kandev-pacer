@@ -4,6 +4,7 @@ import copy
 import json
 import shlex
 import subprocess
+import time
 
 import pytest
 
@@ -23,6 +24,7 @@ class Server:
         self.calls = []
         self.lose_reply = False
         self.reject = 0
+        self.broken = set()
         self.leftover_branches = set()
 
     def snapshot(self):
@@ -31,8 +33,13 @@ class Server:
     def call(self, method, command):
         assert method == "orchestration.dispatchCommand"
         self.calls.append(copy.deepcopy(command))
-        branch = command["bootstrap"]["prepareWorktree"]["branch"]
-        if self.reject or branch in self.leftover_branches:
+        worktree = command["bootstrap"]["prepareWorktree"]
+        branch = worktree["branch"]
+        if (
+            self.reject
+            or branch in self.leftover_branches
+            or worktree["projectCwd"] in self.broken
+        ):
             # Like T3 0.0.44, a failed bootstrap deletes the thread but keeps the
             # worktree branch, so the same branch name can never be created again.
             self.reject = max(self.reject - 1, 0)
@@ -79,6 +86,33 @@ def tracker(root, backlog="- [1] First\n- [2] Second\n", completed=""):
     ]:
         subprocess.run(["git", "-C", str(root), *args], check=True, capture_output=True)
     return path
+
+
+def add_tracker(pacer, server, root):
+    """Configure another tracker, with its own T3 project and parent thread."""
+    path = tracker(root)
+    pacer.trackers[str(path)] = (TasksStore(path), "parent2")
+    server.data["projects"].append({"id": "project2", "workspaceRoot": str(root)})
+    server.data["threads"].append(
+        {**server.data["threads"][0], "id": "parent2", "projectId": "project2"}
+    )
+    return path
+
+
+def held_lines(caplog):
+    return [r.getMessage() for r in caplog.records if "T3 HELD" in r.getMessage()]
+
+
+def project_of(command):
+    return command["bootstrap"]["prepareWorktree"]["projectCwd"]
+
+
+@pytest.fixture
+def clock(monkeypatch):
+    # Whole seconds, so stored timestamps compare exactly at the cooldown boundary.
+    now = [float(int(time.time()))]
+    monkeypatch.setattr(t3.time, "time", lambda: now[0])
+    return now
 
 
 @pytest.fixture
@@ -280,7 +314,7 @@ def test_dependency_order_and_excluded_sections(tmp_path):
     assert [i["id"] for i in t3.eligible(store.read())] == ["task-1"]
 
 
-def test_revision_conflict_prevents_dispatch(setup, monkeypatch):
+def test_revision_conflict_holds_tracker_without_dispatch(setup, monkeypatch, caplog):
     pacer, path, server = setup
     original = pacer.schedule
 
@@ -289,24 +323,21 @@ def test_revision_conflict_prevents_dispatch(setup, monkeypatch):
         original(record_path, record)
 
     monkeypatch.setattr(pacer, "schedule", conflict)
-    with pytest.raises(ValueError, match="revision changed"):
-        pacer.tick()
+    pacer.tick()
     assert not server.calls
-    with pytest.raises(ValueError, match="revision changed"):
-        t3.T3Pacer(pacer.config, server).tick()
+    caplog.clear()
+    t3.T3Pacer(pacer.config, server).tick()
+    assert not server.calls
+    [line] = held_lines(caplog)
+    assert f"tracker {path} since " in line
+    assert "revision changed before scheduling" in line
+    assert "to release: rm " in line
     assert "Concurrent edit" in path.read_text()
 
 
 def test_overlapping_tracker_numbers(setup, tmp_path):
     pacer, first, server = setup
-    second = tracker(tmp_path / "repo2")
-    pacer.trackers[str(second)] = (TasksStore(second), "parent2")
-    server.data["projects"].append(
-        {"id": "project2", "workspaceRoot": str(second.parent)}
-    )
-    server.data["threads"].append(
-        {**server.data["threads"][0], "id": "parent2", "projectId": "project2"}
-    )
+    second = add_tracker(pacer, server, tmp_path / "repo2")
     pacer.tick()
     # With the first tracker excluded by its parent gate, the second still admits [1].
     server.data["threads"][0]["modelSelection"] = {"provider": "unknown"}
@@ -331,18 +362,36 @@ def test_absent_command_reuses_saved_ids(setup):
     assert server.calls[0] == server.calls[1]
 
 
-def test_rejected_launch_waits_and_retries_after_tracker_moves_on(setup, caplog):
+def test_rejected_launch_holds_tracker_and_retries_after_cooldown(setup, clock, caplog):
     caplog.set_level("INFO", logger="kandev-pacer")
     pacer, path, server = setup
     server.reject = 1
-    with pytest.raises(ValueError, match=r"task-1 .* \(1/3\), retrying next tick"):
-        pacer.tick()
-    # Another worker merges its own tracker update, and a thread fills the slot.
+    pacer.tick()
+    [record_path] = pacer.state.glob("*.json")
+    hold = json.loads(record_path.read_text())["hold"]
+    assert hold["scope"] == "tracker"
+    assert "T3 rejected launching task-1 (1/3)" in hold["reason"]
+    [warning] = [
+        r.getMessage() for r in caplog.records if "T3 holding" in r.getMessage()
+    ]
+    assert "worktree setup failed" in warning
+    assert f"leftover worktree branches in {path.parent}: pacer-" in warning
+    # Another worker merges its own tracker update. The held tracker launches
+    # nothing, not even its next issue, until the cooldown is over.
     path.write_text(path.read_text() + "Another worker's note\n")
     t3.git(path.parent, "commit", "-am", "docs(tasks): complete other work")
+    clock[0] += t3.REJECTION_COOLDOWN - 60
+    caplog.clear()
+    pacer.tick()
+    assert len(server.calls) == 1
+    [line] = held_lines(caplog)
+    assert "retries automatically in ~1m 00s" in line
+    assert line.endswith(f"to retry now: rm {shlex.quote(str(record_path))}")
+    # After the cooldown it is a pending launch again and waits for a free slot.
     busy = {**server.data["threads"][0], "id": "busy"}
     busy["session"] = {"status": "running", "activeTurnId": "turn"}
     server.data["threads"].append(busy)
+    clock[0] += 60
     pacer.tick()
     assert len(server.calls) == 1
     assert "pending launch of task-1" in caplog.records[-1].getMessage()
@@ -354,19 +403,104 @@ def test_rejected_launch_waits_and_retries_after_tracker_moves_on(setup, caplog)
     branch = second["bootstrap"]["prepareWorktree"]["branch"]
     assert branch == f"pacer-{second['threadId']}"
     assert first["message"]["text"] == second["message"]["text"]
-    record = json.loads(next(pacer.state.glob("*.json")).read_text())
+    record = json.loads(record_path.read_text())
+    assert record["phase"] == "accepted"
+    assert "hold" not in record
+
+
+def test_repeated_rejections_hold_until_the_record_is_removed(setup, clock, caplog):
+    pacer, _, server = setup
+    server.reject = 3
+    for _ in range(3):
+        pacer.tick()
+        clock[0] += t3.REJECTION_COOLDOWN
+    assert len(server.calls) == 3
+    [record_path] = pacer.state.glob("*.json")
+    record = json.loads(record_path.read_text())
+    assert record["hold"]["retry_at"] is None
+    # The leftover worktree branches and T3's reasons outlive the console.
+    assert [r["branch"] for r in record["rejected"]] == [
+        f"pacer-{c['threadId']}" for c in server.calls
+    ]
+    assert all("worktree setup failed" in r["error"] for r in record["rejected"])
+    clock[0] += 30 * 86400
+    caplog.clear()
+    pacer.tick()
+    assert len(server.calls) == 3
+    [line] = held_lines(caplog)
+    assert "(3/3); check the project's T3 worktree setup" in line
+    release = line.split("to release: ", 1)[1]
+    assert shlex.split(release) == ["rm", str(record_path)]
+    subprocess.run(shlex.split(release), check=True)
+    pacer.tick()
+    assert len(server.calls) == 4
+    assert "Hai issue ID: task-1" in server.calls[-1]["message"]["text"]
+    [record] = [json.loads(p.read_text()) for p in pacer.state.glob("*.json")]
     assert record["phase"] == "accepted"
 
 
-def test_repeated_rejections_stop_retrying(setup):
-    pacer, _, server = setup
-    server.reject = 3
-    for attempt in range(1, 4):
-        with pytest.raises(ValueError, match=rf"\({attempt}/3\)"):
-            pacer.tick()
-    with pytest.raises(ValueError, match="task-1 from .* 3 times"):
-        pacer.tick()
-    assert len(server.calls) == 3
+def test_rejection_holds_tracker_and_others_launch_in_the_same_tick(setup, tmp_path):
+    pacer, first, server = setup
+    second = add_tracker(pacer, server, tmp_path / "repo2")
+    server.broken.add(str(first.parent))
+    pacer.tick()
+    assert [project_of(c) for c in server.calls] == [
+        str(first.parent),
+        str(second.parent),
+    ]
+    records = {
+        r["tracker"]: r
+        for r in (json.loads(p.read_text()) for p in pacer.state.glob("*.json"))
+    }
+    assert records[str(first)]["hold"]["scope"] == "tracker"
+    assert records[str(second)]["phase"] == "accepted"
+
+
+def test_record_stuck_at_rejection_limit_holds_only_its_tracker(
+    setup, tmp_path, caplog
+):
+    # 2026-10-07: a filemill launch record reached three rejections, and every
+    # tick withheld all 17 trackers until a person deleted it, three days later.
+    pacer, first, server = setup
+    server.reject = 1
+    pacer.tick()
+    [record_path] = pacer.state.glob("*.json")
+    record = json.loads(record_path.read_text())
+    del record["hold"], record["rejected"]
+    record["rejections"] = 3
+    t3.save(record_path, record)
+    second = add_tracker(pacer, server, tmp_path / "repo2")
+    pacer.tick()
+    assert [project_of(c) for c in server.calls] == [
+        str(first.parent),
+        str(second.parent),
+    ]
+    hold = json.loads(record_path.read_text())["hold"]
+    assert hold["scope"] == "tracker"
+    assert hold["retry_at"] is None
+    caplog.clear()
+    pacer.tick()
+    [line] = held_lines(caplog)
+    assert f"tracker {first} since " in line
+    assert "T3 rejected launching task-1 (3/3)" in line
+    assert len(server.calls) == 2
+
+
+def test_pending_record_off_base_branch_skips_only_its_tracker(setup, tmp_path, caplog):
+    pacer, first, server = setup
+    second = add_tracker(pacer, server, tmp_path / "repo2")
+    # Stopping right after saving a launch record leaves it prepared.
+    store, _ = pacer.trackers[str(first)]
+    source = store.read()
+    issue = t3.eligible(source)[0]
+    parent, project = server.data["threads"][0], server.data["projects"][0]
+    pacer.prepare(str(first), store, source, issue, parent, project)
+    t3.git(first.parent, "switch", "-c", "feature")
+    pacer.tick()
+    assert [project_of(c) for c in server.calls] == [str(second.parent)]
+    [warning] = [r.getMessage() for r in caplog.records if r.levelname == "WARNING"]
+    assert f"repository {first.parent} for tracker {first}" in warning
+    assert "not on the configured base branch main" in warning
 
 
 def test_accepted_missing_thread_blocks_new_work(setup):
@@ -458,14 +592,7 @@ def test_dirty_repository_error_identifies_checkout_and_recovery(
 @pytest.mark.parametrize("block", ["dirty", "branch"])
 def test_blocked_checkout_skips_only_its_tracker(setup, tmp_path, block, caplog):
     pacer, first, server = setup
-    second = tracker(tmp_path / "repo2")
-    pacer.trackers[str(second)] = (TasksStore(second), "parent2")
-    server.data["projects"].append(
-        {"id": "project2", "workspaceRoot": str(second.parent)}
-    )
-    server.data["threads"].append(
-        {**server.data["threads"][0], "id": "parent2", "projectId": "project2"}
-    )
+    second = add_tracker(pacer, server, tmp_path / "repo2")
     if block == "dirty":
         (first.parent / "new.txt").write_text("Work in progress\n")
     else:
@@ -659,7 +786,7 @@ def test_connection_error_is_logged_and_tick_retries(setup, monkeypatch, caplog)
     assert not list(pacer.state.glob("*.json"))
 
 
-def test_submitted_record_for_moved_issue_withholds(setup):
+def test_submitted_record_for_moved_issue_holds_only_that_issue(setup, caplog):
     pacer, path, server = setup
     pacer.tick()
     record_path = next(pacer.state.glob("*.json"))
@@ -674,9 +801,22 @@ def test_submitted_record_for_moved_issue_withholds(setup):
         id="task-1",
         input={"sourceSection": "In Progress"},
     )
-    with pytest.raises(ValueError, match="no longer eligible"):
-        t3.T3Pacer(pacer.config, server).tick()
-    assert len(server.calls) == 1
+    t3.git(path.parent, "commit", "-am", "docs(tasks): start task-1 by hand")
+    pacer = t3.T3Pacer(pacer.config, server)
+    pacer.tick()
+    # The tracker itself is fine, so its next issue launches in the same tick.
+    assert len(server.calls) == 2
+    assert "Hai issue ID: task-2" in server.calls[1]["message"]["text"]
+    hold = json.loads(record_path.read_text())["hold"]
+    assert hold["scope"] == "issue"
+    assert "no longer eligible" in hold["reason"]
+    server.data["threads"][-1]["latestTurn"] = {"state": "completed"}
+    server.data["threads"][-1]["session"] = {"status": "idle"}
+    caplog.clear()
+    pacer.tick()
+    [line] = held_lines(caplog)
+    assert f"issue task-1 from {path} since " in line
+    assert len(server.calls) == 2
 
 
 @pytest.mark.parametrize("agent", ["codex-acp", "codex"])

@@ -282,7 +282,8 @@ then commit or stash work you want to keep. Include untracked files when stashin
 with `git stash push --include-untracked`. Retry scheduling once status is empty.
 A dirty checkout, or one on another branch, blocks only its own tracker. The pacer
 logs a warning naming the checkout and moves on to the next tracker in the same tick,
-so other repositories keep launching work.
+so other repositories keep launching work. A pending launch from a checkout that left
+the base branch before its scheduling commit is skipped the same way.
 
 Pacer saves a private record, moves the issue to Scheduled through Hai's
 revision-checked API, and commits only the tracker. T3 then creates a worktree from that branch. The worker receives the
@@ -308,26 +309,78 @@ or acknowledged. An acknowledged thread missing from T3 blocks admission for ins
 Idle, failed, waiting, and completed threads retain their record and never relaunch
 automatically. Continue those threads manually when needed.
 
-A pending launch blocks all new launches until it is dispatched. While its provider
-has no free capacity, each tick logs `T3 pending launch of ... waits for ...
+A pending launch blocks all new launches until it is dispatched or held. While its
+provider has no free capacity, each tick logs `T3 pending launch of ... waits for ...
 admission`. Once the scheduling commit is in, other workers may merge their own
 tracker updates; the launch still goes ahead as long as its issue is eligible.
+
+### Held launches
+
+When a launch needs a person, or should wait out a cooldown, the pacer holds it
+instead of letting it block every tracker. It saves the hold in the launch record, logs
+one `T3 holding ...` warning with the full reason, and admits the next eligible issue
+in the same tick. Every later tick logs one line per hold, saying what is held, since
+when, why, and what releases it:
+
+```text
+T3 HELD tracker /home/me/prg/project/TASKS.md since 2026-10-07 17:37: T3 rejected launching simple-ca7153b94516ed5f (3/3); check the project's T3 worktree setup; to release: rm /home/me/.local/state/kandev-pacer/t3/aa394114….json
+```
+
+A tracker hold stops new launches from that whole tracker, because a broken project
+setup would fail its next issue the same way. An issue hold covers only that issue,
+so the tracker's next issue can still launch.
+
+| Cause | Holds | Ends |
+| --- | --- | --- |
+| T3 rejects the launch for the first or second time | tracker | by itself after one hour |
+| T3 rejects the launch for the third time | tracker | when you delete the record |
+| TASKS.md changed between saving the record and the scheduling commit | tracker | when you delete the record |
+| The issue left the queue, or lost a completed dependency, before T3 accepted it | issue | when you delete the record |
 
 T3 can reject a launch after creating its worktree, for example when a Git step of
 worktree setup fails. T3 then deletes the thread but keeps the worktree and its
 `pacer-<thread ID>` branch, so the same thread ID can never launch. If the thread is
-absent from T3 after a rejection, the pacer gives the launch a new thread ID and
-retries on the next tick. The log shows T3's reason and the attempt count. After
-three rejections it stops and withholds all launches. Check the project's worktree
-setup in T3, remove the leftover worktrees under T3's worktree directory, then delete
-that launch record to retry.
+absent from T3 after a rejection, the pacer gives the launch a new thread ID and holds
+its tracker for an hour. The wait lets a short-lived cause clear, such as another
+process holding the project's `.git/config.lock`. On 2026-10-07 that kind of lock made
+T3 reject a filemill launch three times in two minutes. The same Git write worked three
+days later, so an attempt an hour later would most likely have worked too.
 
-Tracker conflicts before the scheduling commit, including a crash between Hai's
-update and saving its new revision, withhold the pending launch. Inspect TASKS.md,
-Git history, the saved record, and T3 before repairing that record. Apart from the
-rejection case above, do not delete records to retry: that discards duplicate launch
-protection. Endpoint or tracker changes also require reconciling existing records
-before reusing the state directory.
+The record keeps the branch, time and T3's error text of each rejection under
+`rejected`, so the cause survives after console scrollback and T3's own logs rotate:
+
+```bash
+jq -r '.rejected[] | [.at, .branch, .error] | @tsv' RECORD
+```
+
+The pacer does not delete the leftover worktrees. Each listed branch has one in the
+project. Once you have checked that it holds nothing you want, remove it and its branch
+from the project checkout:
+
+```bash
+git -C /home/me/prg/project worktree list | grep pacer-THREAD_ID
+git -C /home/me/prg/project worktree remove WORKTREE_PATH
+git -C /home/me/prg/project branch -d pacer-THREAD_ID
+```
+
+`worktree remove` refuses a worktree with untracked files. If the only ones are the
+dotfiles T3 copies into new worktrees, such as `.bashrc`, add `--force`.
+
+To release a hold, delete the record named on its `T3 HELD` line. Check first:
+
+- After a rejection, fix the project's worktree setup in T3. The next tick schedules
+  the issue afresh with three new attempts. Deleting the record early also skips the
+  rest of an hour's cooldown.
+- After a tracker change, inspect TASKS.md, its Git history and T3. The pacer schedules
+  the issue again if it is still eligible.
+- For an issue hold, the issue launches again only if it returns to the queue.
+
+If T3 rejects every launch, for example because T3 itself is broken, each tracker uses
+its own three attempts, so each project can collect up to three leftover worktrees.
+
+Apart from held records, do not delete records to retry: that discards duplicate
+launch protection. Endpoint or tracker changes also require reconciling existing
+records before reusing the state directory.
 
 Run the integration fixtures with `uv run --extra t3 pytest tests/test_t3.py` and the
 transport tests with `uv run pytest tests/test_t3_client.py`. The default suite skips
