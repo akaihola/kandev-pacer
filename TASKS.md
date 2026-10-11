@@ -12,9 +12,6 @@ Rules for TASKS.md usage are at the bottom of the file.
 
 ## Ordered backlog
 
-- [43] A missing launched thread stops pacing for every project
-  <!-- hai:{"id":"simple-1f8ce88a-69b8-4ee1-b03d-37b4e2793501","createdAt":"2026-10-10T19:31:24.723Z","updatedAt":"2026-10-10T19:31:24.723Z"} -->
-
 - [44] A tracker dropped from the config or T3 stops pacing for every project
   <!-- hai:{"id":"simple-3b44f53e-4b5a-4948-8f65-7003544a3dfb","createdAt":"2026-10-10T19:31:24.931Z","updatedAt":"2026-10-10T19:31:24.931Z"} -->
 
@@ -22,6 +19,9 @@ Rules for TASKS.md usage are at the bottom of the file.
   <!-- hai:{"id":"simple-63e6a154-30ce-4ee2-9fe5-404e753790f5","priority":"none","labels":[],"createdAt":"2026-10-10T19:40:23.453Z","updatedAt":"2026-10-10T19:40:23.453Z"} -->
 
 ## Scheduled
+
+- [43] A missing launched thread stops pacing for every project
+  <!-- hai:{"id":"simple-1f8ce88a-69b8-4ee1-b03d-37b4e2793501","createdAt":"2026-10-10T19:31:24.723Z","updatedAt":"2026-10-11T04:43:11.566Z"} -->
 
 ## In Progress
 
