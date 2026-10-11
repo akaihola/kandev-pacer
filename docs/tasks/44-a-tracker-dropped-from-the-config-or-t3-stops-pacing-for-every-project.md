@@ -67,3 +67,13 @@ server-wide capacity and duplicate prevention after restart.
 
 The full offline suite passed with 848 tests and 20 skips.
 `darker --check`, `graylint` and `git diff --check` passed.
+
+
+### Deployment
+
+Merged into `main` as `20a964d` and marked HAI-44 completed with `[ ]`, awaiting
+user acceptance. Restarted the terminal-owned pacer in tmux pane `%1`, preserving
+its config file, provider overrides and inherited environment. PID `3235550`
+exited before replacement PID `3263848` started. The replacement observed launch
+records and reported both providers at `1/1 running`, `2/2 total`, without a
+startup or withheld error.
