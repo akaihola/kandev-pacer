@@ -608,7 +608,9 @@ class T3Pacer:
             elif record["phase"] in {"observed", "accepted"}:
                 if not record.get("hold"):
                     record["hold"] = {
-                        "scope": "issue" if record["phase"] == "observed" else "tracker",
+                        "scope": "issue"
+                        if record["phase"] == "observed"
+                        else "tracker",
                         "reason": "Previously accepted thread is missing; inspect T3",
                         "since": stamp(now),
                         "retry_at": None,
