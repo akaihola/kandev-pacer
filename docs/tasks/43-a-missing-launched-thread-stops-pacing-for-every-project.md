@@ -40,3 +40,36 @@ is missing.
 - Capacity still comes from the threads in T3's snapshot, not from records.
 
 [39]: 39-hold-failed-launch-pace-others.md
+
+
+## Implementation, 2026-10-11
+
+Missing `observed` threads now hold their issue. Missing `accepted` threads hold
+the tracker because the pacer never saw the thread and project setup may have
+failed. Neither retries automatically. The record retains its phase, original
+thread ID and any observed details, so queued work cannot launch again by itself.
+Other eligible trackers keep pacing in the same tick. Capacity still counts only
+active threads in T3's snapshot.
+
+Each `T3 HELD` line includes the tracker, issue, thread ID, hold start time and
+record's release command. Holds keep their original start time across ticks and
+restarts. If the thread returns to the snapshot, observation clears its hold
+without another dispatch. Removing the record can relaunch an eligible issue;
+inspect its existing work first.
+
+### Live archive check
+
+On T3 0.0.44 at `http://100.81.121.7:3773`, archived finished pacer thread
+`b95bfba8-3423-4bd0-b25c-37a1db214a7d`, whose last turn completed on 2026-10-06.
+`orchestration.subscribeShell` omitted the thread after `thread.archive`.
+`thread.unarchive` restored it to the snapshot. The thread was left unarchived,
+as it was before the check. Archived threads therefore use the missing-thread
+hold; no separate archive detection is needed.
+
+### Validation
+
+`PYTHONPATH=src /home/agent/prg/kandev-pacer/.venv/bin/pytest -q`: 839 passed,
+20 skipped. `darker --check` and `graylint` passed. The regression tests cover both
+phases, same-tick pacing under a one-thread capacity limit, diagnostic identifiers,
+no automatic retry after the rejection cooldown or restart, a stable hold start
+time, and restoration without dispatch.

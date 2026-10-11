@@ -644,13 +644,57 @@ def test_pending_record_off_base_branch_skips_only_its_tracker(setup, tmp_path, 
     assert "not on the configured base branch main" in warning
 
 
-def test_accepted_missing_thread_blocks_new_work(setup):
-    pacer, _, server = setup
+@pytest.mark.parametrize("phase", ["accepted", "observed"])
+def test_missing_thread_holds_record_and_keeps_pacing(
+    setup, tmp_path, clock, caplog, phase
+):
+    pacer, first, server = setup
     pacer.tick()
-    server.data["threads"].pop()
-    with pytest.raises(ValueError, match="accepted thread is missing"):
+    [record_path] = pacer.state.glob("*.json")
+    thread = server.data["threads"][-1]
+    if phase == "observed":
         pacer.tick()
-    assert len(server.calls) == 1
+    record = json.loads(record_path.read_text())
+    assert record["phase"] == phase
+    server.data["threads"].pop()
+    second = add_tracker(pacer, server, tmp_path / "second")
+    pacer.config.t3_trackers.append(
+        {"tracker": str(second), "parent_thread": "parent2"}
+    )
+    # The missing record must consume no capacity.
+    pacer.config.concurrency_total = 1
+    pacer.tick()
+    record = json.loads(record_path.read_text())
+    hold = record["hold"]
+    assert hold["scope"] == ("issue" if phase == "observed" else "tracker")
+    assert hold["retry_at"] is None
+    assert record["phase"] == phase
+    assert record["command"]["threadId"] == thread["id"]
+    assert project_of(server.calls[-1]) == str(
+        first.parent if phase == "observed" else second.parent
+    )
+    [line] = held_lines(caplog)
+    for value in (str(record_path), str(first), "task-1", thread["id"]):
+        assert value in line
+    assert "Previously accepted thread is missing" in line
+
+    # Even well past the failed-launch cooldown, the hold stays and cannot
+    # relaunch the missing thread's issue, including after a pacer restart.
+    caplog.clear()
+    clock[0] += 2 * t3.REJECTION_COOLDOWN
+    pacer = t3.T3Pacer(pacer.config, server)
+    pacer.tick()
+    assert len(server.calls) == 2
+    assert json.loads(record_path.read_text())["hold"] == hold
+    assert len(held_lines(caplog)) == 1
+
+    # A thread restored to the snapshot clears its hold without another dispatch.
+    server.data["threads"].append(thread)
+    pacer.tick()
+    restored = json.loads(record_path.read_text())
+    assert restored["phase"] == "observed"
+    assert "hold" not in restored
+    assert len(server.calls) == 2
 
 
 def test_hai_rejects_stale_revision(setup, monkeypatch):
