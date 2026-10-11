@@ -22,9 +22,6 @@ Rules for TASKS.md usage are at the bottom of the file.
 
 ## In Progress
 
-- [~] [43] A missing launched thread stops pacing for every project
-  <!-- hai:{"id":"simple-1f8ce88a-69b8-4ee1-b03d-37b4e2793501","createdAt":"2026-10-10T19:31:24.723Z","updatedAt":"2026-10-11T04:43:31.288Z"} -->
-
 - [16] Learn from session observation records: a lowest-priority Kandev task the
   Heartbeat creates when unread records exist, writing observations and proposed
   solution prompts to the right repository's unreviewed section.
@@ -37,6 +34,9 @@ Rules for TASKS.md usage are at the bottom of the file.
   before resuming tasks.
 
 ## Completed / Accepted
+
+- [ ] [43] A missing launched thread stops pacing for every project
+  <!-- hai:{"id":"simple-1f8ce88a-69b8-4ee1-b03d-37b4e2793501","createdAt":"2026-10-10T19:31:24.723Z","updatedAt":"2026-10-11T04:46:14.081Z"} -->
 
 - [x] [36] Keep long-lived Claude resets when the weekly rollover is too close to use the
   refill.
