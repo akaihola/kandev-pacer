@@ -595,6 +595,7 @@ class T3Pacer:
             records[(record["tracker"], record["issue"])] = record
             thread = threads.get(record["command"]["threadId"])
             if thread:
+                record.pop("hold", None)
                 record["phase"] = "observed"
                 record["thread"] = {
                     k: thread.get(k)
@@ -614,7 +615,15 @@ class T3Pacer:
                 if not thread.get("session") and not thread.get("latestTurn"):
                     raise Withheld("Launched thread state is unknown; withholding work")
             elif record["phase"] in {"observed", "accepted"}:
-                raise Withheld("Previously accepted thread is missing; inspect T3")
+                if not record.get("hold"):
+                    record["hold"] = {
+                        "scope": "issue" if record["phase"] == "observed" else "tracker",
+                        "reason": "Previously accepted thread is missing; inspect T3",
+                        "since": stamp(now),
+                        "retry_at": None,
+                    }
+                    save(path, record)
+                held.append((path, record))
             elif record["phase"] in {"prepared", "scheduled", "submitted"}:
                 hold = record.get("hold")
                 if hold and (
@@ -772,7 +781,8 @@ class T3Pacer:
         else:
             release = "to release: " + release
         return (
-            f"{what} since {since:%Y-%m-%d %H:%M}: {hold['reason']}{detail}; {release}"
+            f"{what} since {since:%Y-%m-%d %H:%M}: {hold['reason']}{detail}; "
+            f"issue {record['issue']} thread {record['command']['threadId']}; {release}"
         )
 
     def dispatch(self, path, record, now):

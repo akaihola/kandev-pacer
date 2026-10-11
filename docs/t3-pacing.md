@@ -391,6 +391,18 @@ so the tracker's next issue can still launch.
 | T3 rejects the launch for the third time | tracker | when you delete the record |
 | TASKS.md changed between saving the record and the scheduling commit | tracker | when you delete the record |
 | The issue left the queue, or lost a completed dependency, before T3 accepted it | issue | when you delete the record |
+| An observed thread disappears from T3, including by archiving | issue | when the thread returns or you delete the record |
+| An accepted thread never appears in the snapshot | tracker | when the thread appears or you delete the record |
+
+A missing accepted or observed thread never triggers an automatic retry. Its record
+keeps the original phase and thread ID, plus a hold with no retry time. Each `T3 HELD`
+line names the tracker, issue, thread and record file. A thread the pacer already saw
+holds only its issue; one never seen holds the tracker because project setup may have
+failed. If that thread returns to the snapshot, the pacer clears the hold and observes
+it without dispatching again. Missing threads consume no capacity.
+
+On T3 0.0.44, archiving a thread removes it from the shell snapshot, so it receives
+the same hold as a deleted thread. Unarchiving restores it to the snapshot.
 
 T3 can reject a launch after creating its worktree, for example when a Git step of
 worktree setup fails. T3 then deletes the thread but keeps the worktree and its
@@ -428,7 +440,10 @@ To release a hold, delete the record named on its `T3 HELD` line. Check first:
   rest of an hour's cooldown.
 - After a tracker change, inspect TASKS.md, its Git history and T3. The pacer schedules
   the issue again if it is still eligible.
-- For an issue hold, the issue launches again only if it returns to the queue.
+- For a missing thread, inspect its work in T3 before removing the record. Unarchive
+  it to restore observation. Deleting its record can launch it again if its issue
+  is still queued, even if the original thread finished the work.
+- For an issue hold, the issue launches again only if it is eligible in the queue.
 
 If T3 rejects every launch, for example because T3 itself is broken, each tracker uses
 its own three attempts, so each project can collect up to three leftover worktrees.
