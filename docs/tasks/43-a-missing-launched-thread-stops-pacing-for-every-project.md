@@ -73,3 +73,12 @@ hold; no separate archive detection is needed.
 phases, same-tick pacing under a one-thread capacity limit, diagnostic identifiers,
 no automatic retry after the rejection cooldown or restart, a stable hold start
 time, and restoration without dispatch.
+
+### Deployment
+
+Merged into `main` as `d67176b` and marked HAI-43 completed, awaiting acceptance.
+Restarted the terminal-owned pacer in tmux pane `%1`, preserving its config file,
+provider overrides and inherited environment. PID `1776656` exited before
+replacement PID `3235550` started. The replacement reported both providers at
+`1/1 running`, `2/2 total`, and resumed observing launch records. The archive
+check's thread remains restored.
