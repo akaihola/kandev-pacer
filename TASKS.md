@@ -12,13 +12,13 @@ Rules for TASKS.md usage are at the bottom of the file.
 
 ## Ordered backlog
 
-- [44] A tracker dropped from the config or T3 stops pacing for every project
-  <!-- hai:{"id":"simple-3b44f53e-4b5a-4948-8f65-7003544a3dfb","createdAt":"2026-10-10T19:31:24.931Z","updatedAt":"2026-10-10T19:31:24.931Z"} -->
-
 - [46] New issue title not focused
   <!-- hai:{"id":"simple-63e6a154-30ce-4ee2-9fe5-404e753790f5","priority":"none","labels":[],"createdAt":"2026-10-10T19:40:23.453Z","updatedAt":"2026-10-10T19:40:23.453Z"} -->
 
 ## Scheduled
+
+- [44] A tracker dropped from the config or T3 stops pacing for every project
+  <!-- hai:{"id":"simple-3b44f53e-4b5a-4948-8f65-7003544a3dfb","createdAt":"2026-10-10T19:31:24.931Z","updatedAt":"2026-10-11T04:47:08.724Z"} -->
 
 ## In Progress
 
