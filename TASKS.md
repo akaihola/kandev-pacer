@@ -4,6 +4,9 @@ Rules for TASKS.md usage are at the bottom of the file.
 
 ## Unverified proposals
 
+- [47] Detect stale pending launches after a T3 project is recreated
+  <!-- hai:{"id":"simple-093c3118-831d-4092-837f-e7ed189c124e","createdAt":"2026-10-11T18:38:38.041Z","updatedAt":"2026-10-11T18:38:38.041Z"} -->
+
 - [41] Verify Claude reset contract and supervise useful reset trials
   <!-- hai:{"id":"simple-75487633-ff73-4817-ac73-5364758dc38e","createdAt":"2026-10-10T10:59:20.476Z","updatedAt":"2026-10-10T10:59:20.476Z"} -->
 
@@ -278,7 +281,7 @@ Rules for TASKS.md usage are at the bottom of the file.
 
 [19]: docs/tasks/19-uv-source-path-documentation-unclear.md
 
-<!-- hai:reserved-numbers:1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,26,27,28,29,30,31,32,33,34,35,36,37,38,39,40,41,42,43,44,45,46 -->
+<!-- hai:reserved-numbers:1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,26,27,28,29,30,31,32,33,34,35,36,37,38,39,40,41,42,43,44,45,46,47 -->
 
 [20]: docs/tasks/20-command-not-found-error.md
 [21]: docs/tasks/21-unclear-urlerror.md
@@ -313,6 +316,8 @@ Rules for TASKS.md usage are at the bottom of the file.
 [44]: docs/tasks/44-a-tracker-dropped-from-the-config-or-t3-stops-pacing-for-every-project.md
 
 [46]: docs/tasks/46-new-issue-title-not-focused.md
+
+[47]: docs/tasks/47-detect-stale-pending-launches-after-a-t3-project-is-recreated.md
 
 ## Rules
 
