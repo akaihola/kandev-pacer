@@ -18,6 +18,9 @@ Rules for TASKS.md usage are at the bottom of the file.
 - [44] A tracker dropped from the config or T3 stops pacing for every project
   <!-- hai:{"id":"simple-3b44f53e-4b5a-4948-8f65-7003544a3dfb","createdAt":"2026-10-10T19:31:24.931Z","updatedAt":"2026-10-10T19:31:24.931Z"} -->
 
+- [46] New issue title not focused
+  <!-- hai:{"id":"simple-63e6a154-30ce-4ee2-9fe5-404e753790f5","priority":"none","labels":[],"createdAt":"2026-10-10T19:40:23.453Z","updatedAt":"2026-10-10T19:40:23.453Z"} -->
+
 ## Scheduled
 
 ## In Progress
@@ -35,35 +38,35 @@ Rules for TASKS.md usage are at the bottom of the file.
 
 ## Completed / Accepted
 
-- [ ] [36] Keep long-lived Claude resets when the weekly rollover is too close to use the
+- [x] [36] Keep long-lived Claude resets when the weekly rollover is too close to use the
   refill.
     - Depends on: [34]
-  <!-- hai:{"updatedAt":"2026-10-10T12:35:25.848Z"} -->
+  <!-- hai:{"updatedAt":"2026-10-10T19:42:51.523Z"} -->
 
-- [ ] [35] Redeem Codex resets as early in the week as possible instead of pacing toward an
+- [x] [35] Redeem Codex resets as early in the week as possible instead of pacing toward an
   even split or saving them for their last week.
     - Depends on: [34]
-  <!-- hai:{"updatedAt":"2026-10-10T11:28:57.623Z"} -->
+  <!-- hai:{"updatedAt":"2026-10-10T19:37:24.558Z"} -->
 
-- [ ] [34] Measure how fast agents can empty a weekly allowance, per provider, from quota
+- [x] [34] Measure how fast agents can empty a weekly allowance, per provider, from quota
   readings.
-  <!-- hai:{"updatedAt":"2026-10-10T11:16:38.306Z"} -->
+  <!-- hai:{"updatedAt":"2026-10-10T19:32:02.618Z"} -->
 
-- [ ] [42] Name the `hai-tasks` CLI and its path in the T3 worker prompt.
-  <!-- hai:{"id":"simple-e5032b10-0e74-4f0f-b56c-1a32930f34fc","createdAt":"2026-10-10T11:06:14.580Z","updatedAt":"2026-10-10T11:10:55.953Z"} -->
+- [x] [42] Name the `hai-tasks` CLI and its path in the T3 worker prompt.
+  <!-- hai:{"id":"simple-e5032b10-0e74-4f0f-b56c-1a32930f34fc","createdAt":"2026-10-10T11:06:14.580Z","updatedAt":"2026-10-10T19:32:32.397Z"} -->
 
-- [ ] [37] Research how to redeem banked resets for the Claude and Codex subscriptions, and
+- [x] [37] Research how to redeem banked resets for the Claude and Codex subscriptions, and
   how to verify the pacer's untested redemption requests without wasting a reset.
-  <!-- hai:{"updatedAt":"2026-10-10T10:59:30.550Z"} -->
+  <!-- hai:{"updatedAt":"2026-10-10T19:30:34.611Z"} -->
 
-- [ ] [38] Heavy console output
-  <!-- hai:{"id":"simple-603d6a8b-d4a1-4ed1-869f-4f8c0439ef5e","priority":"none","labels":[],"createdAt":"2026-10-10T08:55:49.236Z","updatedAt":"2026-10-10T10:52:56.648Z"} -->
+- [x] [38] Heavy console output
+  <!-- hai:{"id":"simple-603d6a8b-d4a1-4ed1-869f-4f8c0439ef5e","priority":"none","labels":[],"createdAt":"2026-10-10T08:55:49.236Z","updatedAt":"2026-10-10T19:28:09.663Z"} -->
 
-- [ ] [33] Unclear "withheld" message
-  <!-- hai:{"id":"simple-a1d698f2-1b36-4d9d-8019-cebd176aa083","priority":"none","labels":[],"createdAt":"2026-10-07T19:50:25.573Z","updatedAt":"2026-10-10T10:54:37.316Z"} -->
+- [x] [33] Unclear "withheld" message
+  <!-- hai:{"id":"simple-a1d698f2-1b36-4d9d-8019-cebd176aa083","priority":"none","labels":[],"createdAt":"2026-10-07T19:50:25.573Z","updatedAt":"2026-10-10T19:27:21.755Z"} -->
 
-- [ ] [39] One failed launch stops pacing for every project
-  <!-- hai:{"updatedAt":"2026-10-10T10:37:29.278Z"} -->
+- [x] [39] One failed launch stops pacing for every project
+  <!-- hai:{"updatedAt":"2026-10-11T04:11:30.487Z"} -->
 
 - [x] [*] Look at
   agent@gogo:prg/kandev-config/docs/2026-10-07-heartbeat-deterministic-script-research.md
@@ -275,7 +278,7 @@ Rules for TASKS.md usage are at the bottom of the file.
 
 [19]: docs/tasks/19-uv-source-path-documentation-unclear.md
 
-<!-- hai:reserved-numbers:1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,26,27,28,29,30,31,32,33,34,35,36,37,38,39,40,41,42,43,44 -->
+<!-- hai:reserved-numbers:1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,26,27,28,29,30,31,32,33,34,35,36,37,38,39,40,41,42,43,44,45,46 -->
 
 [20]: docs/tasks/20-command-not-found-error.md
 [21]: docs/tasks/21-unclear-urlerror.md
@@ -308,6 +311,8 @@ Rules for TASKS.md usage are at the bottom of the file.
 [43]: docs/tasks/43-a-missing-launched-thread-stops-pacing-for-every-project.md
 
 [44]: docs/tasks/44-a-tracker-dropped-from-the-config-or-t3-stops-pacing-for-every-project.md
+
+[46]: docs/tasks/46-new-issue-title-not-focused.md
 
 ## Rules
 

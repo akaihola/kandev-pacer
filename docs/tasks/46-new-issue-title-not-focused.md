@@ -1,0 +1,1 @@
+When the `New issue` dialog opens, I expect the focus be in the Title field so I can start directly writing the title.
