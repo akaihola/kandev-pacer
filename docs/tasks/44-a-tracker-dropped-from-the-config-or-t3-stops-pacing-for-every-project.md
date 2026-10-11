@@ -39,3 +39,31 @@ this one matters less.
 
 [31]: 31-dirty-repo-blocks-all-trackers.md
 [33]: 33-unclear-withheld-message.md
+
+
+## Implementation, 2026-10-11
+
+Records for unconfigured trackers now stay untouched and cannot launch work. Each
+tick reports their count in one line per tracker. T3's snapshot still counts their
+running threads against capacity. Reconfiguring a tracker uses its original
+records and thread IDs, so it cannot create duplicate launches.
+
+Zero or multiple matching projects, and missing or wrong-project parent threads,
+skip only their tracker. Validation runs before pending admission and model
+selection, so a pending record from a broken tracker cannot block healthy ones.
+Each skipped tracker gets one warning per tick with the required fix. Correcting
+the T3 project or parent thread allows pacing to resume on the next tick.
+
+A saved server URL mismatch still withholds all launches, including when its
+tracker is unconfigured. The recovery instructions retain the steps to inspect
+and archive an obsolete record. Dirty and off-branch checkout skips are unchanged.
+
+### Validation
+
+All 127 T3 tests passed. The 18 project, parent-thread and unconfigured-record
+regression cases failed against unchanged `main` and passed with the fix. They
+cover repeated ticks, pending records, recovery, unchanged retired records,
+server-wide capacity and duplicate prevention after restart.
+
+The full offline suite passed with 848 tests and 20 skips.
+`darker --check`, `graylint` and `git diff --check` passed.

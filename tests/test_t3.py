@@ -200,18 +200,15 @@ def test_startup_requires_hai_tasks_cli(
     assert server.calls == []
 
 
-@pytest.mark.parametrize(
-    "wrong_url,wrong_tracker", [(True, False), (False, True), (True, True)]
-)
+@pytest.mark.parametrize("wrong_tracker", [False, True])
 def test_launch_record_mismatch_explains_recovery_without_mutating_work(
-    setup, wrong_url, wrong_tracker
+    setup, wrong_tracker
 ):
     pacer, tracker_path, server = setup
     pacer.tick()
     [record_path] = pacer.state.glob("*.json")
     record = json.loads(record_path.read_text())
-    if wrong_url:
-        record["url"] = "https://user:secret@old-server:3773/private?token=secret"
+    record["url"] = "https://user:secret@old-server:3773/private?token=secret"
     if wrong_tracker:
         record["tracker"] = str(tracker_path.parent / "old" / "TASKS.md")
     t3.save(record_path, record)
@@ -228,13 +225,10 @@ def test_launch_record_mismatch_explains_recovery_without_mutating_work(
     assert str(record_path) in message
     assert record["issue"] in message
     assert "prevent duplicate threads" in message
-    assert ("saved T3 server URL differs" in message) == wrong_url
-    assert ("is absent from t3_trackers" in message) == wrong_tracker
-    if wrong_tracker:
-        assert record["tracker"] in message
+    assert "saved T3 server URL differs" in message
     assert "secret" not in message
     assert "private" not in message
-    assert "Restore the intended server/tracker settings and restart" in message
+    assert "Restore the intended server settings and restart" in message
     assert "stop the pacer, inspect its threadId" in message
     assert "move only this file outside t3_state_dir" in message
     assert "can launch it again" in message
@@ -1335,62 +1329,165 @@ def test_without_parent_requires_explicit_launch_settings(setup, missing):
 
 @pytest.mark.parametrize("problem", ["missing", "wrong-root", "duplicate"])
 @pytest.mark.parametrize("with_parent", [False, True])
-def test_tracker_requires_matching_project(setup, problem, with_parent):
+@pytest.mark.parametrize("pending", [False, True])
+def test_tracker_requires_matching_project(
+    setup, tmp_path, caplog, problem, with_parent, pending
+):
     pacer, path, server = setup
+    second = add_tracker(pacer, server, tmp_path / "repo2")
+    project = copy.deepcopy(server.data["projects"][0])
+    store, _ = pacer.trackers[str(path)]
+    if pending:
+        source = store.read()
+        record_path, _ = pacer.prepare(
+            str(path),
+            store,
+            source,
+            t3.eligible(source)[0],
+            server.data["threads"][0],
+            project,
+        )
+        before_record = record_path.read_bytes()
     configure_models(pacer)
+    pacer.config.t3_model = pacer.config.t3_models[0]
     pacer.config.t3_runtime_mode = "full-access"
     pacer.config.t3_interaction_mode = "default"
     if not with_parent:
-        pacer.config.t3_trackers = [{"tracker": str(path)}]
-        server.data["threads"] = []
-    project = copy.deepcopy(server.data["projects"][0])
+        pacer.trackers[str(path)] = (store, None)
     if problem == "missing":
-        server.data["projects"] = []
+        server.data["projects"].remove(server.data["projects"][0])
     elif problem == "wrong-root":
         server.data["projects"][0]["workspaceRoot"] = "/other"
     else:
         server.data["projects"].append(
             {"id": "duplicate", "workspaceRoot": str(path.parent)}
         )
-    source = path.read_text()
-    pacer = t3.T3Pacer(pacer.config, server)
-    with pytest.raises(t3.Withheld, match="exactly one T3 project") as error:
+    source = path.read_bytes()
+    for _ in range(2):
+        caplog.clear()
         pacer.tick()
-    message = str(error.value)
-    assert str(path) in message
-    assert f"workspaceRoot {str(path.parent)!r}" in message
-    assert f"found {2 if problem == 'duplicate' else 0}" in message
-    assert "Cannot launch new tasks this tick" in message
-    assert "Existing T3 threads continue" in message
-    assert "retry next tick" in message
-    assert "t3_url" in message
-    if problem == "duplicate":
-        assert "resolve duplicate workspace roots" in message
-    else:
-        assert "Open or add this directory as a project" in message
-        assert "t3_trackers[].tracker" in message
-    assert not server.calls
-    assert not list(pacer.state.glob("*.json"))
-    assert path.read_text() == source
+        [message] = [r.getMessage() for r in caplog.records if r.levelname == "WARNING"]
+        assert str(path) in message
+        assert f"workspaceRoot {str(path.parent)!r}" in message
+        assert f"found {2 if problem == 'duplicate' else 0}" in message
+        assert "retry next tick" in message
+        assert "t3_url" in message
+        if problem == "duplicate":
+            assert "resolve duplicate workspace roots" in message
+        else:
+            assert "Open or add this directory as a project" in message
+            assert "t3_trackers[].tracker" in message
+    assert [project_of(c) for c in server.calls] == [str(second.parent)]
+    assert path.read_bytes() == source
     assert t3.git(path.parent, "status", "--porcelain") == ""
-    server.data["projects"] = [project]
+    if pending:
+        assert record_path.read_bytes() == before_record
+    server.data["threads"][-1]["session"] = {"status": "idle"}
+    server.data["projects"] = [
+        project,
+        server.data["projects"][0 if problem == "missing" else 1],
+    ]
     pacer.tick()
-    assert len(server.calls) == 1
+    assert project_of(server.calls[-1]) == str(path.parent)
+    assert len(server.calls) == 2
 
 
-@pytest.mark.parametrize("parent", ["", "missing", "wrong-project"])
-def test_supplied_parent_still_requires_valid_thread(setup, parent):
+def test_empty_parent_is_invalid_configuration(setup):
     pacer, path, server = setup
-    configure_models(pacer)
-    pacer.config.t3_runtime_mode = "full-access"
-    pacer.config.t3_interaction_mode = "default"
-    pacer.config.t3_trackers = [{"tracker": str(path), "parent_thread": parent}]
-    if parent == "wrong-project":
-        server.data["threads"][0].update(id=parent, projectId="other")
-    with pytest.raises(t3.Withheld, match="parent_thread|Parent thread"):
-        t3.T3Pacer(pacer.config, server).tick()
+    pacer.config.t3_trackers = [{"tracker": str(path), "parent_thread": ""}]
+    with pytest.raises(t3.Withheld, match="parent_thread"):
+        t3.T3Pacer(pacer.config, server)
     assert not server.calls
-    assert not list(pacer.state.glob("*.json"))
+
+
+@pytest.mark.parametrize("problem", ["missing", "wrong-project"])
+@pytest.mark.parametrize("pending", [False, True])
+def test_bad_parent_skips_only_its_tracker(setup, tmp_path, caplog, problem, pending):
+    pacer, path, server = setup
+    second = add_tracker(pacer, server, tmp_path / "repo2")
+    parent = copy.deepcopy(server.data["threads"][0])
+    if pending:
+        store, _ = pacer.trackers[str(path)]
+        source = store.read()
+        record_path, _ = pacer.prepare(
+            str(path),
+            store,
+            source,
+            t3.eligible(source)[0],
+            parent,
+            server.data["projects"][0],
+        )
+        before_record = record_path.read_bytes()
+    if problem == "missing":
+        server.data["threads"].pop(0)
+    else:
+        server.data["threads"][0]["projectId"] = "other"
+    for _ in range(2):
+        caplog.clear()
+        pacer.tick()
+        [message] = [r.getMessage() for r in caplog.records if r.levelname == "WARNING"]
+        assert str(path) in message
+        assert "parent_thread 'parent'" in message
+        assert "set parent_thread to a thread in the matching T3 project" in message
+        assert "remove it and configure t3_model" in message
+    assert [project_of(c) for c in server.calls] == [str(second.parent)]
+    if pending:
+        assert record_path.read_bytes() == before_record
+    server.data["threads"] = [parent, server.data["threads"][-1]]
+    server.data["threads"][-1]["session"] = {"status": "idle"}
+    pacer.tick()
+    assert project_of(server.calls[-1]) == str(path.parent)
+    assert len(server.calls) == 2
+
+
+@pytest.mark.parametrize("pending", [False, True])
+def test_unconfigured_records_are_retained_and_do_not_block(
+    setup, tmp_path, caplog, pending
+):
+    pacer, path, server = setup
+    second = add_tracker(pacer, server, tmp_path / "repo2")
+    store, parent_id = pacer.trackers[str(path)]
+    source = store.read()
+    for issue in t3.eligible(source):
+        record_path, record = pacer.prepare(
+            str(path),
+            store,
+            store.read(),
+            issue,
+            server.data["threads"][0],
+            server.data["projects"][0],
+        )
+        if not pending:
+            pacer.launch(record_path, record, set(), t3.time.time())
+    originals = {p: p.read_bytes() for p in pacer.state.glob("*.json")}
+    del pacer.trackers[str(path)]
+    caplog.set_level("INFO", logger="kandev-pacer")
+    # Running retired threads still consume the only available slot.
+    pacer.tick()
+    assert len(server.calls) == (1 if pending else 2)
+    for thread in server.data["threads"]:
+        thread["session"] = {"status": "idle"}
+    for _ in range(2):
+        caplog.clear()
+        pacer.tick()
+        [message] = [
+            r.getMessage() for r in caplog.records if "T3 ignoring" in r.getMessage()
+        ]
+        assert f"2 launch record(s) for unconfigured tracker {path}" in message
+        assert "retained" in message
+    assert project_of(server.calls[-1]) == str(second.parent)
+    assert len(server.calls) == (2 if pending else 3)
+    assert all(p.read_bytes() == contents for p, contents in originals.items())
+    # Returning config after restart uses the same records, with no new thread IDs.
+    server.data["threads"][-1]["session"] = {"status": "idle"}
+    t3.T3Pacer(pacer.config, server).tick()
+    if pending:
+        assert server.calls[-1]["threadId"] in {
+            json.loads(contents)["command"]["threadId"]
+            for contents in originals.values()
+        }
+    else:
+        assert len(server.calls) == 3
 
 
 @pytest.mark.parametrize("bypass", [False, True])
