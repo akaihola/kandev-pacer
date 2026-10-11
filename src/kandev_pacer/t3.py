@@ -565,33 +565,24 @@ class T3Pacer:
                 running[name] += 1
         now = time.time()
         records, pending, held = {}, [], []
+        ignored = Counter()
         for path in sorted(self.state.glob("*.json")):
             record = json.loads(path.read_text())
-            if (
-                record["url"] != self.server.url
-                or record["tracker"] not in self.trackers
-            ):
-                mismatches = []
-                if record["url"] != self.server.url:
-                    mismatches.append(
-                        "saved T3 server URL differs from t3_url (PACER_T3_URL)"
-                    )
-                if record["tracker"] not in self.trackers:
-                    mismatches.append(
-                        f"saved TASKS.md path {json.dumps(record['tracker'])} is absent "
-                        "from t3_trackers (PACER_T3_TRACKERS)"
-                    )
+            if record["url"] != self.server.url:
                 raise Withheld(
                     f"No new tasks will launch this tick; existing T3 threads continue. "
                     f"Saved launch record {path} for issue {record['issue']} "
                     "remembers a launch to prevent duplicate threads, but "
-                    + "; ".join(mismatches)
-                    + ". Restore the intended server/tracker settings and restart. "
+                    "saved T3 server URL differs from t3_url (PACER_T3_URL). "
+                    "Restore the intended server settings and restart. "
                     "If this record is obsolete, stop the pacer, inspect its threadId "
                     "in the original T3 server, then move only this file outside "
                     "t3_state_dir before restarting. Removing a record for queued "
                     "work can launch it again. See docs/t3-pacing.md#launch-record-mismatch."
                 )
+            if record["tracker"] not in self.trackers:
+                ignored[record["tracker"]] += 1
+                continue
             records[(record["tracker"], record["issue"])] = record
             thread = threads.get(record["command"]["threadId"])
             if thread:
@@ -644,6 +635,55 @@ class T3Pacer:
             else:
                 raise Withheld("Unknown launch record phase; inspect state directory")
         skipped = {r["tracker"] for _, r in held if r["hold"]["scope"] == "tracker"}
+        for tracker, count in ignored.items():
+            log.info(
+                "T3 ignoring %s launch record(s) for unconfigured tracker %s; "
+                "retained for duplicate prevention if reconfigured",
+                count,
+                tracker,
+            )
+        projects_by_tracker = {}
+        for tracker, (store, parent_id) in self.trackers.items():
+            if tracker in skipped:
+                continue
+            parent = threads.get(parent_id) if parent_id is not None else {}
+            projects = [
+                p for p in snapshot["projects"] if p["workspaceRoot"] == str(store.root)
+            ]
+            if len(projects) != 1:
+                fix = (
+                    "Open or add this directory as a project in the T3 server selected "
+                    "by t3_url, or correct t3_trackers[].tracker to that project's TASKS.md"
+                    if not projects
+                    else "Inspect projects in the T3 server selected by t3_url and "
+                    "resolve duplicate workspace roots so exactly one project uses this directory"
+                )
+                log.warning(
+                    f"T3 skipping tracker {tracker!r} this tick: requires "
+                    f"exactly one T3 project with workspaceRoot {str(store.root)!r}; "
+                    f"found {len(projects)}. {fix}; retry next tick"
+                )
+                skipped.add(tracker)
+                continue
+            if parent_id is not None and (
+                not parent or parent["projectId"] != projects[0]["id"]
+            ):
+                log.warning(
+                    "T3 skipping tracker %r this tick: parent_thread %r is missing or "
+                    "belongs to another project; set parent_thread to a thread in "
+                    "the matching T3 project, or remove it and configure t3_model, "
+                    "t3_runtime_mode and t3_interaction_mode; retry next tick",
+                    tracker,
+                    parent_id,
+                )
+                skipped.add(tracker)
+                continue
+            projects_by_tracker[tracker] = projects[0]
+        pending = [
+            (path, record)
+            for path, record in pending
+            if record["tracker"] not in skipped
+        ]
         usage, errors = provider.read(self.config.providers, now=now)
         waiting = set()
         if pending:
@@ -694,27 +734,6 @@ class T3Pacer:
             if tracker in skipped:
                 continue
             parent = threads.get(parent_id) if parent_id is not None else {}
-            projects = [
-                p for p in snapshot["projects"] if p["workspaceRoot"] == str(store.root)
-            ]
-            if len(projects) != 1:
-                fix = (
-                    "Open or add this directory as a project in the T3 server selected "
-                    "by t3_url, or correct t3_trackers[].tracker to that project's TASKS.md"
-                    if not projects
-                    else "Inspect projects in the T3 server selected by t3_url and "
-                    "resolve duplicate workspace roots so exactly one project uses this directory"
-                )
-                raise Withheld(
-                    f"Cannot launch new tasks this tick: tracker {tracker!r} requires "
-                    f"exactly one T3 project with workspaceRoot {str(store.root)!r}; "
-                    f"found {len(projects)}. {fix}. Existing T3 threads continue; "
-                    "the pacer will retry next tick"
-                )
-            if parent_id is not None and (
-                not parent or parent["projectId"] != projects[0]["id"]
-            ):
-                raise Withheld("Parent thread must belong to the tracker project")
             parent = self.launch_settings(parent, running, usage, errors, now)
             if parent is None:
                 continue
@@ -724,7 +743,12 @@ class T3Pacer:
                     continue
                 try:
                     path, record = self.prepare(
-                        tracker, store, source, issue, parent, projects[0]
+                        tracker,
+                        store,
+                        source,
+                        issue,
+                        parent,
+                        projects_by_tracker[tracker],
                     )
                 except CheckoutBlocked as error:
                     log.warning("T3 skipping tracker this tick: %s", error)

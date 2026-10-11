@@ -280,9 +280,13 @@ resolved directory containing `TASKS.md`. It must equal exactly one project's
 For zero matches, open or add that directory as a project in that T3 server,
 or correct `t3_trackers[].tracker` to the intended project's `TASKS.md`.
 For multiple matches, inspect the projects and resolve duplicate workspace roots.
-This blocks new task launches for the current tick. Existing T3 threads continue
-running, and the pacer keeps reporting quota status and retries next tick.
-Trackers processed before the mismatch can still launch work on other ticks.
+The pacer skips only that tracker, including its pending launches, with one warning
+per tick. Other trackers keep launching in the same tick. Existing T3 threads continue
+running and count against capacity. The pacer retries the skipped tracker next tick.
+
+A missing `parent_thread`, or one belonging to another project, skips its tracker
+the same way. Set `parent_thread` to a thread in the matching T3 project, or remove
+it and configure `t3_model`, `t3_runtime_mode`, and `t3_interaction_mode` explicitly.
 
 Scheduling requires a clean checkout on `t3_base_branch`. The checkout is the
 directory containing the configured `TASKS.md`, before T3 creates a worktree.
@@ -341,7 +345,8 @@ tracker updates; the launch still goes ahead as long as its issue is eligible.
 
 `T3 withheld` means the pacer skips new launches for the current tick. Existing T3
 threads continue running. The pacer retries on its next tick, but a saved record
-that does not match its configuration keeps blocking launches until you resolve it.
+whose T3 server URL differs from the current URL keeps blocking launches until
+you resolve it, even if its tracker is no longer configured.
 
 A launch record is a JSON file in `t3_state_dir`, also set by
 `PACER_T3_STATE_DIR`. It remembers a planned or previously submitted launch so a
@@ -349,14 +354,19 @@ restart does not create a duplicate thread. The endpoint is the T3 server URL se
 by `t3_url` or `PACER_T3_URL`. Trackers are the TASKS.md files listed in
 `t3_trackers` or `PACER_T3_TRACKERS`.
 
-The mismatch error names the record file and issue, and says whether its saved
-server URL differs from the current URL, its TASKS.md path is absent from the
-configured trackers, or both. Server URLs are omitted from the error because old
+Records for trackers absent from `t3_trackers` are ignored. Each tick logs one short
+line per unconfigured tracker with its record count. These records cannot launch
+work, but running threads still count against capacity through T3's snapshot.
+Keep the records in place. If you configure the tracker again, they still prevent
+duplicate launches, and unfinished submissions resume with their saved command IDs.
+
+The mismatch error names the record file and issue and says its saved server URL
+differs from the current URL. Server URLs are omitted from the error because old
 records can contain credentials or private URL paths. Inspect the named file
 locally rather than pasting its contents into shared logs.
 
 1. Check the TOML selected by `--config`, CLI flags, process environment, and
-   configured secrets file. If the server or tracker change was accidental,
+   configured secrets file. If the server change was accidental,
    restore the intended settings and restart the pacer. Even different URL aliases
    for the same server count as a mismatch; the comparison uses the saved URL.
 2. If the record belongs to work you intentionally retired, stop the pacer first.
