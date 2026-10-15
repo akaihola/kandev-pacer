@@ -138,6 +138,11 @@ t3_interaction_mode = "default"
 Use a model ID available on your T3 instance. `instanceId` must be `codex` or
 `claudeAgent`. Model options are optional and belong to the selected model;
 overriding the model does not copy options from the parent.
+Option keys are T3's, not the provider API's: Codex models take `reasoningEffort`,
+Claude models take `effort` (`low`, `medium`, `high`, `xhigh`, `max`). Since
+2026-10-15 the configured Claude candidate is `claude-opus-5-5` at `xhigh`; it
+replaced `claude-fable-5-1` at `medium`. The pacer reads the config file only at
+startup; restart it after changing the candidate list.
 
 For automatic selection, configure the models the pacer may use:
 
@@ -145,7 +150,7 @@ For automatic selection, configure the models the pacer may use:
 t3_model = "automatic"
 t3_models = [
   { instanceId = "codex", model = "gpt-5.3-codex", options = { reasoningEffort = "high" } },
-  { instanceId = "claudeAgent", model = "YOUR_CLAUDE_MODEL_ID" },
+  { instanceId = "claudeAgent", model = "claude-opus-5-5", options = { effort = "xhigh" } },
 ]
 t3_runtime_mode = "full-access"
 t3_interaction_mode = "default"
