@@ -873,10 +873,10 @@ def test_startup_hides_unclassified_exception_contents(setup, monkeypatch, caplo
 @pytest.mark.parametrize(
     "entry, message",
     [
-        ({}, ".tracker must be a nonempty TASKS.md path"),
-        ({"tracker": ""}, ".tracker must be a nonempty TASKS.md path"),
-        ({"tracker": "  "}, ".tracker must be a nonempty TASKS.md path"),
-        ({"tracker": None}, ".tracker must be a nonempty TASKS.md path"),
+        ({}, ".tracker must be a nonempty source path"),
+        ({"tracker": ""}, ".tracker must be a nonempty source path"),
+        ({"tracker": "  "}, ".tracker must be a nonempty source path"),
+        ({"tracker": None}, ".tracker must be a nonempty source path"),
         ("private-token", "must be a tracker table"),
         ({"tracker": "missing/private-token"}, "FileNotFoundError"),
         ({"tracker": "private-token\0"}, "ValueError"),
@@ -897,17 +897,14 @@ def test_startup_identifies_invalid_tracker_entry(
     assert t3.git(path.parent, "status", "--porcelain") == ""
 
 
-@pytest.mark.parametrize("problem", ["directory", "duplicate", "empty-parent"])
+@pytest.mark.parametrize("problem", ["duplicate", "empty-parent"])
 def test_startup_identifies_tracker_path_and_parent_errors(
     setup, monkeypatch, caplog, problem
 ):
     pacer, path, server = setup
     monkeypatch.setattr(t3, "Server", lambda *a: server)
     entry = {"tracker": str(path), "parent_thread": "parent"}
-    if problem == "directory":
-        entry["tracker"] = str(path.parent)
-        message = ".tracker must point to a file"
-    elif problem == "duplicate":
+    if problem == "duplicate":
         message = "Each tracker must appear only once"
     else:
         entry["parent_thread"] = ""

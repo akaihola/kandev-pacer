@@ -39,6 +39,11 @@ Default Workspace and the nine repositories in the current Heartbeat prompt.
 The database opens read-only. No command writes SQL. Use a database belonging to the
 same Kandev server configured with `KANDEV_URL`.
 
+`TASKS.md`, `.scratch/` and `docs/backlog/` reads use Hai. Source discovery prefers
+TASKS.md, then scratch, then backlog. Eligibility, dependency completion and worker
+state instructions use the workflow catalog, including scheduled candidates.
+Scheduling is a no-op when the catalog has no scheduled state.
+
 `TASKS.md` reads use Hai. A legacy missing proposals heading is supplied in memory
 for reads; scheduling still requires a valid Hai tracker. Issue-file readers support
 nixos-config's Markdown inbox and kasvimuseo's RST `Status`, `Claimed` and `Depends on`
@@ -84,7 +89,7 @@ the same key. An existing open identity returns `status: verify` with its task I
 verify it instead of creating another identity. Coverage is advisory until this API
 verification succeeds. No helper creates a Kandev task itself.
 
-## Schedule TASKS.md
+## Schedule a Hai source
 
 ```bash
 uv run --frozen --extra heartbeat --project /home/agent/prg/kandev-pacer tasks-md \

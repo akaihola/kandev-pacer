@@ -17,7 +17,7 @@ from collections import Counter
 from datetime import UTC, datetime
 from pathlib import Path
 
-from . import provider, resets
+from . import provider, resets, tasks_md
 from .burn import BurnMeter, burn_note
 from .config import API_KEY
 from .quota import (
@@ -86,18 +86,11 @@ def rejected_reason(issue, rejections):
 
 
 def eligible(snapshot):
-    issues = snapshot["workspace"]["issues"]
-    completed = {
-        i["sourceReference"][1:-1]
-        for i in issues
-        if i["sourceSection"] == "Completed / Accepted"
-    }
-    return [
-        issue
-        for section in ("Scheduled", "Ordered backlog")
-        for issue in issues
-        if issue["sourceSection"] == section and set(issue["dependencies"]) <= completed
-    ]
+    return tasks_md.eligible_issues(snapshot)
+
+
+def repository_root(store):
+    return Path(git(store.root, "rev-parse", "--show-toplevel"))
 
 
 def save(path, record):
@@ -204,7 +197,7 @@ class T3Pacer:
                 )
             cli = str(fallback)
         self.hai_tasks_command = shlex.quote(str(Path(cli).absolute()))
-        TasksStore = importlib.import_module("hai_tasks").TasksStore
+        open_source = importlib.import_module("hai_tasks").open_source
 
         self.config, self.server = config, server
         entries = config.t3_trackers
@@ -217,7 +210,7 @@ class T3Pacer:
                 raise Withheld(f"{location} must be a tracker table")
             tracker = entry.get("tracker")
             if not isinstance(tracker, str) or not tracker.strip():
-                raise Withheld(f"{location}.tracker must be a nonempty TASKS.md path")
+                raise Withheld(f"{location}.tracker must be a nonempty source path")
             try:
                 resolved = Path(tracker).expanduser().resolve(strict=True)
             except (OSError, ValueError) as error:
@@ -225,8 +218,8 @@ class T3Pacer:
                     f"{location}.tracker cannot be opened ({type(error).__name__}); "
                     "check that the path exists and is accessible"
                 ) from error
-            if not resolved.is_file():
-                raise Withheld(f"{location}.tracker must point to a file")
+            if not (resolved.is_file() or resolved.is_dir()):
+                raise Withheld(f"{location}.tracker must point to a file or directory")
             path = str(resolved)
             parent = entry.get("parent_thread")
             if path in self.trackers:
@@ -248,7 +241,7 @@ class T3Pacer:
                         + "; set parent_thread to inherit these settings, "
                         "or configure them explicitly"
                     )
-            self.trackers[path] = (TasksStore(path), parent)
+            self.trackers[path] = (open_source(path), parent)
         self.state = Path(config.t3_state_dir).expanduser()
         self.state.mkdir(parents=True, exist_ok=True, mode=0o700)
         # How fast the agents have been seen to empty a weekly allowance, per provider.
@@ -277,7 +270,7 @@ class T3Pacer:
             )
 
     def prepare(self, tracker, store, snapshot, issue, parent, project):
-        root = store.root
+        root = repository_root(store)
         self.require_base_branch(tracker, root)
         if git(root, "status", "--porcelain"):
             raise CheckoutBlocked(
@@ -294,7 +287,7 @@ class T3Pacer:
         }
         instructions = root / "AGENTS.md"
         prompt = (
-            f"Implement {issue['sourceReference']}: {issue['title']}\n\n"
+            f"Implement {issue.get('sourceReference', issue['identifier'])}: {issue['title']}\n\n"
             f"Canonical tracker: {tracker}\nHai issue ID: {issue['id']}\n\n"
             f"{issue['description']}\n\nRepository instructions:\n"
             + (
@@ -303,16 +296,15 @@ class T3Pacer:
                 else "Read repository instructions."
             )
             + "\n\nTracker workflow:\n"
-            + snapshot["parsed"]["source"].split("## Rules", 1)[1]
+            + snapshot["parsed"]["source"].partition("## Rules")[2]
             + "\n\nScope: this issue and its required tests and documentation. "
             "`hai_tasks` is Hai's Python package, not a tool. Update the tracker with "
             f"`{self.hai_tasks_command} read <repo>`, then "
             f"`{self.hai_tasks_command} update <repo> <id> "
             "--revision <rev> --json <patch>`. Load the `hai-tasks` skill if it is listed. "
-            "The issue is already "
-            "scheduled and committed on the base branch. Follow repository rules for "
-            "moving it to In Progress in this worktree, validation, merge, and completion. "
-            "Do not check user acceptance [x]. Do not send messages to others. "
+            "Follow repository rules for validation, merge, and completion. "
+            + tasks_md.workflow_prompt(snapshot)
+            + "Do not send messages to others. "
             "Do not change unrelated work. Report blockers and validation evidence."
         )
         command = dict(
@@ -370,13 +362,18 @@ class T3Pacer:
         )
         if issue is None:
             raise Held(NOT_ELIGIBLE, scope="issue")
-        self.require_base_branch(record["tracker"], store.root)
-        if record["phase"] == "prepared":
+        self.require_base_branch(record["tracker"], repository_root(store))
+        destination = tasks_md.state_for(snapshot, "scheduled")
+        if (
+            record["phase"] == "prepared"
+            and destination
+            and issue["sourceState"] != destination
+        ):
             result = store.mutate(
                 "update",
                 snapshot["revision"],
                 id=issue["id"],
-                input={"sourceSection": "Scheduled"},
+                input={"sourceState": destination},
             )
             record.update(revision=result["revision"], phase="scheduled")
             save(path, record)
@@ -384,17 +381,19 @@ class T3Pacer:
             raise Held(
                 "Tracker changed during scheduling; inspect TASKS.md and its Git history"
             )
-        # Restrict the commit to TASKS.md, including after an interrupted commit.
-        if git(store.root, "diff", "HEAD", "--", store.tasks_file.name):
-            git(store.root, "add", "--", store.tasks_file.name)
+        root = repository_root(store)
+        source_path = str(Path(record["tracker"]).relative_to(root))
+        # Recover an interrupted scheduling commit within the configured source.
+        if destination and git(root, "diff", "HEAD", "--", source_path):
+            git(root, "add", "--", source_path)
             git(
-                store.root,
+                root,
                 "commit",
                 "--only",
                 "-m",
                 f"docs(tasks): schedule {issue['identifier']}",
                 "--",
-                store.tasks_file.name,
+                source_path,
             )
         if store.read()["revision"] != record["revision"]:
             raise Held(
@@ -650,7 +649,9 @@ class T3Pacer:
                 continue
             parent = threads.get(parent_id) if parent_id is not None else {}
             projects = [
-                p for p in snapshot["projects"] if p["workspaceRoot"] == str(store.root)
+                p
+                for p in snapshot["projects"]
+                if p["workspaceRoot"] == str(repository_root(store))
             ]
             if len(projects) != 1:
                 fix = (
@@ -662,7 +663,7 @@ class T3Pacer:
                 )
                 log.warning(
                     f"T3 skipping tracker {tracker!r} this tick: requires "
-                    f"exactly one T3 project with workspaceRoot {str(store.root)!r}; "
+                    f"exactly one T3 project with workspaceRoot {str(repository_root(store))!r}; "
                     f"found {len(projects)}. {fix}; retry next tick"
                 )
                 skipped.add(tracker)

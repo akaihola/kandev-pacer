@@ -1,7 +1,21 @@
 # Pace Hai tasks in T3 Code
 
-T3 mode reads local TASKS.md trackers through Hai's `hai_tasks` API and launches
+T3 mode reads local TASKS.md trackers, `.scratch/` features and `docs/backlog/`
+repositories through Hai's `hai_tasks` API and launches
 eligible issues in isolated T3 worktrees. Kandev remains the default mode.
+
+Selection uses Hai's `capabilities.sourceStates` catalog. Issues in `ready` or
+`scheduled` stages qualify when all dependencies are in a `done` state. Scheduled
+issues come first. Dependencies stay within their project; scratch ticket numbers
+with leading zeroes match the same number without them. `ready-for-human` is a
+waiting state and is never selected.
+
+Scheduling moves to the first catalog state with stage `scheduled`. Workflows
+without that stage stay in their ready state, without a mutation or scheduling
+commit. Worker prompts name the catalog's `active` and `done` states, and include
+the acceptance rule only when `fields.acceptance` is supported. Configure `tracker`
+with the source path, including a scratch feature or `docs/backlog` directory.
+T3 project matching and worktree creation use the source's Git repository root.
 
 T3 mode needs Hai's Python package, `hai-tasks`, which provides the `hai_tasks`
 module. This checkout tells uv to install it from a local Hai checkout. The setting

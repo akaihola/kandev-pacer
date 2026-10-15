@@ -141,7 +141,18 @@ def instructions(path):
 def sources(root, agents):
     items, revisions = [], {}
     inbox_only = bool(re.search(r"Read `docs/issues/` only", agents))
-    path = root / "TASKS.md"
+    path = next(
+        (
+            candidate
+            for candidate in (
+                root / "TASKS.md",
+                root / ".scratch",
+                root / "docs/backlog",
+            )
+            if candidate.exists()
+        ),
+        root / "TASKS.md",
+    )
     if path.exists() and not inbox_only:
         revision, found = tasks_md.tracker(path)
         items.extend(found)
@@ -175,11 +186,11 @@ def coverage(item, tasks, bound=()):
         task = matches[0]
         if not closed(task):
             return "open", [task["id"]]
-        return ("collision" if item["section"] == "Ordered backlog" else "finished"), [
-            task["id"]
-        ]
-    if item["section"] in {"Scheduled", "In Progress", "Completed / Accepted"}:
-        return ("finished" if item["section"] == "Completed / Accepted" else "open"), []
+        return (
+            "collision" if item["stage"] in {"ready", "scheduled"} else "finished"
+        ), [task["id"]]
+    if item["stage"] in {"active", "done"}:
+        return ("finished" if item["stage"] == "done" else "open"), []
     return "free", []
 
 
@@ -272,8 +283,7 @@ def preflight(
                 ],
                 open=sum(task["id"] in bound for task in open_tasks),
                 active=sum(
-                    item["section"] in {"Ordered backlog", "Scheduled", "In Progress"}
-                    for item in items
+                    item["stage"] in {"ready", "scheduled", "active"} for item in items
                 ),
                 revisions=revisions,
                 rules=rules,
@@ -318,7 +328,7 @@ def digest(result, limit=2):
             }
         }
         items = repo.get("items", [])
-        candidates = [item for item in items if item["section"] == "Ordered backlog"]
+        candidates = [item for item in items if item["stage"] in {"ready", "scheduled"}]
         candidates.sort(key=lambda item: not item["eligible"])
         entry["candidates"] = [
             {
@@ -389,7 +399,7 @@ def create(result, repository, key, description, kind="complex", trivial=False):
             f"Selected issue, quoted exactly:\n\n{item['bullet']}\n\n{description.strip()}\n\n"
             f"Repository: {repo['path']}\nSource: {item['source']}\n"
             "Launched by a heartbeat on the gogo development server. Start by following "
-            "the repository's rules for marking this issue In Progress. Move exactly one "
+            f"the repository's rules. {item.get('workflow_prompt', '')}Move exactly one "
             "issue in the tracker diff; preserve every other issue's text from the base branch."
         ),
     }

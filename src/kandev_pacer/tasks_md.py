@@ -1,4 +1,4 @@
-"""Read complete work-item sources and schedule TASKS.md issues through Hai."""
+"""Read complete work-item sources and schedule workflow issues through Hai."""
 
 import argparse
 import hashlib
@@ -25,37 +25,100 @@ def slug(text):
     return "-".join(re.sub(r"[\W_]", "", word) for word in text.lower().split()[:6])
 
 
+def states(snapshot):
+    return {
+        state["id"]: state["stage"]
+        for state in snapshot["capabilities"]["sourceStates"]
+    }
+
+
+def state_for(snapshot, stage):
+    return next(
+        (name for name, value in states(snapshot).items() if value == stage), None
+    )
+
+
+def issue_key(issue):
+    reference = issue.get("sourceReference")
+    if reference and reference != "[*]":
+        return reference[1:-1]
+    if reference:
+        return slug(issue["title"])
+    return issue["identifier"]
+
+
+def dependency_key(issue, reference):
+    # Ticket numbers are local to a project and may include leading zeroes.
+    number = str(int(reference)) if reference.isdecimal() else reference
+    return issue.get("projectId"), number
+
+
+def eligible_issues(snapshot):
+    catalog = states(snapshot)
+    issues = snapshot["workspace"]["issues"]
+    done = {
+        dependency_key(i, issue_key(i).rsplit("/", 1)[-1])
+        for i in issues
+        if catalog[i["sourceState"]] == "done"
+    }
+    return [
+        issue
+        for stage in ("scheduled", "ready")
+        for issue in issues
+        if catalog[issue["sourceState"]] == stage
+        and all(dependency_key(issue, dep) in done for dep in issue["dependencies"])
+    ]
+
+
+def workflow_prompt(snapshot):
+    text = (
+        f"Move this issue to {state_for(snapshot, 'active')} when starting work and "
+        f"to {state_for(snapshot, 'done')} when complete. "
+    )
+    if snapshot["capabilities"]["fields"].get("acceptance"):
+        text += "Do not check user acceptance [x]. "
+    return text
+
+
 def tracker(path):
     api = hai()
-    source = path.read_text()
     snapshot: dict[str, Any]
-    if not re.search(r"^## Unverified proposals$", source, re.M):
-        # Read legacy trackers without rewriting them. Mutations still use TasksStore.
-        source = source.replace(
+    if path.is_file() and not re.search(
+        r"^## Unverified proposals$", path.read_text(), re.M
+    ):
+        # Legacy trackers are readable without rewriting them.
+        source = path.read_text().replace(
             "## Ordered backlog", "## Unverified proposals\n\n## Ordered backlog", 1
         )
+        parsed = api.parse_tasks(source)
         snapshot = {
-            "parsed": api.parse_tasks(source),
+            "parsed": parsed,
+            "workspace": {"issues": [task["issue"] for task in parsed["tasks"]]},
+            "capabilities": api.TasksStore.capabilities,
             "revision": hashlib.sha256(path.read_bytes()).hexdigest(),
         }
     else:
-        snapshot = api.TasksStore(path).read()
-    items = []
-    for task in snapshot["parsed"]["tasks"]:
-        issue = task["issue"]
-        items.append(
-            {
-                "key": task["marker"]
-                if task["marker"] != "*"
-                else slug(issue["title"]),
-                "id": issue["id"],
-                "title": issue["title"],
-                "bullet": task["raw"],
-                "section": issue["sourceSection"],
-                "depends_on": issue["dependencies"],
-                "source": str(path),
-            }
-        )
+        snapshot = api.open_source(path).read()
+    catalog = states(snapshot)
+    raw = {
+        task["issue"]["id"]: task["raw"] for task in snapshot["parsed"].get("tasks", [])
+    }
+    eligible_ids = {issue["id"] for issue in eligible_issues(snapshot)}
+    items = [
+        {
+            "key": issue_key(issue),
+            "id": issue["id"],
+            "title": issue["title"],
+            "bullet": raw.get(issue["id"], issue["description"]),
+            "section": issue["sourceState"],
+            "stage": catalog[issue["sourceState"]],
+            "workflow_eligible": issue["id"] in eligible_ids,
+            "workflow_prompt": workflow_prompt(snapshot),
+            "depends_on": issue["dependencies"],
+            "source": str(path),
+        }
+        for issue in snapshot["workspace"]["issues"]
+    ]
     check_keys(items)
     return snapshot["revision"], items
 
@@ -135,6 +198,11 @@ def issue_files(root, suffix):
                 "title": title,
                 "bullet": text,
                 "section": section,
+                "stage": {
+                    "Ordered backlog": "ready",
+                    "In Progress": "active",
+                    "Completed / Accepted": "done",
+                }.get(section, "waiting"),
                 "depends_on": dependencies,
                 "source": str(path),
             }
@@ -156,48 +224,57 @@ def git(root, *args):
 
 def move(path, key, revision, destination, base_branch):
     """Require the caller's revision and a clean base checkout before scheduling."""
-    if git(path.parent, "symbolic-ref", "--short", "HEAD") != base_branch:
+    root = Path(
+        git(path if path.is_dir() else path.parent, "rev-parse", "--show-toplevel")
+    )
+    if git(root, "symbolic-ref", "--short", "HEAD") != base_branch:
         raise ValueError(f"Scheduling requires the {base_branch} checkout")
-    if git(path.parent, "status", "--porcelain"):
+    if git(root, "status", "--porcelain"):
         raise ValueError("Scheduling requires a clean checkout, including its index")
     current_revision, items = tracker(path)
     if current_revision != revision:
         raise ValueError("Tracker changed; rerun list before scheduling")
     item = next((item for item in items if item["key"] == key), None)
-    if item is None or item["section"] != "Ordered backlog":
-        raise ValueError("Only an Ordered backlog issue can be scheduled")
+    if item is None or item["stage"] not in {"ready", "scheduled"}:
+        raise ValueError("Only a ready or scheduled issue can be scheduled")
     if not eligible(item, items):
         raise ValueError("Issue has unfinished or missing dependencies")
-    result = (
-        hai()
-        .TasksStore(path)
-        .mutate(
-            "update",
-            revision,
-            id=item["id"],
-            input={"sourceSection": destination},
-        )
+    store = hai().open_source(path)
+    snapshot = store.read()
+    if snapshot["revision"] != revision:
+        raise ValueError("Tracker changed; rerun list before scheduling")
+    destination = state_for(snapshot, "scheduled")
+    if destination is None or item["section"] == destination:
+        return {"revision": current_revision, "commit": git(root, "rev-parse", "HEAD")}
+    result = store.mutate(
+        "update",
+        revision,
+        id=item["id"],
+        input={"sourceState": destination},
     )
     tracker(path)  # Check the whole file before committing.
-    git(path.parent, "add", "--", path.name)
+    source_path = str(path.relative_to(root))
+    git(root, "add", "--", source_path)
     git(
-        path.parent,
+        root,
         "commit",
         "-m",
         f"docs(tasks): schedule {item['id']}",
         "--",
-        path.name,
+        source_path,
     )
     return {
         "revision": result["revision"],
-        "commit": git(path.parent, "rev-parse", "HEAD"),
+        "commit": git(root, "rev-parse", "HEAD"),
     }
 
 
 def eligible(item, items):
+    if "workflow_eligible" in item:
+        return item["workflow_eligible"]
     by_key = {entry["key"]: entry for entry in items}
-    return item["section"] == "Ordered backlog" and all(
-        dependency in by_key and by_key[dependency]["section"] == "Completed / Accepted"
+    return item["stage"] in {"ready", "scheduled"} and all(
+        dependency in by_key and by_key[dependency]["stage"] == "done"
         for dependency in item["depends_on"]
     )
 
