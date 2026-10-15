@@ -15,6 +15,9 @@ Rules for TASKS.md usage are at the bottom of the file.
 
 ## Ordered backlog
 
+- [*] Use Opus 5.5 with Extra High reasoning for paced Claude tasks instead of Fable 5.1.
+  <!-- hai:{"id":"simple-748c4fdf-5b8a-434f-bb5f-eee2687a0402","createdAt":"2026-10-11T20:32:51.333Z","updatedAt":"2026-10-11T20:32:51.333Z"} -->
+
 ## Scheduled
 
 ## In Progress
@@ -32,14 +35,17 @@ Rules for TASKS.md usage are at the bottom of the file.
 
 ## Completed / Accepted
 
-- [ ] [46] New issue title not focused
-  <!-- hai:{"id":"simple-63e6a154-30ce-4ee2-9fe5-404e753790f5","priority":"none","labels":[],"createdAt":"2026-10-10T19:40:23.453Z","updatedAt":"2026-10-11T04:57:12.299Z"} -->
+- [ ] [48] Pace Hai sources using workflow stages
+  <!-- hai:{"id":"simple-d6ad5b8b-190d-4e2d-a4b0-d2d05257ae6e","createdAt":"2026-10-15T16:26:13.622Z","updatedAt":"2026-10-15T16:26:13.622Z"} -->
 
-- [ ] [44] A tracker dropped from the config or T3 stops pacing for every project
-  <!-- hai:{"id":"simple-3b44f53e-4b5a-4948-8f65-7003544a3dfb","createdAt":"2026-10-10T19:31:24.931Z","updatedAt":"2026-10-11T04:51:07.139Z"} -->
+- [x] [46] New issue title not focused
+  <!-- hai:{"id":"simple-63e6a154-30ce-4ee2-9fe5-404e753790f5","priority":"none","labels":[],"createdAt":"2026-10-10T19:40:23.453Z","updatedAt":"2026-10-11T14:05:39.779Z"} -->
 
-- [ ] [43] A missing launched thread stops pacing for every project
-  <!-- hai:{"id":"simple-1f8ce88a-69b8-4ee1-b03d-37b4e2793501","createdAt":"2026-10-10T19:31:24.723Z","updatedAt":"2026-10-11T04:46:14.081Z"} -->
+- [x] [44] A tracker dropped from the config or T3 stops pacing for every project
+  <!-- hai:{"id":"simple-3b44f53e-4b5a-4948-8f65-7003544a3dfb","createdAt":"2026-10-10T19:31:24.931Z","updatedAt":"2026-10-11T19:31:48.375Z"} -->
+
+- [x] [43] A missing launched thread stops pacing for every project
+  <!-- hai:{"id":"simple-1f8ce88a-69b8-4ee1-b03d-37b4e2793501","createdAt":"2026-10-10T19:31:24.723Z","updatedAt":"2026-10-11T18:34:48.211Z"} -->
 
 - [x] [36] Keep long-lived Claude resets when the weekly rollover is too close to use the
   refill.
@@ -281,7 +287,7 @@ Rules for TASKS.md usage are at the bottom of the file.
 
 [19]: docs/tasks/19-uv-source-path-documentation-unclear.md
 
-<!-- hai:reserved-numbers:1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,26,27,28,29,30,31,32,33,34,35,36,37,38,39,40,41,42,43,44,45,46,47 -->
+<!-- hai:reserved-numbers:1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,26,27,28,29,30,31,32,33,34,35,36,37,38,39,40,41,42,43,44,45,46,47,48 -->
 
 [20]: docs/tasks/20-command-not-found-error.md
 [21]: docs/tasks/21-unclear-urlerror.md
@@ -318,6 +324,8 @@ Rules for TASKS.md usage are at the bottom of the file.
 [46]: docs/tasks/46-new-issue-title-not-focused.md
 
 [47]: docs/tasks/47-detect-stale-pending-launches-after-a-t3-project-is-recreated.md
+
+[48]: docs/tasks/48-pace-hai-sources-using-workflow-stages.md
 
 ## Rules
 
