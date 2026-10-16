@@ -35,8 +35,8 @@ Rules for TASKS.md usage are at the bottom of the file.
 - [x] [*] Use Opus 5.5 with Extra High reasoning for paced Claude tasks instead of Fable 5.1.
   <!-- hai:{"id":"simple-748c4fdf-5b8a-434f-bb5f-eee2687a0402","createdAt":"2026-10-11T20:32:51.333Z","updatedAt":"2026-10-15T20:35:57.874Z"} -->
 
-- [ ] [48] Pace Hai sources using workflow stages
-  <!-- hai:{"id":"simple-d6ad5b8b-190d-4e2d-a4b0-d2d05257ae6e","createdAt":"2026-10-15T16:26:13.622Z","updatedAt":"2026-10-15T16:26:13.622Z"} -->
+- [x] [48] Pace Hai sources using workflow stages
+  <!-- hai:{"id":"simple-d6ad5b8b-190d-4e2d-a4b0-d2d05257ae6e","createdAt":"2026-10-15T16:26:13.622Z","updatedAt":"2026-10-16T16:00:12.423Z"} -->
 
 - [x] [46] New issue title not focused
   <!-- hai:{"id":"simple-63e6a154-30ce-4ee2-9fe5-404e753790f5","priority":"none","labels":[],"createdAt":"2026-10-10T19:40:23.453Z","updatedAt":"2026-10-11T14:05:39.779Z"} -->
