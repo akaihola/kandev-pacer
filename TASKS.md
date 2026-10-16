@@ -15,6 +15,9 @@ Rules for TASKS.md usage are at the bottom of the file.
 
 ## Ordered backlog
 
+- [49] Port T3 mode to T3's V2 protocol: pacedRuns discovery and queued-run.admit
+  <!-- hai:{"id":"simple-da78b7a4-bee2-4ffe-86eb-a294b70b2388","labels":["steward"],"createdAt":"2026-10-16T16:43:07.027Z","updatedAt":"2026-10-16T16:43:07.027Z"} -->
+
 ## Scheduled
 
 ## In Progress
@@ -287,7 +290,7 @@ Rules for TASKS.md usage are at the bottom of the file.
 
 [19]: docs/tasks/19-uv-source-path-documentation-unclear.md
 
-<!-- hai:reserved-numbers:1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,26,27,28,29,30,31,32,33,34,35,36,37,38,39,40,41,42,43,44,45,46,47,48 -->
+<!-- hai:reserved-numbers:1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,26,27,28,29,30,31,32,33,34,35,36,37,38,39,40,41,42,43,44,45,46,47,48,49 -->
 
 [20]: docs/tasks/20-command-not-found-error.md
 [21]: docs/tasks/21-unclear-urlerror.md
@@ -326,6 +329,8 @@ Rules for TASKS.md usage are at the bottom of the file.
 [47]: docs/tasks/47-detect-stale-pending-launches-after-a-t3-project-is-recreated.md
 
 [48]: docs/tasks/48-pace-hai-sources-using-workflow-stages.md
+
+[49]: docs/tasks/49-port-t3-mode-to-t3-s-v2-protocol-pacedruns-discovery-and-queued-run-ad.md
 
 ## Rules
 
