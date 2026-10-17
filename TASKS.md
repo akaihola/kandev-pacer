@@ -15,6 +15,9 @@ Rules for TASKS.md usage are at the bottom of the file.
 
 ## Ordered backlog
 
+- [54] Remove the tailnet hostname from all files and from history
+  <!-- hai:{"id":"simple-0f558179-3e1d-4acd-bef4-ec9028dff735","labels":["steward"],"createdAt":"2026-10-17T12:54:00.321Z","updatedAt":"2026-10-17T12:54:00.321Z"} -->
+
 ## Scheduled
 
 ## In Progress
@@ -304,7 +307,7 @@ Rules for TASKS.md usage are at the bottom of the file.
 
 [19]: docs/tasks/19-uv-source-path-documentation-unclear.md
 
-<!-- hai:reserved-numbers:1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,26,27,28,29,30,31,32,33,34,35,36,37,38,39,40,41,42,43,44,45,46,47,48,49,50,51,52,53 -->
+<!-- hai:reserved-numbers:1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,26,27,28,29,30,31,32,33,34,35,36,37,38,39,40,41,42,43,44,45,46,47,48,49,50,51,52,53,54 -->
 
 [20]: docs/tasks/20-command-not-found-error.md
 [21]: docs/tasks/21-unclear-urlerror.md
@@ -353,6 +356,8 @@ Rules for TASKS.md usage are at the bottom of the file.
 [52]: docs/tasks/52-a-tracker-that-fails-to-parse-stops-pacing-for-every-project.md
 
 [53]: docs/tasks/53-hold-unresolved-v1-launch-records-before-quota-and-capacity-checks.md
+
+[54]: docs/tasks/54-remove-the-tailnet-hostname-from-all-files-and-from-history.md
 
 ## Rules
 
