@@ -389,6 +389,19 @@ provider has no free capacity, each tick logs `T3 pending launch of ... waits fo
 admission`. Once the scheduling commit is in, other workers may merge their own
 tracker updates; the launch still goes ahead as long as its issue is eligible.
 
+### Unreadable trackers
+
+If Hai cannot read a tracker, the pacer skips that tracker and continues launching
+from healthy ones. Each tick logs `T3 skipping unreadable tracker` with the source
+path and Hai's error message, for example `Task [23] has no description reference`.
+Startup and `--dump-order` also continue with the readable trackers.
+
+Repair the named tracker, for example by rejoining a wrapped link definition, and
+commit the fix. The next tick reads it again without a restart. Its launch records
+stay in place while it is unreadable, so pending launches wait and existing issue
+records still prevent duplicate threads after recovery. Running threads continue
+to count against capacity.
+
 ### Launch record mismatch
 
 `T3 withheld` means the pacer skips new launches for the current tick. Existing T3

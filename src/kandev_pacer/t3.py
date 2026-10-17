@@ -182,7 +182,9 @@ class T3Pacer:
                 )
             cli = str(fallback)
         self.hai_tasks_command = shlex.quote(str(Path(cli).absolute()))
-        open_source = importlib.import_module("hai_tasks").open_source
+        hai = importlib.import_module("hai_tasks")
+        open_source = hai.open_source
+        self.tracker_errors = (hai.TasksError, OSError)
 
         self.config, self.server = config, server
         self.active_count = 0
@@ -251,6 +253,20 @@ class T3Pacer:
     def record_path(self, tracker, issue):
         key = hashlib.sha256((tracker + "\0" + issue).encode()).hexdigest()
         return self.state / (key + ".json")
+
+    def read_trackers(self):
+        sources = {}
+        for tracker, (store, _) in self.trackers.items():
+            try:
+                sources[tracker] = store.read()
+            except self.tracker_errors as error:
+                log.warning(
+                    "T3 skipping unreadable tracker %s: %s; "
+                    "launch records retained; retry next tick",
+                    tracker,
+                    error,
+                )
+        return sources
 
     def require_base_branch(self, tracker, root):
         if git(root, "symbolic-ref", "--short", "HEAD") != self.config.t3_base_branch:
@@ -681,6 +697,7 @@ class T3Pacer:
                     )
                 running[name] += 1
         now = time.time()
+        sources = self.read_trackers()
         records, pending, held = {}, [], []
         ignored = Counter()
         for path, record in launch_records:
@@ -700,6 +717,8 @@ class T3Pacer:
                 ignored[record["tracker"]] += 1
                 continue
             records[(record["tracker"], record["issue"])] = record
+            if record["tracker"] not in sources:
+                continue
             thread = threads.get(record["command"]["threadId"]) or archived.get(
                 record["command"]["threadId"]
             )
@@ -755,7 +774,8 @@ class T3Pacer:
                 pending.append((path, record))
             else:
                 raise Withheld("Unknown launch record phase; inspect state directory")
-        skipped = {r["tracker"] for _, r in held if r["hold"]["scope"] == "tracker"}
+        skipped = self.trackers.keys() - sources.keys()
+        skipped.update(r["tracker"] for _, r in held if r["hold"]["scope"] == "tracker")
         for tracker, count in ignored.items():
             log.info(
                 "T3 ignoring %s launch record(s) for unconfigured tracker %s; "
@@ -816,10 +836,10 @@ class T3Pacer:
         if pending:
             waiting.add(selection_provider(pending[0][1]["command"]["modelSelection"]))
         else:
-            for tracker, (store, parent_id) in self.trackers.items():
+            for tracker, (_, parent_id) in self.trackers.items():
                 if tracker in skipped or not any(
                     (tracker, issue["id"]) not in records
-                    for issue in eligible(store.read())
+                    for issue in eligible(sources[tracker])
                 ):
                     continue
                 parent = threads.get(parent_id, {}) if parent_id else {}
@@ -866,7 +886,7 @@ class T3Pacer:
             parent = self.launch_settings(parent, running, usage, errors, now)
             if parent is None:
                 continue
-            source = store.read()
+            source = sources[tracker]
             for issue in eligible(source):
                 if (tracker, issue["id"]) in records:
                     continue
@@ -1006,8 +1026,8 @@ def run(config, dump_order=False):
                 json.dumps(
                     [
                         {"tracker": tracker, "issue": issue}
-                        for tracker, (store, _) in pacer.trackers.items()
-                        for issue in eligible(store.read())
+                        for tracker, source in pacer.read_trackers().items()
+                        for issue in eligible(source)
                     ],
                     indent=2,
                 )

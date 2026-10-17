@@ -822,6 +822,98 @@ def test_blocked_checkout_skips_only_its_tracker(setup, tmp_path, block, caplog)
     assert str(first.parent) in warning
 
 
+@pytest.mark.parametrize(
+    "phase", [None, "prepared", "submitted", "accepted", "observed"]
+)
+def test_unreadable_tracker_skips_only_itself_and_retains_records(
+    setup, tmp_path, caplog, monkeypatch, phase
+):
+    pacer, first, server = setup
+    pacer.config.concurrency_total = 10
+    if phase:
+        with monkeypatch.context() as interrupted:
+
+            def crash(*args):
+                raise TimeoutError("interrupted launch")
+
+            if phase in {"prepared", "submitted"}:
+                interrupted.setattr(
+                    pacer, "schedule" if phase == "prepared" else "dispatch", crash
+                )
+                with pytest.raises(TimeoutError):
+                    pacer.tick()
+            else:
+                pacer.tick()
+                if phase == "observed":
+                    pacer.tick()
+    pacer.config.concurrency = 10
+    saved = {p: p.read_bytes() for p in pacer.state.glob("*.json")}
+    if phase:
+        assert json.loads(next(iter(saved.values())))["phase"] == phase
+    second = add_tracker(pacer, server, tmp_path / "repo2")
+    pacer.config.t3_trackers.append(
+        {"tracker": str(second), "parent_thread": "parent2"}
+    )
+    original = first.read_text()
+    first.write_text(
+        original.replace("[1]: docs/tasks/1.md", "[1]:\n  docs/tasks/1.md")
+    )
+    t3.git(first.parent, "commit", "-am", "break link definition")
+    calls_before = len(server.calls)
+
+    # Both a running pacer and a restarted one must skip the bad tracker.
+    for restart in (False, True):
+        if restart:
+            pacer = t3.T3Pacer(pacer.config, server)
+        caplog.clear()
+        pacer.tick()
+        assert all(p.read_bytes() == data for p, data in saved.items())
+        [warning] = [r.message for r in caplog.records if r.levelname == "WARNING"]
+        assert f"skipping unreadable tracker {first}" in warning
+        assert "Task [1] has no description reference" in warning
+    assert [project_of(c) for c in server.calls[calls_before:]] == [
+        "project2",
+        "project2",
+    ]
+
+    first.write_text(original)
+    t3.git(first.parent, "commit", "-am", "repair link definition")
+    pacer.tick()
+    assert project_of(server.calls[-1]) == "project"
+    if saved:
+        record = json.loads(next(iter(saved.values())))
+        assert json.loads(next(iter(saved)).read_text())["command"] == record["command"]
+
+
+@pytest.mark.parametrize("dump_order", [False, True])
+def test_startup_and_dump_order_skip_unreadable_tracker(
+    setup, tmp_path, caplog, capsys, monkeypatch, dump_order
+):
+    pacer, first, server = setup
+    second = add_tracker(pacer, server, tmp_path / "repo2")
+    pacer.config.t3_trackers.append(
+        {"tracker": str(second), "parent_thread": "parent2"}
+    )
+    first.write_text(
+        first.read_text().replace("[1]: docs/tasks/1.md", "[1]:\n  docs/tasks/1.md")
+    )
+
+    def stop_after_tick(*args):
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(t3, "Server", lambda *args: server)
+    monkeypatch.setattr(t3.time, "sleep", stop_after_tick)
+    assert t3.run(pacer.config, dump_order=dump_order) == 0
+    if dump_order:
+        rows = json.loads(capsys.readouterr().out)
+        assert [row["tracker"] for row in rows] == [str(second), str(second)]
+        assert not list(pacer.state.glob("*.json"))
+    else:
+        assert [project_of(c) for c in server.calls] == ["project2"]
+    assert "Task [1] has no description reference" in caplog.text
+    assert str(first) in caplog.text
+
+
 def test_scheduled_before_backlog(setup):
     _, path, _ = setup
     store = TasksStore(path)

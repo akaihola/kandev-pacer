@@ -16,3 +16,23 @@ the same class of fault as [39], [43] and [44].
 
 Acceptance: with one malformed tracker, the other trackers keep launching, and the
 status line names the skipped tracker.
+
+## Implementation and validation, 2026-10-17
+
+T3 reads each tracker independently before scheduling. Hai read errors and file
+access errors produce a warning naming the source and error; healthy trackers
+continue. Records belonging to an unreadable tracker remain unchanged, including
+pending submissions. Running threads still count against capacity. Each tick
+retries the read, and startup and `--dump-order` use the same handling.
+
+Regression fixtures split a real reference-style link definition across two lines
+among valid definitions. They cover a running pacer, restart, normal startup,
+`--dump-order`, repair, and prepared, submitted, accepted and observed records.
+They check that healthy projects launch and saved command IDs survive recovery.
+
+Validation used the canonical checkout's Python environment with `PYTHONPATH=src`
+to load this worktree's code. The full offline suite passed with 924 tests and
+20 opt-in live tests skipped. After adding an explicit normal-startup case, all
+seven unreadable-tracker cases passed. `darker --check`, `graylint` and
+`git diff --check` passed. No live launches were made; live T3 deployment remains
+part of the separate V2 rollout described in task [49].
