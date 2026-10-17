@@ -15,6 +15,9 @@ Rules for TASKS.md usage are at the bottom of the file.
 
 ## Ordered backlog
 
+- [53] Hold unresolved V1 launch records before quota and capacity checks
+  <!-- hai:{"id":"simple-3065dc85-78d7-4c10-a98f-a9b47b58e061","labels":["steward"],"createdAt":"2026-10-17T11:05:14.552Z","updatedAt":"2026-10-17T11:05:14.552Z"} -->
+
 ## Scheduled
 
 ## In Progress
@@ -301,7 +304,7 @@ Rules for TASKS.md usage are at the bottom of the file.
 
 [19]: docs/tasks/19-uv-source-path-documentation-unclear.md
 
-<!-- hai:reserved-numbers:1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,26,27,28,29,30,31,32,33,34,35,36,37,38,39,40,41,42,43,44,45,46,47,48,49,50,51,52 -->
+<!-- hai:reserved-numbers:1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,26,27,28,29,30,31,32,33,34,35,36,37,38,39,40,41,42,43,44,45,46,47,48,49,50,51,52,53 -->
 
 [20]: docs/tasks/20-command-not-found-error.md
 [21]: docs/tasks/21-unclear-urlerror.md
@@ -348,6 +351,8 @@ Rules for TASKS.md usage are at the bottom of the file.
 [51]: docs/tasks/51-count-only-paced-threads-against-concurrency-total.md
 
 [52]: docs/tasks/52-a-tracker-that-fails-to-parse-stops-pacing-for-every-project.md
+
+[53]: docs/tasks/53-hold-unresolved-v1-launch-records-before-quota-and-capacity-checks.md
 
 ## Rules
 
