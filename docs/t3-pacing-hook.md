@@ -1,6 +1,6 @@
 # Admit paced prompts in T3 Code
 
-Status: T3 Code has the hook as a private patch. The pacer doesn't use it yet, because its T3 mode still speaks the protocol of T3 0.0.44 and 0.0.45.
+Status: T3 mode uses the V2 protocol and admits paced runs on servers carrying the private pacing patch. It does not support the live V1 server. Deployment is a separate coordination item.
 
 ## What the hook does
 
@@ -10,19 +10,31 @@ Only prompts a person sends are paced. Prompts from agents, the server and other
 
 The T3 side lives in `/home/agent/repos/ai/t3code` on branch `t3code/implement-pacing-hook`. The code is one commit, carried as a patch on top of upstream. Its own docs are in `docs/pacing-hook/` on that branch. It needs T3 built from upstream `main` (the V2 orchestrator), so the installed 0.0.45 can't run it.
 
-## What the pacer has to change first
+## Connecting with V2
 
-Pointed at upstream `main`, T3 mode withholds every tick today, hook or no hook. The V2 shell snapshot no longer has `session`, `latestTurn`, `hasPendingApprovals` or `backgroundLiveness`, so `activity()` raises "Incomplete T3 snapshot". Launches fail too, because `thread.turn.start` is gone. Section 5 of the [research report][research] lists each broken assumption and its V2 replacement. In short:
+Authentication still uses a bearer token for `POST /api/auth/websocket-ticket`, then
+`/ws?orchestrationProtocol=2&wsTicket=…`. Omitting the protocol parameter produces
+HTTP 426 `orchestration_protocol_incompatible`. The session needs
+`orchestration:read` and `orchestration:operate`.
 
-- Work out activity from `status`, `activeRunId`, `activityRunStatus`, `pendingRuntimeRequest` and `pendingBackgroundTasks`, and read `lastError` at the top level.
-- Launch new threads with `orchestration.launchThread`, which returns `{threadId, projection, resumed}`.
+Activity comes from `status`, `activeRunId`, `activityRunStatus`,
+`pendingRuntimeRequest` and `pendingBackgroundTasks`. Errors come from top-level
+`lastError`. Archived threads are in `archivedThreads` and consume no capacity.
+A parked thread stays `idle` or `completed`, with `activeRunId: null`.
+
+New threads use `orchestration.launchThread` with a `workspaceStrategy` of
+`{type: "worktree", baseRef, branch, startFromOrigin}` and `initialMessage`.
+The reply is `{threadId, projection, resumed}`. Follow-ups use `message.dispatch`
+through `orchestration.dispatchCommand`. Failed workspace preparation cleanup on
+V2 remains unverified. Saved, unresolved V1 launch commands are held for inspection
+rather than sent to V2. The [research report][research] records the V1 comparison.
 
 ## Finding paced prompts
 
 Call `orchestration.subscribeShell` with `{}` and take the first chunk whose `kind` is `snapshot`, as the pacer already does. A patched server adds `pacedRuns` to it:
 
 ```json
-{"threadId": "…", "runId": "…", "modelSelection": {"instanceId": "claudeAgent", "model": "…"}, "requestedAt": "2026-10-12T09:30:00.000Z"}
+{"threadId": "…", "runId": "…", "modelSelection": {"instanceId": "claudeAgent", "model": "…", "options": [{"id": "effort", "value": "low"}, {"id": "fastMode", "value": true}]}, "requestedAt": "2026-10-12T09:30:00.000Z"}
 ```
 
 - If `pacedRuns` is present, even as `[]`, the server supports the hook. If it's missing, the server is unpatched: don't admit anything, and log it once.
@@ -38,13 +50,13 @@ Send `orchestration.dispatchCommand` with:
 {"type": "queued-run.admit", "commandId": "pace-admit:<runId>:<attempt>", "threadId": "…", "runId": "…"}
 ```
 
-The session needs the `orchestration:operate` scope. Save the `commandId` before sending, like the launch records do. Admit the oldest eligible prompt first, at most one per tick, and before pending launches, because a closed gate on a pending launch returns early from the tick.
+The session needs the `orchestration:operate` scope. The pacer saves the `commandId` before sending in an `admissions/` subdirectory of `t3_state_dir`. Records retain attempts and terminal outcomes across restarts. After a lost reply it resends the same ID even if the run has left `pacedRuns`. Admit the oldest eligible prompt first, at most one per tick, and before pending launches, because a closed gate on a pending launch returns early from the tick.
 
 What comes back:
 
 | Reply | Meaning | What to do |
 |---|---|---|
-| Success `{sequence}` | T3 started the prompt. The run is usually `starting` already. | Count it as running until the shell shows that thread active. If after a few ticks it's neither listed nor active, drop the booking. That happens when T3 held the start, for example because the provider instance was turned off. |
+| Success `{sequence}` | T3 started the prompt. The run was already `running` in the wire check. | Reserve capacity until the shell shows the thread active. Release an unobserved booking after three ticks. That happens when T3 held the start, for example because the provider instance was turned off. |
 | Failure with `queued-run.admit refused: busy`, `not_next` or `usage_limited` | Not now. | Retry on a later tick with a new `commandId`. |
 | Failure with `queued-run.admit refused: not_waiting` or `inactive` | The user started, edited, removed or stopped the prompt, or archived the thread. | Drop it. |
 | "Previously rejected" | This `commandId` was refused before. T3 remembers refusals per id. | Mint a new `commandId`. |
@@ -53,6 +65,7 @@ What comes back:
 ## Pacer-side rules
 
 - Make sure prompts the pacer launches don't end with `...` or `…`. T3 stamps every WebSocket dispatch as sent by a user, so such a prompt would park and wait for the pacer to admit it.
+- Keep `modelSelection.options` intact, including T3's array of `{id, value}` entries. Admission uses the parked model for quota checks and does not replace it.
 - Add the provider of every listed prompt to the reset-redemption `waiting` set. Otherwise no reset is redeemed for a provider that only has paced prompts waiting.
 - Prompts on providers the pacer can't map (Cursor, Grok, OpenCode, custom instance ids) can never be admitted. Log and skip them without withholding the rest of the tick.
 

@@ -152,7 +152,10 @@ def test_stream_rpc_and_ticket_stay_in_memory(monkeypatch):
     socket = Socket()
 
     def connect(url, **kwargs):
-        assert url == "wss://remote.example/ws?wsTicket=private-ticket"
+        assert (
+            url
+            == "wss://remote.example/ws?orchestrationProtocol=2&wsTicket=private-ticket"
+        )
         return socket
 
     monkeypatch.setattr(t3_client, "urlopen", ticket)
@@ -184,3 +187,73 @@ def test_local_token_renews_before_expiry(monkeypatch):
         server.snapshot()
     assert len(issued) == 2
     assert issued[-1][-2:] == ["--base-dir", "/private/t3"]
+
+
+@pytest.mark.parametrize(
+    "reason",
+    [
+        None,
+        "busy",
+        "not_next",
+        "usage_limited",
+        "not_waiting",
+        "inactive",
+        "previously rejected",
+    ],
+)
+def test_admission_rpc_success_and_refusal_envelopes(monkeypatch, reason):
+    monkeypatch.setenv("T3_THREAD_AUTH_TOKEN", "private-token")
+    monkeypatch.setattr(
+        t3_client,
+        "urlopen",
+        lambda *a, **kw: io.BytesIO(b'{"ticket":"private-ticket"}'),
+    )
+    command = {
+        "type": "queued-run.admit",
+        "commandId": "pace-admit:run:1",
+        "threadId": "thread",
+        "runId": "run",
+    }
+
+    class Socket:
+        closed = False
+
+        def send(self, raw):
+            message = json.loads(raw)
+            assert message["tag"] == "orchestration.dispatchCommand"
+            assert message["payload"] == command
+            self.request_id = message["id"]
+
+        def recv(self):
+            result = {"_tag": "Success", "value": {"sequence": 19}}
+            if reason:
+                text = (
+                    "Command was previously rejected"
+                    if reason == "previously rejected"
+                    else f"queued-run.admit refused: {reason}"
+                )
+                result = {
+                    "_tag": "Failure",
+                    "cause": [{"_tag": "Fail", "error": {"message": text}}],
+                }
+            return json.dumps(
+                {"_tag": "Exit", "requestId": self.request_id, "exit": result}
+            )
+
+        def settimeout(self, timeout):
+            assert timeout > 0
+
+        def close(self):
+            self.closed = True
+
+    socket = Socket()
+    monkeypatch.setattr(
+        t3_client.websocket, "create_connection", lambda *a, **kw: socket
+    )
+    server = t3_client.Server("http://localhost:3773", None)
+    if reason:
+        with pytest.raises(t3_client.T3Rejected, match=reason):
+            server.call("orchestration.dispatchCommand", command)
+    else:
+        assert server.call("orchestration.dispatchCommand", command) == {"sequence": 19}
+    assert socket.closed

@@ -1,4 +1,4 @@
-"""T3 0.0.44 RPC transport, adapted from the t3-start-thread skill."""
+"""T3 V2 RPC transport, adapted from the t3-start-thread skill."""
 
 import errno
 import json
@@ -151,7 +151,11 @@ class Server:
                 "Configure [kandev-pacer] in the TOML selected by --config; "
                 "environment settings override TOML. See docs/t3-pacing.md#connection-errors."
             ) from None
-        ws_url = re.sub(r"^http", "ws", self.url) + "/ws?wsTicket=" + quote(ticket)
+        ws_url = (
+            re.sub(r"^http", "ws", self.url)
+            + "/ws?orchestrationProtocol=2&wsTicket="
+            + quote(ticket)
+        )
         socket = websocket.create_connection(ws_url, timeout=45)
         request_id = str(uuid.uuid4())
         deadline = time.monotonic() + 45

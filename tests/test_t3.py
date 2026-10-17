@@ -20,7 +20,12 @@ class Server:
     url = "http://localhost:3773"
 
     def __init__(self):
-        self.data = {"projects": [], "threads": []}
+        self.data = {
+            "projects": [],
+            "threads": [],
+            "archivedThreads": [],
+            "pacedRuns": [],
+        }
         self.calls = []
         self.lose_reply = False
         self.reject = 0
@@ -31,34 +36,40 @@ class Server:
         return copy.deepcopy(self.data)
 
     def call(self, method, command):
-        assert method == "orchestration.dispatchCommand"
+        assert method == "orchestration.launchThread"
         self.calls.append(copy.deepcopy(command))
-        worktree = command["bootstrap"]["prepareWorktree"]
+        worktree = command["workspaceStrategy"]
         branch = worktree["branch"]
         if (
             self.reject
             or branch in self.leftover_branches
-            or worktree["projectCwd"] in self.broken
+            or self.project_root(command) in self.broken
         ):
-            # Like T3 0.0.44, a failed bootstrap deletes the thread but keeps the
-            # worktree branch, so the same branch name can never be created again.
+            # Simulate refusal with leftover branches. V2 cleanup is unverified.
             self.reject = max(self.reject - 1, 0)
             self.leftover_branches.add(branch)
             raise t3.T3Rejected("T3 rejected the RPC: worktree setup failed")
         if not any(t["id"] == command["threadId"] for t in self.data["threads"]):
             self.data["threads"].append(
                 {
-                    **command["bootstrap"]["createThread"],
+                    **command,
                     "id": command["threadId"],
                     "worktreePath": "/isolated/worktree",
                     "branch": "pacer-branch",
-                    "session": {"status": "starting", "activeTurnId": None},
-                    "latestTurn": None,
+                    "status": "starting",
+                    "activeRunId": "run",
                 }
             )
         if self.lose_reply:
             raise TimeoutError("reply lost")
-        return {}
+        return {"threadId": command["threadId"], "projection": {}, "resumed": False}
+
+    def project_root(self, command):
+        return next(
+            p["workspaceRoot"]
+            for p in self.data["projects"]
+            if p["id"] == command["projectId"]
+        )
 
 
 def tracker(root, backlog="- [1] First\n- [2] Second\n", completed=""):
@@ -104,7 +115,7 @@ def held_lines(caplog):
 
 
 def project_of(command):
-    return command["bootstrap"]["prepareWorktree"]["projectCwd"]
+    return command["projectId"]
 
 
 @pytest.fixture
@@ -125,14 +136,14 @@ def setup(tmp_path, monkeypatch):
             "id": "parent",
             "projectId": "project",
             "modelSelection": {
-                "provider": "codex",
+                "instanceId": "codex",
                 "model": "gpt-5.3-codex",
-                "options": {"reasoningEffort": "high"},
+                "options": [{"id": "reasoningEffort", "value": "high"}],
             },
             "runtimeMode": "full-access",
             "interactionMode": "default",
-            "session": {"status": "idle"},
-            "latestTurn": None,
+            "status": "idle",
+            "activeRunId": None,
         }
     ]
     config = Settings(
@@ -171,7 +182,8 @@ def test_worker_prompt_names_resolved_cli(setup, tmp_path, monkeypatch, on_path)
     # Changing the lookup result after startup must not change worker commands.
     monkeypatch.setattr(t3.shutil, "which", lambda name: None)
     pacer.tick()
-    prompt = server.calls[0]["message"]["text"]
+    prompt = server.calls[0]["initialMessage"]["text"]
+    assert not prompt.rstrip().endswith(("...", "…"))
     command = shlex.quote(str(selected))
     assert f"`{command} read <repo>`" in prompt
     assert f"`{command} update <repo> <id> --revision <rev> --json <patch>`" in prompt
@@ -249,11 +261,11 @@ def test_lost_reply_restart_preserves_one_thread_and_settings(setup):
     assert record["tracker"] == str(path.resolve())
     assert record["issue"] == "task-1"
     command = server.calls[0]
-    assert command["bootstrap"]["prepareWorktree"]["requireWorktree"] is True
+    assert command["workspaceStrategy"]["type"] == "worktree"
     assert command["modelSelection"] == server.data["threads"][0]["modelSelection"]
     assert command["runtimeMode"] == "full-access"
-    assert "Description 1" in command["message"]["text"]
-    assert "Run tests before completion" in command["message"]["text"]
+    assert "Description 1" in command["initialMessage"]["text"]
+    assert "Run tests before completion" in command["initialMessage"]["text"]
     assert (
         TasksStore(path).read()["workspace"]["issues"][2]["sourceState"]
         == "Scheduled"
@@ -266,12 +278,12 @@ def test_lost_reply_restart_preserves_one_thread_and_settings(setup):
     assert t3.git(path.parent, "status", "--porcelain") == ""
 
 
-@pytest.mark.parametrize("state", ["completed", "error", "interrupted"])
+@pytest.mark.parametrize("state", ["completed", "failed", "interrupted"])
 def test_finished_turn_never_relaunches_or_accepts(setup, state):
     pacer, path, server = setup
     pacer.tick()
     thread = server.data["threads"][-1]
-    thread.update(session={"status": "idle"}, latestTurn={"state": state})
+    thread.update(status=state, activeRunId=None)
     pacer.tick()  # May launch task 2, but never task 1 again.
     pacer.tick()
     assert len({c["threadId"] for c in server.calls}) == len(server.calls) == 2
@@ -289,13 +301,11 @@ def test_observed_thread_logs_one_readable_line_and_keeps_json_at_debug(setup, c
     pacer.tick()
     thread = server.data["threads"][-1]
     thread.update(
-        session={
-            "status": "stopped",
-            "providerName": "codex",
-            "lastError": "workspace folder no longer exists",
-        },
-        latestTurn={"state": "completed", "turnId": "turn-1"},
-        hasPendingUserInput=True,
+        status="completed",
+        activeRunId=None,
+        modelSelection={"instanceId": "codex", "model": "test-model"},
+        lastError="workspace folder no longer exists",
+        pendingRuntimeRequest={"id": "request-1", "kind": "user_input"},
     )
     caplog.set_level("DEBUG", logger="kandev-pacer")
     pacer.tick()
@@ -306,7 +316,7 @@ def test_observed_thread_logs_one_readable_line_and_keeps_json_at_debug(setup, c
     ]
     assert info == (
         f"T3 task-1 from {path.resolve()} on {thread['id']} (codex): "
-        "session stopped, turn completed, needs input; "
+        "status completed, needs response; "
         "error: workspace folder no longer exists"
     )
     assert "{" not in info
@@ -315,26 +325,29 @@ def test_observed_thread_logs_one_readable_line_and_keeps_json_at_debug(setup, c
         for r in caplog.records
         if r.levelname == "DEBUG" and thread["id"] in r.getMessage()
     ]
-    assert json.loads(debug.split(": ", 1)[1])["latestTurn"]["turnId"] == "turn-1"
+    assert (
+        json.loads(debug.split(": ", 1)[1])["pendingRuntimeRequest"]["id"]
+        == "request-1"
+    )
 
 
 def test_thread_note_without_turn_or_provider():
     record = {
         "issue": "task-9",
         "tracker": "/repo/TASKS.md",
-        "thread": {"id": "abc", "session": {"status": "starting"}, "latestTurn": None},
+        "thread": {"id": "abc", "status": "starting", "activeRunId": None},
     }
     assert t3.thread_note(record) == (
-        "task-9 from /repo/TASKS.md on abc: session starting"
+        "task-9 from /repo/TASKS.md on abc: status starting"
     )
 
 
-@pytest.mark.parametrize("flag", ["hasPendingApprovals", "hasPendingUserInput"])
+@pytest.mark.parametrize("flag", ["pendingRuntimeRequest", "pendingBackgroundTasks"])
 def test_waiting_occupies_capacity(setup, flag):
     pacer, _, server = setup
     pacer.tick()
     server.data["threads"][-1].update(
-        session={"status": "idle"}, latestTurn=None, **{flag: True}
+        status="idle", activeRunId=None, **{flag: [{"id": "pending"}]}
     )
     pacer.tick()
     assert len(server.calls) == 1
@@ -370,11 +383,11 @@ def test_unknown_provider_explains_blocking_thread(setup, selection, detail, act
     parent = server.data["threads"][0]
     parent["modelSelection"] = selection
     if activity == "running":
-        parent["session"] = {"status": "running"}
+        parent["status"] = "running"
     elif activity == "approval":
-        parent["hasPendingApprovals"] = True
+        parent["pendingRuntimeRequest"] = {"id": "approval"}
     else:
-        parent["backgroundLiveness"] = "working"
+        parent["pendingBackgroundTasks"] = [{"taskId": "background", "kind": "command"}]
     with pytest.raises(t3.Withheld) as caught:
         pacer.tick()
     message = str(caught.value)
@@ -402,21 +415,21 @@ def test_withholding(setup, monkeypatch, block):
             lambda *a, **kw: Verdict("paused", -0.1, "headroom=-0.100 PAUSED", 3600),
         )
     elif block == "provider":
-        parent["modelSelection"]["provider"] = "unknown"
+        parent["modelSelection"]["instanceId"] = "unknown"
     elif block == "state":
-        parent["session"]["status"] = "new-state"
+        parent["status"] = "new-state"
     elif block == "total":
         pacer.config.concurrency_total = 1
         server.data["threads"].append(
             {
                 **parent,
                 "id": "other-provider",
-                "session": {"status": "running"},
+                "status": "running",
                 "modelSelection": {"provider": "claudeAgent", "model": "claude"},
             }
         )
     elif block == "starting":
-        parent["session"]["status"] = "starting"
+        parent["status"] = "starting"
     else:
         monkeypatch.setattr(
             t3.provider, "read", lambda *a, **kw: ({}, {"openai": "unavailable"})
@@ -476,8 +489,8 @@ def test_overlapping_tracker_numbers(setup, tmp_path):
     pacer.tick()
     # With the first tracker excluded by its parent gate, the second still admits [1].
     server.data["threads"][0]["modelSelection"] = {"provider": "unknown"}
-    server.data["threads"][-1]["session"] = {"status": "idle"}
-    server.data["threads"][-1]["latestTurn"] = {"state": "completed"}
+    server.data["threads"][-1].update(status="idle", activeRunId=None)
+    server.data["threads"][-1]["activeRunId"] = None
     pacer.tick()
     records = [json.loads(p.read_text()) for p in pacer.state.glob("*.json")]
     assert {r["tracker"] for r in records} == {str(first), str(second)}
@@ -524,20 +537,20 @@ def test_rejected_launch_holds_tracker_and_retries_after_cooldown(setup, clock, 
     assert line.endswith(f"to retry now: rm {shlex.quote(str(record_path))}")
     # After the cooldown it is a pending launch again and waits for a free slot.
     busy = {**server.data["threads"][0], "id": "busy"}
-    busy["session"] = {"status": "running", "activeTurnId": "turn"}
+    busy.update(status="running", activeRunId="run")
     server.data["threads"].append(busy)
     clock[0] += 60
     pacer.tick()
     assert len(server.calls) == 1
     assert "pending launch of task-1" in caplog.records[-1].getMessage()
-    busy["session"] = {"status": "idle", "activeTurnId": None}
+    busy.update(status="idle", activeRunId=None)
     pacer.tick()
     first, second = server.calls
     assert first["threadId"] != second["threadId"]
     assert first["commandId"] != second["commandId"]
-    branch = second["bootstrap"]["prepareWorktree"]["branch"]
+    branch = second["workspaceStrategy"]["branch"]
     assert branch == f"pacer-{second['threadId']}"
-    assert first["message"]["text"] == second["message"]["text"]
+    assert first["initialMessage"]["text"] == second["initialMessage"]["text"]
     record = json.loads(record_path.read_text())
     assert record["phase"] == "accepted"
     assert "hold" not in record
@@ -569,7 +582,7 @@ def test_repeated_rejections_hold_until_the_record_is_removed(setup, clock, capl
     subprocess.run(shlex.split(release), check=True)
     pacer.tick()
     assert len(server.calls) == 4
-    assert "Hai issue ID: task-1" in server.calls[-1]["message"]["text"]
+    assert "Hai issue ID: task-1" in server.calls[-1]["initialMessage"]["text"]
     [record] = [json.loads(p.read_text()) for p in pacer.state.glob("*.json")]
     assert record["phase"] == "accepted"
 
@@ -580,8 +593,8 @@ def test_rejection_holds_tracker_and_others_launch_in_the_same_tick(setup, tmp_p
     server.broken.add(str(first.parent))
     pacer.tick()
     assert [project_of(c) for c in server.calls] == [
-        str(first.parent),
-        str(second.parent),
+        "project",
+        "project2",
     ]
     records = {
         r["tracker"]: r
@@ -604,11 +617,11 @@ def test_record_stuck_at_rejection_limit_holds_only_its_tracker(
     del record["hold"], record["rejected"]
     record["rejections"] = 3
     t3.save(record_path, record)
-    second = add_tracker(pacer, server, tmp_path / "repo2")
+    add_tracker(pacer, server, tmp_path / "repo2")
     pacer.tick()
     assert [project_of(c) for c in server.calls] == [
-        str(first.parent),
-        str(second.parent),
+        "project",
+        "project2",
     ]
     hold = json.loads(record_path.read_text())["hold"]
     assert hold["scope"] == "tracker"
@@ -623,7 +636,7 @@ def test_record_stuck_at_rejection_limit_holds_only_its_tracker(
 
 def test_pending_record_off_base_branch_skips_only_its_tracker(setup, tmp_path, caplog):
     pacer, first, server = setup
-    second = add_tracker(pacer, server, tmp_path / "repo2")
+    add_tracker(pacer, server, tmp_path / "repo2")
     # Stopping right after saving a launch record leaves it prepared.
     store, _ = pacer.trackers[str(first)]
     source = store.read()
@@ -632,7 +645,7 @@ def test_pending_record_off_base_branch_skips_only_its_tracker(setup, tmp_path, 
     pacer.prepare(str(first), store, source, issue, parent, project)
     t3.git(first.parent, "switch", "-c", "feature")
     pacer.tick()
-    assert [project_of(c) for c in server.calls] == [str(second.parent)]
+    assert [project_of(c) for c in server.calls] == ["project2"]
     [warning] = [r.getMessage() for r in caplog.records if r.levelname == "WARNING"]
     assert f"repository {first.parent} for tracker {first}" in warning
     assert "not on the configured base branch main" in warning
@@ -664,8 +677,8 @@ def test_missing_thread_holds_record_and_keeps_pacing(
     assert hold["retry_at"] is None
     assert record["phase"] == phase
     assert record["command"]["threadId"] == thread["id"]
-    assert project_of(server.calls[-1]) == str(
-        first.parent if phase == "observed" else second.parent
+    assert project_of(server.calls[-1]) == (
+        "project" if phase == "observed" else "project2"
     )
     [line] = held_lines(caplog)
     for value in (str(record_path), str(first), "task-1", thread["id"]):
@@ -982,12 +995,12 @@ def test_submitted_record_for_moved_issue_holds_only_that_issue(setup, caplog):
     pacer.tick()
     # The tracker itself is fine, so its next issue launches in the same tick.
     assert len(server.calls) == 2
-    assert "Hai issue ID: task-2" in server.calls[1]["message"]["text"]
+    assert "Hai issue ID: task-2" in server.calls[1]["initialMessage"]["text"]
     hold = json.loads(record_path.read_text())["hold"]
     assert hold["scope"] == "issue"
     assert "no longer eligible" in hold["reason"]
-    server.data["threads"][-1]["latestTurn"] = {"state": "completed"}
-    server.data["threads"][-1]["session"] = {"status": "idle"}
+    server.data["threads"][-1]["activeRunId"] = None
+    server.data["threads"][-1].update(status="idle", activeRunId=None)
     caplog.clear()
     pacer.tick()
     [line] = held_lines(caplog)
@@ -1030,7 +1043,7 @@ def test_quota_bypass_retains_admission_limits(setup, block):
     pacer, path, server = setup
     pacer.config.agent_providers_raw = "codex-acp=__api_key__"
     if block == "provider_cap":
-        server.data["threads"][0]["session"] = {"status": "running"}
+        server.data["threads"][0]["status"] = "running"
     elif block == "total_cap":
         pacer.config.concurrency_total = 1
         server.data["threads"].append(
@@ -1038,7 +1051,7 @@ def test_quota_bypass_retains_admission_limits(setup, block):
                 **server.data["threads"][0],
                 "id": "claude",
                 "modelSelection": {"instanceId": "claudeAgent", "model": "claude"},
-                "session": {"status": "running"},
+                "status": "running",
             }
         )
     elif block == "withhold":
@@ -1165,7 +1178,7 @@ def test_fixed_model_and_modes_override_parent(setup):
     pacer.config.t3_interaction_mode = "plan"
     pacer.tick()
     command = server.calls[0]
-    for settings in (command, command["bootstrap"]["createThread"]):
+    for settings in (command,):
         assert settings["modelSelection"] == {
             "instanceId": "claudeAgent",
             "model": "claude-fable",
@@ -1197,7 +1210,7 @@ def test_automatic_prefers_furthest_behind_available_model(setup, monkeypatch, b
                     "instanceId": "claudeAgent",
                     "model": "claude-fable",
                 },
-                "session": {"status": "running"},
+                "status": "running",
             }
         )
     if blocked == "error":
@@ -1295,12 +1308,12 @@ def test_configured_launch_without_parent_and_restart(
     expected = pacer.config.t3_models[0 if automatic else 1].model_dump(
         exclude_none=True
     )
-    for settings in (command, command["bootstrap"]["createThread"]):
+    for settings in (command,):
         assert settings["modelSelection"] == expected
         assert settings["runtimeMode"] == "approval-required"
         assert settings["interactionMode"] == "plan"
-    assert command["bootstrap"]["createThread"]["projectId"] == "project"
-    assert command["bootstrap"]["prepareWorktree"]["projectCwd"] == str(path.parent)
+    assert command["projectId"] == "project"
+    assert command["workspaceStrategy"]["baseRef"] == "main"
     server.data["threads"] = []
     server.lose_reply = False
     t3.T3Pacer(pacer.config, server).tick()
@@ -1331,7 +1344,7 @@ def test_tracker_requires_matching_project(
     setup, tmp_path, caplog, problem, with_parent, pending
 ):
     pacer, path, server = setup
-    second = add_tracker(pacer, server, tmp_path / "repo2")
+    add_tracker(pacer, server, tmp_path / "repo2")
     project = copy.deepcopy(server.data["projects"][0])
     store, _ = pacer.trackers[str(path)]
     if pending:
@@ -1374,18 +1387,18 @@ def test_tracker_requires_matching_project(
         else:
             assert "Open or add this directory as a project" in message
             assert "t3_trackers[].tracker" in message
-    assert [project_of(c) for c in server.calls] == [str(second.parent)]
+    assert [project_of(c) for c in server.calls] == ["project2"]
     assert path.read_bytes() == source
     assert t3.git(path.parent, "status", "--porcelain") == ""
     if pending:
         assert record_path.read_bytes() == before_record
-    server.data["threads"][-1]["session"] = {"status": "idle"}
+    server.data["threads"][-1].update(status="idle", activeRunId=None)
     server.data["projects"] = [
         project,
         server.data["projects"][0 if problem == "missing" else 1],
     ]
     pacer.tick()
-    assert project_of(server.calls[-1]) == str(path.parent)
+    assert project_of(server.calls[-1]) == "project"
     assert len(server.calls) == 2
 
 
@@ -1401,7 +1414,7 @@ def test_empty_parent_is_invalid_configuration(setup):
 @pytest.mark.parametrize("pending", [False, True])
 def test_bad_parent_skips_only_its_tracker(setup, tmp_path, caplog, problem, pending):
     pacer, path, server = setup
-    second = add_tracker(pacer, server, tmp_path / "repo2")
+    add_tracker(pacer, server, tmp_path / "repo2")
     parent = copy.deepcopy(server.data["threads"][0])
     if pending:
         store, _ = pacer.trackers[str(path)]
@@ -1427,13 +1440,13 @@ def test_bad_parent_skips_only_its_tracker(setup, tmp_path, caplog, problem, pen
         assert "parent_thread 'parent'" in message
         assert "set parent_thread to a thread in the matching T3 project" in message
         assert "remove it and configure t3_model" in message
-    assert [project_of(c) for c in server.calls] == [str(second.parent)]
+    assert [project_of(c) for c in server.calls] == ["project2"]
     if pending:
         assert record_path.read_bytes() == before_record
     server.data["threads"] = [parent, server.data["threads"][-1]]
-    server.data["threads"][-1]["session"] = {"status": "idle"}
+    server.data["threads"][-1].update(status="idle", activeRunId=None)
     pacer.tick()
-    assert project_of(server.calls[-1]) == str(path.parent)
+    assert project_of(server.calls[-1]) == "project"
     assert len(server.calls) == 2
 
 
@@ -1442,7 +1455,7 @@ def test_unconfigured_records_are_retained_and_do_not_block(
     setup, tmp_path, caplog, pending
 ):
     pacer, path, server = setup
-    second = add_tracker(pacer, server, tmp_path / "repo2")
+    add_tracker(pacer, server, tmp_path / "repo2")
     store, parent_id = pacer.trackers[str(path)]
     source = store.read()
     for issue in t3.eligible(source):
@@ -1463,7 +1476,7 @@ def test_unconfigured_records_are_retained_and_do_not_block(
     pacer.tick()
     assert len(server.calls) == (1 if pending else 2)
     for thread in server.data["threads"]:
-        thread["session"] = {"status": "idle"}
+        thread.update(status="idle", activeRunId=None)
     for _ in range(2):
         caplog.clear()
         pacer.tick()
@@ -1472,11 +1485,11 @@ def test_unconfigured_records_are_retained_and_do_not_block(
         ]
         assert f"2 launch record(s) for unconfigured tracker {path}" in message
         assert "retained" in message
-    assert project_of(server.calls[-1]) == str(second.parent)
+    assert project_of(server.calls[-1]) == "project2"
     assert len(server.calls) == (2 if pending else 3)
     assert all(p.read_bytes() == contents for p, contents in originals.items())
     # Returning config after restart uses the same records, with no new thread IDs.
-    server.data["threads"][-1]["session"] = {"status": "idle"}
+    server.data["threads"][-1].update(status="idle", activeRunId=None)
     t3.T3Pacer(pacer.config, server).tick()
     if pending:
         assert server.calls[-1]["threadId"] in {
@@ -1543,3 +1556,351 @@ def test_status_shows_the_measured_burn_time(setup, monkeypatch, caplog):
     assert "per weekly allowance (rose 50% in 5h 00m 00s to " in caplog.text
     assert "PAUSED (0/1 running), resumes in" in caplog.text
     assert ", burn ~9h 56m" in caplog.text
+
+
+@pytest.mark.parametrize(
+    "status",
+    [
+        "idle",
+        "queued",
+        "completed",
+        "failed",
+        "interrupted",
+        "cancelled",
+        "rolled_back",
+    ],
+)
+def test_v2_parked_or_finished_thread_is_not_activity(status):
+    assert not t3.activity({"status": status, "activeRunId": None})
+
+
+@pytest.mark.parametrize(
+    "fields",
+    [
+        {"status": "preparing"},
+        {"status": "starting"},
+        {"status": "running"},
+        {"status": "waiting"},
+        {"activeRunId": "run"},
+        {"activityRunStatus": "preparing"},
+        {"activityRunStatus": "waiting"},
+        {"pendingRuntimeRequest": {"id": "request", "kind": "approval"}},
+        {"pendingBackgroundTasks": [{"taskId": "task", "kind": "command"}]},
+    ],
+)
+def test_v2_activity_fields(fields):
+    assert t3.activity({"status": "completed", "activeRunId": None, **fields})
+
+
+def test_v1_snapshot_fails_closed():
+    with pytest.raises(t3.Withheld, match="Incomplete T3 V2"):
+        t3.activity({"session": {"status": "idle"}, "latestTurn": None})
+
+
+def parked(server, run_id="paced-1", requested="2026-10-15T09:00:00Z", **fields):
+    thread_id = "thread-" + run_id
+    server.data["threads"].append(
+        {
+            **server.data["threads"][0],
+            "id": thread_id,
+            "status": "completed",
+            "activeRunId": None,
+            **fields,
+        }
+    )
+    run = {
+        "threadId": thread_id,
+        "runId": run_id,
+        "requestedAt": requested,
+        "modelSelection": server.data["threads"][-1]["modelSelection"],
+    }
+    server.data["pacedRuns"].append(run)
+    return run
+
+
+def admit_server(pacer, server, monkeypatch, replies):
+    """Verify durable IDs at the boundary and replay stored server receipts."""
+    launch = server.call
+    receipts = {}
+    started = []
+
+    def call(method, command):
+        if method != "orchestration.dispatchCommand":
+            return launch(method, command)
+        assert command["type"] == "queued-run.admit"
+        saved = [json.loads(p.read_text()) for p in pacer.admissions.glob("*.json")]
+        assert any(r["command"] == command and r["phase"] == "sending" for r in saved)
+        server.calls.append(copy.deepcopy(command))
+        if command["commandId"] in receipts:
+            return receipts[command["commandId"]]
+        reply = replies.pop(0) if replies else {"sequence": 42}
+        if isinstance(reply, Exception):
+            raise reply
+        receipts[command["commandId"]] = reply
+        started.append(command["runId"])
+        return reply
+
+    monkeypatch.setattr(server, "call", call)
+    return started, receipts
+
+
+def test_paced_discovery_oldest_first_options_and_one_per_tick(setup, monkeypatch):
+    pacer, _, server = setup
+    later = parked(server, "later", "2026-10-15T10:00:00Z")
+    first = parked(server, "first")
+    first["modelSelection"] = {
+        "instanceId": "codex",
+        "model": "cheap",
+        "options": [
+            {"id": "effort", "value": "low"},
+            {"id": "fastMode", "value": True},
+        ],
+    }
+    started, _ = admit_server(pacer, server, monkeypatch, [])
+    pacer.tick()
+    assert started == ["first"]
+    [record] = [json.loads(p.read_text()) for p in pacer.admissions.glob("*.json")]
+    assert record["run"]["modelSelection"] == first["modelSelection"]
+    assert record["sequence"] == 42
+    assert server.calls == [
+        {
+            "type": "queued-run.admit",
+            "commandId": "pace-admit:first:1",
+            "threadId": first["threadId"],
+            "runId": "first",
+        }
+    ]
+    # Until activity appears, the successful admission reserves the only slot.
+    pacer.tick()
+    assert started == ["first"]
+    assert later in server.data["pacedRuns"]
+
+
+@pytest.mark.parametrize(
+    "reason", ["busy", "not_next", "usage_limited", "previously rejected"]
+)
+def test_paced_refusal_retries_with_new_id_after_restart(setup, monkeypatch, reason):
+    pacer, _, server = setup
+    parked(server)
+    message = (
+        "Command was previously rejected"
+        if reason == "previously rejected"
+        else f"queued-run.admit refused: {reason}"
+    )
+    started, _ = admit_server(pacer, server, monkeypatch, [t3.T3Rejected(message)])
+    pacer.tick()
+    assert not started
+    t3.T3Pacer(pacer.config, server).tick()
+    assert started == ["paced-1"]
+    assert [c["commandId"] for c in server.calls] == [
+        "pace-admit:paced-1:1",
+        "pace-admit:paced-1:2",
+    ]
+
+
+@pytest.mark.parametrize("reason", ["not_waiting", "inactive"])
+def test_paced_terminal_refusal_is_dropped(setup, monkeypatch, reason):
+    pacer, _, server = setup
+    parked(server)
+    admit_server(
+        pacer,
+        server,
+        monkeypatch,
+        [t3.T3Rejected(f"queued-run.admit refused: {reason}")],
+    )
+    pacer.tick()
+    t3.T3Pacer(pacer.config, server).tick()
+    admits = [c for c in server.calls if c.get("type") == "queued-run.admit"]
+    assert len(admits) == 1
+    [record] = [json.loads(p.read_text()) for p in pacer.admissions.glob("*.json")]
+    assert record["phase"] == "dropped"
+
+
+@pytest.mark.parametrize("accepted", [False, True])
+def test_paced_timeout_replays_same_id_even_if_no_longer_listed(
+    setup, monkeypatch, accepted
+):
+    pacer, _, server = setup
+    run = parked(server)
+    started, receipts = admit_server(
+        pacer, server, monkeypatch, [TimeoutError("reply lost")]
+    )
+    with pytest.raises(TimeoutError):
+        pacer.tick()
+    if accepted:
+        receipts[server.calls[0]["commandId"]] = {"sequence": 73}
+        server.data["pacedRuns"] = []
+        server.data["threads"][-1].update(status="running", activeRunId=run["runId"])
+    t3.T3Pacer(pacer.config, server).tick()
+    assert server.calls[0] == server.calls[1]
+    assert started == ([] if accepted else [run["runId"]])
+    [record] = [json.loads(p.read_text()) for p in pacer.admissions.glob("*.json")]
+    assert record["phase"] == "accepted"
+    assert record["sequence"] == (73 if accepted else 42)
+
+
+def test_paced_success_running_snapshot_does_not_double_book(setup, monkeypatch):
+    pacer, _, server = setup
+    run = parked(server)
+    admit_server(pacer, server, monkeypatch, [])
+    pacer.tick()
+    server.data["pacedRuns"] = []
+    server.data["threads"][-1].update(status="running", activeRunId=run["runId"])
+    pacer.tick()
+    assert len(server.calls) == 1
+    server.data["threads"][-1].update(status="completed", activeRunId=None)
+    pacer.tick()
+    assert len(server.calls) == 2  # A tracker launch can use the released slot.
+
+
+def test_paced_success_unobserved_booking_expires(setup, monkeypatch):
+    pacer, _, server = setup
+    parked(server)
+    admit_server(pacer, server, monkeypatch, [])
+    pacer.tick()
+    server.data["pacedRuns"] = []
+    for _ in range(2):
+        t3.T3Pacer(pacer.config, server).tick()
+        assert len(server.calls) == 1
+    t3.T3Pacer(pacer.config, server).tick()
+    assert len(server.calls) == 2
+
+
+def test_missing_hook_logs_once_and_empty_hook_is_supported(setup, caplog):
+    pacer, _, server = setup
+    del server.data["pacedRuns"]
+    pacer.tick()
+    pacer.tick()
+    assert caplog.text.count("pacing hook unavailable") == 1
+    caplog.clear()
+    server.data["pacedRuns"] = []
+    t3.T3Pacer(pacer.config, server).tick()
+    assert "pacing hook unavailable" not in caplog.text
+
+
+def test_paced_skips_usage_limit_and_unmappable_without_blocking_other_work(
+    setup, monkeypatch, caplog
+):
+    pacer, _, server = setup
+    parked(server, "limited", lastErrorClass="usage_limit")
+    parked(server, "unknown", modelSelection={"instanceId": "custom", "model": "model"})
+    parked(server, "eligible", "2026-10-15T10:00:00Z")
+    started, _ = admit_server(pacer, server, monkeypatch, [])
+    pacer.tick()
+    assert started == ["eligible"]
+    assert "unsupported provider instance 'custom'" in caplog.text
+
+
+@pytest.mark.parametrize(
+    "block", ["quota", "capacity", "total", "error", "disabled", "apikey"]
+)
+def test_paced_uses_existing_admission_gates(setup, monkeypatch, block):
+    pacer, _, server = setup
+    parked(server)
+    if block == "quota":
+        monkeypatch.setattr(
+            t3, "quota_verdict", lambda *a, **kw: Verdict("paused", -1, "paused")
+        )
+    elif block == "error":
+        monkeypatch.setattr(
+            t3.provider, "read", lambda *a, **kw: ({}, {"openai": "unavailable"})
+        )
+    elif block == "disabled":
+        pacer.config.providers_raw = "anthropic"
+    elif block == "apikey":
+        pacer.config.agent_providers_raw = "codex=__api_key__"
+        pacer.config.apikey_policy = "withhold"
+    else:
+        server.data["threads"][0]["status"] = "running"
+        if block == "total":
+            pacer.config.concurrency = 2
+            pacer.config.concurrency_total = 1
+    admit_server(pacer, server, monkeypatch, [])
+    pacer.tick()
+    assert not server.calls
+
+
+def test_paced_provider_is_waiting_for_resets_even_without_tracker_work(
+    setup, monkeypatch
+):
+    pacer, path, server = setup
+    parked(server)
+    # The proposal section has no schedulable tracker work.
+    path.write_text(path.read_text().replace("- [1] First\n- [2] Second\n", ""))
+    seen = []
+
+    def apply(usage, errors, waiting, *args):
+        seen.append(waiting)
+        return usage, errors
+
+    monkeypatch.setattr(t3.resets, "apply", apply)
+    admit_server(pacer, server, monkeypatch, [])
+    pacer.tick()
+    assert seen == [{"openai"}]
+
+
+def test_paced_admission_precedes_pending_launch_with_closed_gate(setup, monkeypatch):
+    pacer, path, server = setup
+    source, parent, project = (
+        TasksStore(path).read(),
+        server.data["threads"][0],
+        server.data["projects"][0],
+    )
+    _, record = pacer.prepare(
+        str(path), TasksStore(path), source, t3.eligible(source)[0], parent, project
+    )
+    # The pending launch belongs to the other provider with no allowance.
+    record["command"]["modelSelection"] = {
+        "instanceId": "claudeAgent",
+        "model": "claude",
+    }
+    t3.save(pacer.record_path(str(path), "task-1"), record)
+    parked(server)
+    started, _ = admit_server(pacer, server, monkeypatch, [])
+    pacer.tick()
+    assert started == ["paced-1"]
+    assert len(server.calls) == 1
+
+
+def test_archived_launch_is_observed_without_occupying_capacity(setup):
+    pacer, _, server = setup
+    pacer.tick()
+    thread = server.data["threads"].pop()
+    server.data["archivedThreads"].append(thread)
+    pacer.tick()
+    assert len(server.calls) == 2
+    records = [json.loads(p.read_text()) for p in pacer.state.glob("*.json")]
+    assert any(
+        r["phase"] == "observed" and r["thread"]["id"] == thread["id"] for r in records
+    )
+
+
+def test_saved_v1_launch_is_held_before_v2_dispatch(setup, caplog):
+    pacer, path, server = setup
+    source = TasksStore(path).read()
+    record_path, record = pacer.prepare(
+        str(path),
+        TasksStore(path),
+        source,
+        t3.eligible(source)[0],
+        server.data["threads"][0],
+        server.data["projects"][0],
+    )
+    record["command"]["bootstrap"] = {"old": "V1"}
+    t3.save(record_path, record)
+    pacer.tick()
+    assert not server.calls
+    assert "Saved V1 launch needs inspection" in caplog.text
+
+
+def test_paced_id_save_failure_prevents_send(setup, monkeypatch):
+    pacer, _, server = setup
+    parked(server)
+
+    def fail_save(*args):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(t3, "save", fail_save)
+    with pytest.raises(OSError, match="disk full"):
+        pacer.tick()
+    assert not server.calls
