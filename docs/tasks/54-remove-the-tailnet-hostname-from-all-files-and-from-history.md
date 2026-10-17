@@ -1,12 +1,11 @@
 # Remove the tailnet hostname from all files and from history
 
 Antti asked for this on 2026-10-17, after filemill [96] did the same there.
-kandev-pacer is public on GitHub, and gogo's tailnet hostname (the `*.<tailnet-suffix>` name
+kandev-pacer is public on GitHub, and gogo's tailnet hostname (the `<tailnet-host>` name
 that `HAI_ALLOWED_HOSTS` in `~/.config/hai/hai.env` holds) appears in
 `tests/userscript.test.mjs` (lines 85 and 100) and in about 155 commits. Never
 write the name itself into a file, commit message, task doc or closing message;
-call it `<tailnet-host>`. Find it with `git grep -n 'ts\.net'` and
-`git log --all --oneline -S'<tailnet-suffix>'`.
+call it `<tailnet-host>`. Find it with Git grep and Git log pickaxe searches for the tailnet domain suffix.
 
 ## Keep the userscript easy to update
 
@@ -29,7 +28,7 @@ the test, use a neutral host such as `kandev.example.test`.
    the mapping file outside the repository (it contains the name). Then make this
    checkout match it, including the worktrees' branches. The pacer runs from this
    checkout: keep `.venv/` and untracked files, and don't restart the pacer.
-5. Verify: `git log --all -S'<tailnet-suffix>'` and `git grep 'ts\.net' $(git rev-list --all)`
+5. Verify: Git log pickaxe and Git grep across every reachable commit for the tailnet domain suffix
    find nothing. Also check the remote-tracking refs: GitHub has only `main` and
    `feature/parallelize-agents-w-1pn`.
 6. Record in this description file the old→new hashes of every commit that a
