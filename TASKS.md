@@ -15,6 +15,9 @@ Rules for TASKS.md usage are at the bottom of the file.
 
 ## Ordered backlog
 
+- [55] Gather acceptance evidence for the 34 review-queue items
+  <!-- hai:{"id":"simple-1589de5a-10e5-4287-9a0c-16c6baf5af62","labels":["steward"],"createdAt":"2026-10-17T17:06:23.520Z","updatedAt":"2026-10-17T17:06:23.520Z"} -->
+
 ## Scheduled
 
 ## In Progress
@@ -307,7 +310,7 @@ Rules for TASKS.md usage are at the bottom of the file.
 
 [19]: docs/tasks/19-uv-source-path-documentation-unclear.md
 
-<!-- hai:reserved-numbers:1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,26,27,28,29,30,31,32,33,34,35,36,37,38,39,40,41,42,43,44,45,46,47,48,49,50,51,52,53,54 -->
+<!-- hai:reserved-numbers:1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,26,27,28,29,30,31,32,33,34,35,36,37,38,39,40,41,42,43,44,45,46,47,48,49,50,51,52,53,54,55 -->
 
 [20]: docs/tasks/20-command-not-found-error.md
 [21]: docs/tasks/21-unclear-urlerror.md
@@ -358,6 +361,8 @@ Rules for TASKS.md usage are at the bottom of the file.
 [53]: docs/tasks/53-hold-unresolved-v1-launch-records-before-quota-and-capacity-checks.md
 
 [54]: docs/tasks/54-remove-the-tailnet-hostname-from-all-files-and-from-history.md
+
+[55]: docs/tasks/55-gather-acceptance-evidence-for-the-34-review-queue-items.md
 
 ## Rules
 
