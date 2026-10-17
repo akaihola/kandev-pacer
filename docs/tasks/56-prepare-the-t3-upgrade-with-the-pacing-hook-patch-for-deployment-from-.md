@@ -88,3 +88,40 @@ Report blocked and stop unless both are merged on their `main`:
   running T3 server, its `~/.t3/userdata`, the running pacer or its state.
 - Record the outcome, including a blocked one, in a `## Result, YYYY-MM-DD`
   section here as well as in the branch README.
+
+
+## Result, 2026-10-18
+
+Blocked by the required memory stop condition. Keep [56] In Progress; acceptance
+is not met, and [57] must not use this rebase as a validated build yet.
+
+Both prerequisites are merged on local main: kandev-pacer [49] at `8deba37`
+and skills-akaihola [6] at `2aadff5`. The deployment blocker [53] is also merged,
+at `3daa054` after [54]'s history rewrite.
+
+The code was rebased in the existing separate t3code worktree
+`/home/agent/.t3/worktrees/t3code/t3code-9f66b19e`, on the required branch.
+The new code commit is `91cfe8521fe26753dd9fa34db4ba35c100147b43`, based on
+stable v0.1.0, `81493efb71e8e8244f95d3e9f71d8369654ab151`. The branch README
+had no preference for a newer nightly. The original branch is preserved at
+`backup/pacing-hook-before-hai-56`. One conflict in Stop handling was resolved
+by keeping upstream's buffered-notification cancellation and the hook's
+return of parked runs to user control. Range-diff shows only that adaptation.
+
+The capped dependency refresh, `t3-lowmem run vp i -- --yes`, was stopped by
+a host-swap monitor when usage rose from 3,357,788 KiB to 3,358,300 KiB. The
+monitor returned exit 75. The source of that increase is unproven, but the
+issue requires stopping on growth. No low-memory scopes remained running.
+The install log and monitor are in
+`/home/agent/.local/state/t3-upgrade-prep/2026-10-18/`.
+
+Neither focused test file nor the low-memory importer typecheck has run on
+this rebase. No patch was exported. The branch README records the blocked
+result, hashes, resume commands and Antti's full deployment checklist.
+Resume the install and validation only with stable memory headroom, using
+`tc --importers --base v0.1.0` to scope the typecheck to the private patch.
+Export and verify the code patch after validation. No atom transfer route
+was found in the hook or low-memory documentation; Antti must choose one.
+
+Nothing was pushed, deployed or restarted. The live T3 server, its database,
+the running pacer and its state were untouched.
