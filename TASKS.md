@@ -15,8 +15,18 @@ Rules for TASKS.md usage are at the bottom of the file.
 
 ## Ordered backlog
 
+- [50] Update the tests to Hai's sourceState field
+  <!-- hai:{"id":"simple-0032e3fe-2aeb-4c7b-856b-3c018aa9513c","labels":["steward"],"createdAt":"2026-10-17T07:07:01.094Z","updatedAt":"2026-10-17T07:07:01.094Z"} -->
+
 - [49] Port T3 mode to T3's V2 protocol: pacedRuns discovery and queued-run.admit
-  <!-- hai:{"id":"simple-da78b7a4-bee2-4ffe-86eb-a294b70b2388","labels":["steward"],"createdAt":"2026-10-16T16:43:07.027Z","updatedAt":"2026-10-16T16:43:07.027Z"} -->
+    - Depends on: [50]
+  <!-- hai:{"id":"simple-da78b7a4-bee2-4ffe-86eb-a294b70b2388","labels":["steward"],"createdAt":"2026-10-16T16:43:07.027Z","updatedAt":"2026-10-17T07:07:18.495Z"} -->
+
+- [51] Count only paced threads against concurrency_total
+  <!-- hai:{"id":"simple-8fd046bd-0a6c-4041-acb3-c0c670ac04e6","labels":["steward"],"createdAt":"2026-10-17T07:07:02.465Z","updatedAt":"2026-10-17T07:07:02.465Z"} -->
+
+- [52] A tracker that fails to parse stops pacing for every project
+  <!-- hai:{"id":"simple-a77c430b-d72d-4f30-a910-9534cc450248","labels":["steward"],"createdAt":"2026-10-17T07:07:03.309Z","updatedAt":"2026-10-17T07:07:03.309Z"} -->
 
 ## Scheduled
 
@@ -290,7 +300,7 @@ Rules for TASKS.md usage are at the bottom of the file.
 
 [19]: docs/tasks/19-uv-source-path-documentation-unclear.md
 
-<!-- hai:reserved-numbers:1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,26,27,28,29,30,31,32,33,34,35,36,37,38,39,40,41,42,43,44,45,46,47,48,49 -->
+<!-- hai:reserved-numbers:1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,26,27,28,29,30,31,32,33,34,35,36,37,38,39,40,41,42,43,44,45,46,47,48,49,50,51,52 -->
 
 [20]: docs/tasks/20-command-not-found-error.md
 [21]: docs/tasks/21-unclear-urlerror.md
@@ -331,6 +341,12 @@ Rules for TASKS.md usage are at the bottom of the file.
 [48]: docs/tasks/48-pace-hai-sources-using-workflow-stages.md
 
 [49]: docs/tasks/49-port-t3-mode-to-t3-s-v2-protocol-pacedruns-discovery-and-queued-run-ad.md
+
+[50]: docs/tasks/50-update-the-tests-to-hai-s-sourcestate-field.md
+
+[51]: docs/tasks/51-count-only-paced-threads-against-concurrency-total.md
+
+[52]: docs/tasks/52-a-tracker-that-fails-to-parse-stops-pacing-for-every-project.md
 
 ## Rules
 

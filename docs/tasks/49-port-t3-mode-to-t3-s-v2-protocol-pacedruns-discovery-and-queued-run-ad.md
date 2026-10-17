@@ -1,3 +1,7 @@
+---
+depends-on: [50]
+---
+
 # Port T3 mode to T3's V2 protocol: `pacedRuns` discovery and `queued-run.admit`
 
 Step 1 of the pacing-hook sequence (steward decisions D27–D30 in
