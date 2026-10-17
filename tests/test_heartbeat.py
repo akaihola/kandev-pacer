@@ -179,7 +179,7 @@ def test_numbered_dependencies_accept_unaccepted_completion(setup):
         "update",
         snapshot["revision"],
         id=first["id"],
-        input={"sourceSection": "Completed / Accepted", "accepted": False},
+        input={"sourceState": "Completed / Accepted", "accepted": False},
     )
     assert next(
         item

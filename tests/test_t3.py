@@ -255,7 +255,7 @@ def test_lost_reply_restart_preserves_one_thread_and_settings(setup):
     assert "Description 1" in command["message"]["text"]
     assert "Run tests before completion" in command["message"]["text"]
     assert (
-        TasksStore(path).read()["workspace"]["issues"][2]["sourceSection"]
+        TasksStore(path).read()["workspace"]["issues"][2]["sourceState"]
         == "Scheduled"
     )
     restarted = t3.T3Pacer(pacer.config, server)
@@ -278,7 +278,7 @@ def test_finished_turn_never_relaunches_or_accepts(setup, state):
     issues = TasksStore(path).read()["workspace"]["issues"]
     assert not any(i["accepted"] for i in issues)
     assert all(
-        i["sourceSection"] == "Scheduled"
+        i["sourceState"] == "Scheduled"
         for i in issues
         if i["id"] in {"task-1", "task-2"}
     )
@@ -444,7 +444,7 @@ def test_dependency_order_and_excluded_sections(tmp_path):
         "update",
         source["revision"],
         id="task-2",
-        input={"sourceSection": "Completed / Accepted"},
+        input={"sourceState": "Completed / Accepted"},
     )
     assert [i["id"] for i in t3.eligible(store.read())] == ["task-1"]
 
@@ -795,7 +795,7 @@ def test_scheduled_before_backlog(setup):
     store = TasksStore(path)
     source = store.read()
     store.mutate(
-        "update", source["revision"], id="task-2", input={"sourceSection": "Scheduled"}
+        "update", source["revision"], id="task-2", input={"sourceState": "Scheduled"}
     )
     assert [i["id"] for i in t3.eligible(store.read())] == ["task-2", "task-1"]
 
@@ -975,7 +975,7 @@ def test_submitted_record_for_moved_issue_holds_only_that_issue(setup, caplog):
         "update",
         store.read()["revision"],
         id="task-1",
-        input={"sourceSection": "In Progress"},
+        input={"sourceState": "In Progress"},
     )
     t3.git(path.parent, "commit", "-am", "docs(tasks): start task-1 by hand")
     pacer = t3.T3Pacer(pacer.config, server)
