@@ -29,9 +29,6 @@ Rules for TASKS.md usage are at the bottom of the file.
 
 ## In Progress
 
-- [~] [50] Update the tests to Hai's sourceState field
-      <!-- hai:{"id":"simple-0032e3fe-2aeb-4c7b-856b-3c018aa9513c","labels":["steward"],"createdAt":"2026-10-17T07:07:01.094Z","updatedAt":"2026-10-17T07:15:05.468Z"} -->
-
 - [16] Learn from session observation records: a lowest-priority Kandev task the
   Heartbeat creates when unread records exist, writing observations and proposed
   solution prompts to the right repository's unreviewed section.
@@ -44,6 +41,9 @@ Rules for TASKS.md usage are at the bottom of the file.
   before resuming tasks.
 
 ## Completed / Accepted
+
+- [ ] [50] Update the tests to Hai's sourceState field
+      <!-- hai:{"id":"simple-0032e3fe-2aeb-4c7b-856b-3c018aa9513c","labels":["steward"],"createdAt":"2026-10-17T07:07:01.094Z","updatedAt":"2026-10-17T07:16:16.361Z"} -->
 
 - [x] [*] Use Opus 5.5 with Extra High reasoning for paced Claude tasks instead of Fable 5.1.
   <!-- hai:{"id":"simple-748c4fdf-5b8a-434f-bb5f-eee2687a0402","createdAt":"2026-10-11T20:32:51.333Z","updatedAt":"2026-10-15T20:35:57.874Z"} -->
