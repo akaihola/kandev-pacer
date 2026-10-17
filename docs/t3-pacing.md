@@ -94,6 +94,8 @@ t3_base_branch = "main"
 providers_raw = "openai anthropic"
 concurrency = 1
 concurrency_total = 2
+# Optional ceiling on all active T3 threads, including interactive work:
+# t3_active_limit = 4
 
 [[kandev-pacer.t3_trackers]]
 tracker = "/home/me/prg/project/TASKS.md"
@@ -284,16 +286,14 @@ the default instances `codex` to OpenAI and `claudeAgent` to Anthropic, preservi
 selection when launching a child thread. Custom instance IDs and other providers
 are not mapped automatically because the pacer cannot infer their subscription.
 
-An active thread with an unsupported or missing selection blocks launches across
-the T3 server, including threads outside the configured trackers. The error names
-the thread ID, selection field and value. Open that thread in T3 and inspect its
-provider. Let its work finish or stop it intentionally, and resolve pending
-approvals, input, and background work. These also count as active work. Use a
-supported subscription-backed provider instance for threads that the pacer launches.
+An active paced thread with an unsupported or missing selection blocks launches
+across the T3 server. The error names the thread ID, selection field and value.
+Inspect its provider in T3. Let its work finish or stop it intentionally, including
+pending approvals, input, and background work. Interactive threads without a
+pacer record do not need a supported provider. They still count against
+`t3_active_limit` when configured.
 
 `--agent-providers-raw` and `--apikey-policy` do not register T3 provider instances.
-Setting `hermes-acp=__api_key__` therefore
-does not exclude an active T3 Hermes thread from the server-wide capacity check.
 Configure subscription providers with `providers_raw` or `PACER_PROVIDERS`, and
 select a supported provider instance in each configured T3 parent thread.
 
@@ -336,14 +336,30 @@ issue description, root AGENTS.md, tracker rules, and instructions to use Hai fo
 tracker changes. Implementation, validation, merge, and completion follow those
 repository rules. A finished turn never moves the tracker or checks acceptance.
 
-The existing quota gates, model-specific windows, and concurrency limits apply.
-Preparing, starting, running or waiting runs, pending runtime requests, and
-background tasks count against capacity across the T3 server. Parked prompts and
-archived threads do not count.
-Activity uses V2 `status`, `activeRunId` and `activityRunStatus`, plus
-`pendingRuntimeRequest` and `pendingBackgroundTasks`. Unrecognized state or active
-provider blocks new work. These counts do not include a separate Kandev server; avoid two independent
-pacers admitting work against the same subscription without partitioning capacity.
+The existing quota gates and model-specific windows apply. In T3 mode,
+`concurrency` limits paced threads per provider and `concurrency_total` limits
+paced threads across providers. Only threads with a launch record or paced-run
+admission record from this pacer count. Records still count when their tracker
+is no longer configured. Interactive threads and steward runs without these
+records leave paced slots free.
+
+Preparing, starting, running or waiting paced threads, pending runtime requests,
+and background tasks occupy paced slots. Parked prompts, finished threads without
+pending work, and archived threads do not. Activity uses V2 `status`, `activeRunId`
+and `activityRunStatus`, plus `pendingRuntimeRequest` and `pendingBackgroundTasks`.
+Unrecognized states block new work, as do unsupported providers on paced threads.
+
+`t3_active_limit`, or `PACER_T3_ACTIVE_LIMIT`, optionally limits all active T3
+threads, including interactive work. It must be at least 1 and is unset by default.
+At the limit, the pacer launches no new tracker work or parked runs. An accepted
+parked run reserves a slot while the snapshot catches up. For example,
+with two interactive threads active, `concurrency = 2` and `concurrency_total = 2`
+still allow two paced threads. Setting `t3_active_limit = 3` allows only one.
+Status logs show provider and total paced counts alongside all active threads,
+for example `1/2 paced), 1/2 paced total, 4 active`.
+
+These counts do not include a separate Kandev server. Avoid two independent pacers
+admitting work against the same subscription without partitioning capacity.
 
 Records live in `~/.local/state/kandev-pacer/t3`, configurable with
 `PACER_T3_STATE_DIR`. Use the same directory after restart. A process lock allows one

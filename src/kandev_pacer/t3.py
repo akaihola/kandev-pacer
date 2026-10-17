@@ -185,6 +185,8 @@ class T3Pacer:
         open_source = importlib.import_module("hai_tasks").open_source
 
         self.config, self.server = config, server
+        self.active_count = 0
+        self.active_reservations = 0
         entries = config.t3_trackers
         if not isinstance(entries, list) or not entries:
             raise Withheld("PACER_T3_TRACKERS needs tracker entries")
@@ -381,6 +383,12 @@ class T3Pacer:
         name = selection_provider(selection)
         if name not in self.config.providers or not selection.get("model"):
             return False
+        if (
+            self.config.t3_active_limit is not None
+            and self.active_count + self.active_reservations
+            >= self.config.t3_active_limit
+        ):
+            return False
         if running[name] >= self.config.concurrency:
             return False
         if (
@@ -473,11 +481,12 @@ class T3Pacer:
             )
             parents = {PROVIDERS[model.instanceId] for model in candidates}
         for name in self.config.providers:
-            capacity = f" ({running[name]}/{self.config.concurrency} running)"
+            capacity = f" ({running[name]}/{self.config.concurrency} paced)"
             if self.config.concurrency_total:
-                capacity += (
-                    f", {sum(running.values())}/{self.config.concurrency_total} total"
-                )
+                capacity += f", {sum(running.values())}/{self.config.concurrency_total} paced total"
+            capacity += f", {self.active_count} active"
+            if self.config.t3_active_limit is not None:
+                capacity += f" (limit {self.config.t3_active_limit})"
             if name not in parents:
                 capacity += ", no tracker parent uses this provider"
             if self.quota_bypassed(name):
@@ -538,6 +547,7 @@ class T3Pacer:
                     record["phase"] = "done"
                 else:
                     running[selection_provider(run["modelSelection"])] += 1
+                    self.active_reservations += 1
                 save(path, record)
         candidates = []
         for run in listed.values():
@@ -628,9 +638,31 @@ class T3Pacer:
         threads = {t["id"]: t for t in snapshot["threads"]}
         # Archived threads remain observable but consume no capacity.
         archived = {t["id"]: t for t in snapshot.get("archivedThreads", [])}
+        launch_records = [
+            (path, json.loads(path.read_text()))
+            for path in sorted(self.state.glob("*.json"))
+        ]
+        paced_threads = {
+            record["command"]["threadId"]
+            for _, record in launch_records
+            if record["url"] == self.server.url
+        }
+        for path in self.admissions.glob("*.json"):
+            record = json.loads(path.read_text())
+            if record["url"] == self.server.url and record["phase"] in {
+                "sending",
+                "accepted",
+                "done",
+            }:
+                paced_threads.add(record["run"]["threadId"])
         running = Counter()
+        self.active_count = 0
+        self.active_reservations = 0
         for thread in threads.values():
             if activity(thread):
+                self.active_count += 1
+                if thread["id"] not in paced_threads:
+                    continue
                 selection = thread.get("modelSelection", {})
                 name = selection_provider(selection)
                 if name is None:
@@ -651,8 +683,7 @@ class T3Pacer:
         now = time.time()
         records, pending, held = {}, [], []
         ignored = Counter()
-        for path in sorted(self.state.glob("*.json")):
-            record = json.loads(path.read_text())
+        for path, record in launch_records:
             if record["url"] != self.server.url:
                 raise Withheld(
                     f"No new tasks will launch this tick; existing T3 threads continue. "

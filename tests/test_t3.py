@@ -160,6 +160,21 @@ def setup(tmp_path, monkeypatch):
     return t3.T3Pacer(config, server), path, server
 
 
+def record_paced_thread(pacer, thread):
+    t3.save(
+        pacer.admissions / (thread["id"] + ".json"),
+        {
+            "url": pacer.server.url,
+            "phase": "done",
+            "run": {
+                "runId": "run-" + thread["id"],
+                "threadId": thread["id"],
+                "modelSelection": thread["modelSelection"],
+            },
+        },
+    )
+
+
 @pytest.mark.parametrize("on_path", [True, False])
 def test_worker_prompt_names_resolved_cli(setup, tmp_path, monkeypatch, on_path):
     pacer, _, server = setup
@@ -381,6 +396,7 @@ def test_instance_selection_launches_and_counts_capacity(setup, instance, provid
 def test_unknown_provider_explains_blocking_thread(setup, selection, detail, activity):
     pacer, path, server = setup
     parent = server.data["threads"][0]
+    record_paced_thread(pacer, parent)
     parent["modelSelection"] = selection
     if activity == "running":
         parent["status"] = "running"
@@ -428,8 +444,10 @@ def test_withholding(setup, monkeypatch, block):
                 "modelSelection": {"provider": "claudeAgent", "model": "claude"},
             }
         )
+        record_paced_thread(pacer, server.data["threads"][-1])
     elif block == "starting":
         parent["status"] = "starting"
+        record_paced_thread(pacer, parent)
     else:
         monkeypatch.setattr(
             t3.provider, "read", lambda *a, **kw: ({}, {"openai": "unavailable"})
@@ -539,6 +557,7 @@ def test_rejected_launch_holds_tracker_and_retries_after_cooldown(setup, clock, 
     busy = {**server.data["threads"][0], "id": "busy"}
     busy.update(status="running", activeRunId="run")
     server.data["threads"].append(busy)
+    record_paced_thread(pacer, busy)
     clock[0] += 60
     pacer.tick()
     assert len(server.calls) == 1
@@ -1028,7 +1047,10 @@ def test_quota_bypass_launches_and_retries_with_original_selection(
     assert (
         server.calls[0]["modelSelection"] == server.data["threads"][0]["modelSelection"]
     )
-    assert "T3 [openai] quota bypass, concurrency only (0/1 running)" in caplog.text
+    assert (
+        "T3 [openai] quota bypass, concurrency only (0/1 paced), 0 active"
+        in caplog.text
+    )
     record_path = next(pacer.state.glob("*.json"))
     record = json.loads(record_path.read_text())
     record["phase"] = "submitted"
@@ -1044,6 +1066,7 @@ def test_quota_bypass_retains_admission_limits(setup, block):
     pacer.config.agent_providers_raw = "codex-acp=__api_key__"
     if block == "provider_cap":
         server.data["threads"][0]["status"] = "running"
+        record_paced_thread(pacer, server.data["threads"][0])
     elif block == "total_cap":
         pacer.config.concurrency_total = 1
         server.data["threads"].append(
@@ -1054,6 +1077,7 @@ def test_quota_bypass_retains_admission_limits(setup, block):
                 "status": "running",
             }
         )
+        record_paced_thread(pacer, server.data["threads"][-1])
     elif block == "withhold":
         pacer.config.apikey_policy = "withhold"
     else:
@@ -1086,8 +1110,11 @@ def test_status_reports_both_providers_scopes_and_resume(setup, monkeypatch, cap
     monkeypatch.setattr(t3, "windows_by_provider", lambda usage: windows)
     caplog.set_level("INFO", logger="kandev-pacer")
     pacer.tick()
-    assert "T3 [openai] headroom=-0.300 PAUSED (0/1 running), resumes in" in caplog.text
-    assert "T3 [anthropic] headroom=+0.400 open (0/1 running)" in caplog.text
+    assert (
+        "T3 [openai] headroom=-0.300 PAUSED (0/1 paced), 0 active, resumes in"
+        in caplog.text
+    )
+    assert "T3 [anthropic] headroom=+0.400 open (0/1 paced), 0 active" in caplog.text
     assert "no tracker parent uses this provider" in caplog.text
     assert "T3 [anthropic (Fable)] headroom=-0.490 CEILING" in caplog.text
     assert "next tick in 30s" in caplog.text
@@ -1101,7 +1128,10 @@ def test_status_reports_quota_failure_even_without_parent(setup, monkeypatch, ca
         t3.provider, "read", lambda *a, **kw: ({}, {"anthropic": "private-token"})
     )
     pacer.tick()
-    assert "T3 [anthropic] quota unavailable, WITHHOLDING (0/1 running)" in caplog.text
+    assert (
+        "T3 [anthropic] quota unavailable, WITHHOLDING (0/1 paced), 0 active"
+        in caplog.text
+    )
     assert "no tracker parent uses this provider" in caplog.text
     assert "private-token" not in caplog.text
 
@@ -1213,6 +1243,7 @@ def test_automatic_prefers_furthest_behind_available_model(setup, monkeypatch, b
                 "status": "running",
             }
         )
+        record_paced_thread(pacer, server.data["threads"][-1])
     if blocked == "error":
         monkeypatch.setattr(
             t3.provider, "read", lambda *a, **kw: ({}, {"anthropic": "offline"})
@@ -1554,7 +1585,7 @@ def test_status_shows_the_measured_burn_time(setup, monkeypatch, caplog):
     pacer.tick()
     assert "T3 [openai] burn time ~9h 56m" in caplog.text
     assert "per weekly allowance (rose 50% in 5h 00m 00s to " in caplog.text
-    assert "PAUSED (0/1 running), resumes in" in caplog.text
+    assert "PAUSED (0/1 paced), 0 active, resumes in" in caplog.text
     assert ", burn ~9h 56m" in caplog.text
 
 
@@ -1792,7 +1823,7 @@ def test_paced_skips_usage_limit_and_unmappable_without_blocking_other_work(
 
 
 @pytest.mark.parametrize(
-    "block", ["quota", "capacity", "total", "error", "disabled", "apikey"]
+    "block", ["quota", "capacity", "total", "active", "error", "disabled", "apikey"]
 )
 def test_paced_uses_existing_admission_gates(setup, monkeypatch, block):
     pacer, _, server = setup
@@ -1805,6 +1836,9 @@ def test_paced_uses_existing_admission_gates(setup, monkeypatch, block):
         monkeypatch.setattr(
             t3.provider, "read", lambda *a, **kw: ({}, {"openai": "unavailable"})
         )
+    elif block == "active":
+        pacer.config.t3_active_limit = 1
+        server.data["threads"][0]["status"] = "waiting"
     elif block == "disabled":
         pacer.config.providers_raw = "anthropic"
     elif block == "apikey":
@@ -1812,6 +1846,7 @@ def test_paced_uses_existing_admission_gates(setup, monkeypatch, block):
         pacer.config.apikey_policy = "withhold"
     else:
         server.data["threads"][0]["status"] = "running"
+        record_paced_thread(pacer, server.data["threads"][0])
         if block == "total":
             pacer.config.concurrency = 2
             pacer.config.concurrency_total = 1
@@ -1904,3 +1939,88 @@ def test_paced_id_save_failure_prevents_send(setup, monkeypatch):
     with pytest.raises(OSError, match="disk full"):
         pacer.tick()
     assert not server.calls
+
+
+@pytest.mark.parametrize(
+    "fields",
+    [
+        {"status": "running", "activeRunId": "interactive"},
+        {"status": "waiting"},
+        {"pendingRuntimeRequest": {"id": "input"}},
+        {"pendingBackgroundTasks": [{"id": "background"}]},
+    ],
+)
+def test_interactive_threads_leave_two_paced_slots(setup, fields, caplog):
+    pacer, _, server = setup
+    pacer.config.concurrency = 2
+    pacer.config.concurrency_total = 2
+    parent = server.data["threads"][0]
+    parent.update(fields)
+    server.data["threads"].append({**parent, "id": "interactive-2"})
+    pacer.config.agent_providers_raw = "codex=__api_key__"
+    pacer.config.apikey_policy = "cap"
+    caplog.set_level("INFO", logger="kandev-pacer")
+    for _ in range(3):
+        # Durable launch records must retain the count after restart.
+        t3.T3Pacer(pacer.config, server).tick()
+    assert len(server.calls) == 2
+    assert "2/2 paced" in caplog.text
+    assert "2/2 paced total, 4 active" in caplog.text
+
+
+@pytest.mark.parametrize("limit, expected", [(None, 1), (1, 0), (2, 0), (3, 1)])
+def test_optional_all_active_limit(setup, limit, expected, caplog):
+    pacer, _, server = setup
+    pacer.config.t3_active_limit = limit
+    parent = server.data["threads"][0]
+    parent.update(status="running", activeRunId="interactive")
+    # An interactive provider need not be supported for pacing.
+    server.data["threads"].append(
+        {**parent, "id": "custom", "modelSelection": {"instanceId": "custom"}}
+    )
+    pacer.config.agent_providers_raw = "codex=__api_key__"
+    pacer.config.apikey_policy = "cap"
+    caplog.set_level("INFO", logger="kandev-pacer")
+    pacer.tick()
+    assert len(server.calls) == expected
+    assert "0/1 paced), 2 active" in caplog.text
+
+
+@pytest.mark.parametrize("total", [False, True])
+def test_mixed_providers_count_only_paced_threads(setup, total):
+    pacer, _, server = setup
+    pacer.config.concurrency = 2
+    pacer.config.concurrency_total = 2 if total else None
+    parent = server.data["threads"][0]
+    parent.update(status="running", activeRunId="interactive")
+    server.data["threads"].append(
+        {
+            **parent,
+            "id": "paced-claude",
+            "modelSelection": {"instanceId": "claudeAgent", "model": "claude"},
+        }
+    )
+    record_paced_thread(pacer, server.data["threads"][-1])
+    for _ in range(3):
+        pacer.tick()
+    assert len(server.calls) == (1 if total else 2)
+
+
+def test_active_limit_reserves_accepted_parked_run_until_visible(setup, monkeypatch):
+    pacer, _, server = setup
+    pacer.config.concurrency = 2
+    pacer.config.t3_active_limit = 1
+    parked(server)
+    parked(server, "paced-2")
+    started, _ = admit_server(pacer, server, monkeypatch, [])
+    pacer.tick()
+    assert started == ["paced-1"]
+    # The snapshot can lag a successful admission. Reserve its active slot too.
+    t3.T3Pacer(pacer.config, server).tick()
+    assert started == ["paced-1"]
+
+
+@pytest.mark.parametrize("value", [0, -1])
+def test_all_active_limit_requires_positive_integer(value):
+    with pytest.raises(ValueError, match="PACER_T3_ACTIVE_LIMIT"):
+        Settings(PACER_T3_ACTIVE_LIMIT=value)

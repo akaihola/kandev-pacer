@@ -106,11 +106,12 @@ class Settings(BaseSettings):
         alias="PACER_BURN_STATE",
     )
 
-    # Running turns plus backend capacity deferrals, per provider. `concurrency_total` caps the sum
-    # across providers -- the machine running the worktrees is the one genuinely shared thing.
+    # In T3 mode, only threads recorded by this pacer count against these caps.
+    # Kandev mode counts running turns plus backend capacity deferrals.
     concurrency: int = Field(1, alias="PACER_CONCURRENCY", ge=1)
     # None means no ceiling on the sum; each provider is limited only by its own cap.
     concurrency_total: int | None = Field(None, alias="PACER_CONCURRENCY_TOTAL", ge=1)
+    t3_active_limit: int | None = Field(None, alias="PACER_T3_ACTIVE_LIMIT", ge=1)
     # Target burn line: alpha < 1 aims below steady, finishing each window with quota spare.
     alpha: float = Field(1.0, alias="PACER_ALPHA", gt=0)
     alpha_5h: float = Field(1.0, alias="PACER_ALPHA_5H", gt=0)
