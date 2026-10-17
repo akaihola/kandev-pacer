@@ -111,8 +111,9 @@ def test_t3_launch_all_workflows(workflow, setup):  # noqa: F811
     pacer.tick()
     assert len(server.calls) == 1
     command = server.calls[0]
-    assert command["bootstrap"]["prepareWorktree"]["projectCwd"] == str(root)
-    prompt = command["message"]["text"]
+    assert command["projectId"] == server.data["projects"][0]["id"]
+    assert command["workspaceStrategy"]["type"] == "worktree"
+    prompt = command["initialMessage"]["text"]
     assert tasks_md.workflow_prompt(before) in prompt
     assert ("Do not check user acceptance" in prompt) == before["capabilities"][
         "fields"

@@ -130,58 +130,43 @@ def thread_note(record):
     and T3's last error text.
     """
     thread = record["thread"]
-    session = thread.get("session") or {}
-    turn = thread.get("latestTurn") or {}
-    parts = [f"session {session.get('status', 'unknown')}"]
-    if turn:
-        parts.append(f"turn {turn.get('state', 'unknown')}")
-    if thread.get("hasPendingApprovals"):
-        parts.append("needs approval")
-    if thread.get("hasPendingUserInput"):
-        parts.append("needs input")
-    provider = session.get("providerName")
+    parts = [f"status {thread.get('status', 'unknown')}"]
+    if thread.get("activityRunStatus"):
+        parts.append(f"run {thread['activityRunStatus']}")
+    if thread.get("pendingRuntimeRequest"):
+        parts.append("needs response")
+    if thread.get("pendingBackgroundTasks"):
+        parts.append("background work")
+    instance = thread.get("modelSelection", {}).get("instanceId")
     note = (
         f"{record['issue']} from {record['tracker']} on {thread['id']}"
-        f"{f' ({provider})' if provider else ''}: {', '.join(parts)}"
+        f"{f' ({instance})' if instance else ''}: {', '.join(parts)}"
     )
-    if session.get("lastError"):
-        note += f"; error: {session['lastError']}"
+    if thread.get("lastError"):
+        note += f"; error: {thread['lastError']}"
     return note
 
 
 def activity(thread):
-    session, turn = thread.get("session"), thread.get("latestTurn")
-    if session and session.get("status") not in {
+    if "status" not in thread or "activeRunId" not in thread:
+        raise Withheld("Incomplete T3 V2 snapshot; withholding work")
+    active = {"preparing", "starting", "running", "waiting"}
+    if thread["status"] not in active | {
         "idle",
-        "starting",
-        "running",
-        "ready",
-        "interrupted",
-        "stopped",
-        "error",
-    }:
-        raise Withheld("Unknown T3 session state; withholding work")
-    if turn and turn.get("state") not in {
-        "running",
-        "interrupted",
+        "queued",
         "completed",
-        "error",
-    }:
-        raise Withheld("Unknown T3 turn state; withholding work")
-    if "session" not in thread or "latestTurn" not in thread:
-        raise Withheld("Incomplete T3 snapshot; withholding work")
+        "interrupted",
+        "failed",
+        "cancelled",
+        "rolled_back",
+    } or thread.get("activityRunStatus") not in active | {None}:
+        raise Withheld("Unknown T3 V2 thread state; withholding work")
     return bool(
-        (
-            session
-            and (
-                session["status"] in {"starting", "running"}
-                or session.get("activeTurnId")
-            )
-        )
-        or (turn and turn["state"] == "running")
-        or thread.get("backgroundLiveness") in {"working", "monitoring"}
-        or thread.get("hasPendingApprovals")
-        or thread.get("hasPendingUserInput")
+        thread["status"] in active
+        or thread["activeRunId"]
+        or thread.get("activityRunStatus")
+        or thread.get("pendingRuntimeRequest")
+        or thread.get("pendingBackgroundTasks")
     )
 
 
@@ -244,6 +229,9 @@ class T3Pacer:
             self.trackers[path] = (open_source(path), parent)
         self.state = Path(config.t3_state_dir).expanduser()
         self.state.mkdir(parents=True, exist_ok=True, mode=0o700)
+        self.hook_missing_logged = False
+        self.admissions = self.state / "admissions"
+        self.admissions.mkdir(exist_ok=True, mode=0o700)
         # How fast the agents have been seen to empty a weekly allowance, per provider.
         self.burn = BurnMeter(config.burn_state_path)
         known = {*PROVIDERS, *KANDEV_ALIASES.values()}
@@ -281,7 +269,6 @@ class T3Pacer:
                 "then retry scheduling."
             )
         thread_id = str(uuid.uuid4())
-        now = datetime.now(UTC).isoformat()
         inherited = {
             k: parent[k] for k in ("modelSelection", "runtimeMode", "interactionMode")
         }
@@ -308,33 +295,21 @@ class T3Pacer:
             "Do not change unrelated work. Report blockers and validation evidence."
         )
         command = dict(
-            type="thread.turn.start",
             commandId=str(uuid.uuid4()),
             threadId=thread_id,
+            projectId=project["id"],
+            title=issue["title"][:200],
             **inherited,
-            createdAt=now,
-            message={
+            workspaceStrategy={
+                "type": "worktree",
+                "baseRef": self.config.t3_base_branch,
+                "branch": f"pacer-{thread_id}",
+                "startFromOrigin": False,
+            },
+            initialMessage={
                 "messageId": str(uuid.uuid4()),
-                "role": "user",
                 "text": prompt,
                 "attachments": [],
-            },
-            bootstrap={
-                "createThread": dict(
-                    projectId=project["id"],
-                    title=issue["title"][:200],
-                    **inherited,
-                    branch=None,
-                    worktreePath=None,
-                    createdAt=now,
-                ),
-                "prepareWorktree": {
-                    "projectCwd": str(root),
-                    "baseBranch": self.config.t3_base_branch,
-                    "branch": f"pacer-{thread_id}",
-                    "startFromOrigin": False,
-                    "requireWorktree": True,
-                },
             },
         )
         record = {
@@ -539,9 +514,120 @@ class T3Pacer:
                     self.config.interval,
                 )
 
+    def paced_runs(self, snapshot, threads, running):
+        """Discover parked work and retain capacity while an admission becomes visible."""
+        if "pacedRuns" not in snapshot:
+            if not self.hook_missing_logged:
+                log.warning(
+                    "T3 shell has no pacedRuns; pacing hook unavailable, admitting no paced runs"
+                )
+                self.hook_missing_logged = True
+            return []
+        listed = {run["runId"]: run for run in snapshot["pacedRuns"]}
+        records = {}
+        for path in self.admissions.glob("*.json"):
+            record = json.loads(path.read_text())
+            if record["url"] != self.server.url:
+                continue
+            run = record["run"]
+            records[run["runId"]] = record
+            if record["phase"] == "accepted":
+                thread = threads.get(run["threadId"])
+                record["unobserved_ticks"] = record.get("unobserved_ticks", 0) + 1
+                if (thread and activity(thread)) or record["unobserved_ticks"] >= 3:
+                    record["phase"] = "done"
+                else:
+                    running[selection_provider(run["modelSelection"])] += 1
+                save(path, record)
+        candidates = []
+        for run in listed.values():
+            record = records.get(run["runId"])
+            if record and record["phase"] in {"accepted", "done", "dropped"}:
+                continue
+            selection = run["modelSelection"]
+            if selection_provider(selection) is None:
+                log.warning(
+                    "T3 skipping paced run %s: unsupported provider instance %r",
+                    run["runId"],
+                    selection.get("instanceId"),
+                )
+                continue
+            if threads.get(run["threadId"], {}).get("lastErrorClass") == "usage_limit":
+                continue
+            candidates.append(run)
+        # A lost reply must be reconciled even after the run leaves pacedRuns.
+        uncertain = [r["run"] for r in records.values() if r["phase"] == "sending"]
+        uncertain_ids = {r["runId"] for r in uncertain}
+        return sorted(uncertain, key=lambda r: r["requestedAt"]) + sorted(
+            (r for r in candidates if r["runId"] not in uncertain_ids),
+            key=lambda r: r["requestedAt"],
+        )
+
+    def admit_paced(self, runs, running, usage, errors, now):
+        for run in runs:
+            key = hashlib.sha256(
+                (self.server.url + "\0" + run["runId"]).encode()
+            ).hexdigest()
+            path = self.admissions / (key + ".json")
+            record: dict = (
+                json.loads(path.read_text())
+                if path.exists()
+                else {
+                    "url": self.server.url,
+                    "run": run,
+                    "attempt": 0,
+                    "phase": "retry",
+                }
+            )
+            if record["phase"] != "sending":
+                if not self.admitted(
+                    run["modelSelection"], running, usage, errors, now
+                ):
+                    continue
+                record["attempt"] += 1
+                record["command"] = {
+                    "type": "queued-run.admit",
+                    "commandId": f"pace-admit:{run['runId']}:{record['attempt']}",
+                    "threadId": run["threadId"],
+                    "runId": run["runId"],
+                }
+                record["phase"] = "sending"
+                save(path, record)
+            try:
+                result = self.server.call(
+                    "orchestration.dispatchCommand", record["command"]
+                )
+            except T3Rejected as error:
+                message = str(error)
+                if any(
+                    f"queued-run.admit refused: {reason}" in message
+                    for reason in ("not_waiting", "inactive")
+                ):
+                    record["phase"] = "dropped"
+                elif "previously rejected" in message or any(
+                    f"queued-run.admit refused: {reason}" in message
+                    for reason in ("busy", "not_next", "usage_limited")
+                ):
+                    record["phase"] = "retry"
+                else:
+                    raise
+                record["error"] = message
+                save(path, record)
+                log.info("T3 paced run %s: %s", run["runId"], message)
+            else:
+                record.update(
+                    phase="accepted", sequence=result["sequence"], unobserved_ticks=0
+                )
+                save(path, record)
+                log.info("T3 paced run admitted: %s", run["runId"])
+            return True
+        return False
+
     def tick(self):
         snapshot = self.server.snapshot()
         threads = {t["id"]: t for t in snapshot["threads"]}
+        # Archived threads remain observable but consume no capacity.
+        archived = {t["id"]: t for t in snapshot.get("archivedThreads", [])}
         running = Counter()
         for thread in threads.values():
             if activity(thread):
@@ -583,7 +669,9 @@ class T3Pacer:
                 ignored[record["tracker"]] += 1
                 continue
             records[(record["tracker"], record["issue"])] = record
-            thread = threads.get(record["command"]["threadId"])
+            thread = threads.get(record["command"]["threadId"]) or archived.get(
+                record["command"]["threadId"]
+            )
             if thread:
                 record.pop("hold", None)
                 record["phase"] = "observed"
@@ -593,17 +681,18 @@ class T3Pacer:
                         "id",
                         "branch",
                         "worktreePath",
-                        "session",
-                        "latestTurn",
-                        "hasPendingApprovals",
-                        "hasPendingUserInput",
+                        "status",
+                        "activeRunId",
+                        "activityRunStatus",
+                        "pendingRuntimeRequest",
+                        "pendingBackgroundTasks",
+                        "modelSelection",
+                        "lastError",
                     )
                 }
                 save(path, record)
                 log.info("T3 %s", thread_note(record))
                 log.debug("T3 %s: %s", thread["id"], json.dumps(record["thread"]))
-                if not thread.get("session") and not thread.get("latestTurn"):
-                    raise Withheld("Launched thread state is unknown; withholding work")
             elif record["phase"] in {"observed", "accepted"}:
                 if not record.get("hold"):
                     record["hold"] = {
@@ -688,7 +777,11 @@ class T3Pacer:
             if record["tracker"] not in skipped
         ]
         usage, errors = provider.read(self.config.providers, now=now)
-        waiting = set()
+        paced = self.paced_runs(snapshot, threads, running)
+        waiting = {
+            selection_provider(run["modelSelection"])
+            for run in snapshot.get("pacedRuns", [])
+        }
         if pending:
             waiting.add(selection_provider(pending[0][1]["command"]["modelSelection"]))
         else:
@@ -718,6 +811,8 @@ class T3Pacer:
         self.report_status(running, usage, errors, now, threads)
         for path, record in held:
             log.warning("T3 HELD %s", self.hold_note(path, record, now))
+        if self.admit_paced(paced, running, usage, errors, now):
+            return
         # An unresolved launch blocks new admissions, even when its gate is closed.
         # A held launch is not unresolved: it blocks only its own tracker or issue.
         for path, record in pending:
@@ -824,15 +919,22 @@ class T3Pacer:
             raise Held(rejected_reason(record["issue"], rejections))
         command = record["command"]
         try:
-            self.server.call("orchestration.dispatchCommand", command)
+            if "bootstrap" in command:
+                raise Held("Saved V1 launch needs inspection before retrying on V2")
+            result = self.server.call("orchestration.launchThread", command)
+            if result["threadId"] != command["threadId"]:
+                raise Held(
+                    "T3 returned a different thread ID; inspect the saved launch"
+                )
+            record["result"] = result
         except T3Rejected as error:
             threads = self.server.snapshot()["threads"]
             if any(t["id"] == command["threadId"] for t in threads):
                 raise  # The next tick observes the thread instead of relaunching.
-            # T3 deletes a thread whose bootstrap fails but can keep its worktree
-            # and branch, so resending the same thread ID fails on that branch.
+            # A refused workspace setup can leave a branch behind. V2 cleanup
+            # is unverified, so keep bounded retries with fresh branch names.
             # Keep T3's reason: its own logs rotate away within days.
-            worktree = command["bootstrap"]["prepareWorktree"]
+            worktree = command["workspaceStrategy"]
             record.setdefault("rejected", []).append(
                 {
                     "branch": worktree["branch"],
@@ -842,7 +944,7 @@ class T3Pacer:
             )
             thread_id = str(uuid.uuid4())
             command.update(threadId=thread_id, commandId=str(uuid.uuid4()))
-            command["message"]["messageId"] = str(uuid.uuid4())
+            command["initialMessage"]["messageId"] = str(uuid.uuid4())
             worktree["branch"] = f"pacer-{thread_id}"
             record["rejections"] = rejections + 1
             save(path, record)

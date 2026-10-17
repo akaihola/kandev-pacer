@@ -190,10 +190,18 @@ not admitted. Numbered references are resolved only within their own tracker.
 Local authentication uses `t3 auth session issue`, renewing the five-minute session
 before expiry. Set `t3_base_dir` if the CLI and server use different state directories.
 Non-loopback endpoints require `T3_THREAD_AUTH_TOKEN`, supplied through the environment.
-Tokens and WebSocket tickets are never written into launch records. The protocol
-matches T3 0.0.44. On 2026-10-04 the local CLI reported that version; the Gogo HTTP
-endpoint was reachable, but its installed version could not be rechecked over SSH
-because authentication was refused. No live task launch was used for verification.
+Tokens and WebSocket tickets are never written into launch records. T3 mode uses
+V2, connecting to `/ws?orchestrationProtocol=2&wsTicket=…`. The bearer session needs
+`orchestration:read` and `orchestration:operate`. Live gogo T3 0.0.45 uses V1 and
+must stay on its existing pacer until the coordinated V2 deployment.
+
+Patched V2 servers expose `pacedRuns` in the first shell snapshot. The pacer admits
+at most one eligible parked prompt per tick, oldest first, before pending tracker
+launches. A missing field logs once and disables paced-prompt admission; an empty
+array means the patch is present. See [the pacing-hook contract](t3-pacing-hook.md)
+for discovery, durable admission IDs, and reply handling. Paced prompts use the same
+quota and concurrency gates as tracker launches, and count as waiting work for
+reset redemption. Unknown parked providers are logged and skipped individually.
 
 ## Shell command not found
 
@@ -319,15 +327,22 @@ so other repositories keep launching work. A pending launch from a checkout that
 the base branch before its scheduling commit is skipped the same way.
 
 Pacer saves a private record, moves the issue to Scheduled through Hai's
-revision-checked API, and commits only the tracker. T3 then creates a worktree from that branch. The worker receives the
+revision-checked API, and commits only the tracker. T3 creates a worktree from that
+branch through `orchestration.launchThread`,
+using `workspaceStrategy` and `initialMessage`. The pacer retains the returned
+`threadId`, `projection` and `resumed` result. Its prompts end with a period, so
+they do not park behind the pacing hook. The worker receives the
 issue description, root AGENTS.md, tracker rules, and instructions to use Hai for
 tracker changes. Implementation, validation, merge, and completion follow those
 repository rules. A finished turn never moves the tracker or checks acceptance.
 
 The existing quota gates, model-specific windows, and concurrency limits apply.
-Starting/running turns, pending approvals/input, and active background work count
-against capacity across the T3 server. Unrecognized state or active provider blocks
-new work. These counts do not include a separate Kandev server; avoid two independent
+Preparing, starting, running or waiting runs, pending runtime requests, and
+background tasks count against capacity across the T3 server. Parked prompts and
+archived threads do not count.
+Activity uses V2 `status`, `activeRunId` and `activityRunStatus`, plus
+`pendingRuntimeRequest` and `pendingBackgroundTasks`. Unrecognized state or active
+provider blocks new work. These counts do not include a separate Kandev server; avoid two independent
 pacers admitting work against the same subscription without partitioning capacity.
 
 Records live in `~/.local/state/kandev-pacer/t3`, configurable with
@@ -345,15 +360,13 @@ automatically. Continue those threads manually when needed.
 Each tick logs one line per observed thread at INFO level, for example:
 
 ```
-T3 task-7 from /home/agent/prg/filemill/TASKS.md on e06a9686-... (claudeAgent): session stopped, turn completed
+T3 task-7 from /home/agent/prg/filemill/TASKS.md on e06a9686-... (claudeAgent): status completed
 ```
 
-The line names the issue, tracker, thread ID and provider, then the session status, the
-latest turn state, `needs approval` or `needs input` when the thread waits for a person,
-and T3's `lastError` text when there is one. Everything else T3 reports about the thread
-(branch, worktree path, turn and message IDs, timestamps, runtime mode) is in the launch
-record under `thread` and in the same line at DEBUG level, so the console stays readable
-while the detail is one `jq .thread RECORD` away.
+The line names the issue, tracker, thread ID and provider instance, then thread and
+active run status, `needs response` for pending runtime requests, `background work`
+when tasks remain, and top-level `lastError` when present. The observed V2 fields,
+branch and worktree path are saved under `thread` and logged at DEBUG level.
 
 A pending launch blocks all new launches until it is dispatched or held. While its
 provider has no free capacity, each tick logs `T3 pending launch of ... waits for ...
@@ -420,7 +433,7 @@ so the tracker's next issue can still launch.
 | T3 rejects the launch for the third time | tracker | when you delete the record |
 | TASKS.md changed between saving the record and the scheduling commit | tracker | when you delete the record |
 | The issue left the queue, or lost a completed dependency, before T3 accepted it | issue | when you delete the record |
-| An observed thread disappears from T3, including by archiving | issue | when the thread returns or you delete the record |
+| An observed thread disappears from both active and archived snapshots | issue | when the thread returns or you delete the record |
 | An accepted thread never appears in the snapshot | tracker | when the thread appears or you delete the record |
 
 A missing accepted or observed thread never triggers an automatic retry. Its record
@@ -430,13 +443,14 @@ holds only its issue; one never seen holds the tracker because project setup may
 failed. If that thread returns to the snapshot, the pacer clears the hold and observes
 it without dispatching again. Missing threads consume no capacity.
 
-On T3 0.0.44, archiving a thread removes it from the shell snapshot, so it receives
-the same hold as a deleted thread. Unarchiving restores it to the snapshot.
+V2 reports archived threads in `archivedThreads`. The pacer keeps observing their
+launch records without a missing-thread hold or any capacity charge.
 
 T3 can reject a launch after creating its worktree, for example when a Git step of
-worktree setup fails. T3 then deletes the thread but keeps the worktree and its
-`pacer-<thread ID>` branch, so the same thread ID can never launch. If the thread is
-absent from T3 after a rejection, the pacer gives the launch a new thread ID and holds
+worktree setup fails. On V1, T3 deleted the thread but kept the worktree and its
+`pacer-<thread ID>` branch, preventing reuse of the thread ID. V2 cleanup after
+failed preparation remains unverified; the same bounded retry policy is retained.
+If the thread is absent from T3 after a rejection, the pacer gives the launch a new thread ID and holds
 its tracker for an hour. The wait lets a short-lived cause clear, such as another
 process holding the project's `.git/config.lock`. On 2026-10-07 that kind of lock made
 T3 reject a filemill launch three times in two minutes. The same Git write worked three
@@ -476,6 +490,9 @@ To release a hold, delete the record named on its `T3 HELD` line. Check first:
 
 If T3 rejects every launch, for example because T3 itself is broken, each tracker uses
 its own three attempts, so each project can collect up to three leftover worktrees.
+
+Unresolved saved V1 commands with `bootstrap` are held for inspection before any
+V2 dispatch. Reconcile these with the original server before removing records.
 
 Apart from held records, do not delete records to retry: that discards duplicate
 launch protection. Endpoint or tracker changes also require reconciling existing
