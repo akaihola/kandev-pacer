@@ -17,10 +17,10 @@ Rules for TASKS.md usage are at the bottom of the file.
 
 ## Scheduled
 
-- [55] Gather acceptance evidence for the 34 review-queue items
-  <!-- hai:{"id":"simple-1589de5a-10e5-4287-9a0c-16c6baf5af62","labels":["steward"],"createdAt":"2026-10-17T17:06:23.520Z","updatedAt":"2026-10-17T17:10:44.279Z"} -->
-
 ## In Progress
+
+- [~] [55] Gather acceptance evidence for the 34 review-queue items
+      <!-- hai:{"id":"simple-1589de5a-10e5-4287-9a0c-16c6baf5af62","labels":["steward"],"createdAt":"2026-10-17T17:06:23.520Z","updatedAt":"2026-10-17T17:12:16.400Z"} -->
 
 - [16] Learn from session observation records: a lowest-priority Kandev task the
   Heartbeat creates when unread records exist, writing observations and proposed
