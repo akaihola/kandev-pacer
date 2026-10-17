@@ -19,9 +19,6 @@ Rules for TASKS.md usage are at the bottom of the file.
 
 ## In Progress
 
-- [~] [52] A tracker that fails to parse stops pacing for every project
-      <!-- hai:{"id":"simple-a77c430b-d72d-4f30-a910-9534cc450248","labels":["steward"],"createdAt":"2026-10-17T07:07:03.309Z","updatedAt":"2026-10-17T07:29:23.126Z"} -->
-
 - [16] Learn from session observation records: a lowest-priority Kandev task the
   Heartbeat creates when unread records exist, writing observations and proposed
   solution prompts to the right repository's unreviewed section.
@@ -34,6 +31,9 @@ Rules for TASKS.md usage are at the bottom of the file.
   before resuming tasks.
 
 ## Completed / Accepted
+
+- [ ] [52] A tracker that fails to parse stops pacing for every project
+      <!-- hai:{"id":"simple-a77c430b-d72d-4f30-a910-9534cc450248","labels":["steward"],"createdAt":"2026-10-17T07:07:03.309Z","updatedAt":"2026-10-17T07:31:51.091Z"} -->
 
 - [ ] [51] Count only paced threads against concurrency_total
       <!-- hai:{"id":"simple-8fd046bd-0a6c-4041-acb3-c0c670ac04e6","labels":["steward"],"createdAt":"2026-10-17T07:07:02.465Z","updatedAt":"2026-10-17T07:28:30.588Z"} -->
