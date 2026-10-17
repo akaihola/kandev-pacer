@@ -15,10 +15,10 @@ Rules for TASKS.md usage are at the bottom of the file.
 
 ## Ordered backlog
 
-- [55] Gather acceptance evidence for the 34 review-queue items
-  <!-- hai:{"id":"simple-1589de5a-10e5-4287-9a0c-16c6baf5af62","labels":["steward"],"createdAt":"2026-10-17T17:06:23.520Z","updatedAt":"2026-10-17T17:06:23.520Z"} -->
-
 ## Scheduled
+
+- [55] Gather acceptance evidence for the 34 review-queue items
+  <!-- hai:{"id":"simple-1589de5a-10e5-4287-9a0c-16c6baf5af62","labels":["steward"],"createdAt":"2026-10-17T17:06:23.520Z","updatedAt":"2026-10-17T17:10:44.279Z"} -->
 
 ## In Progress
 
