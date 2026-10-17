@@ -17,10 +17,10 @@ Rules for TASKS.md usage are at the bottom of the file.
 
 ## Scheduled
 
-- [54] Remove the tailnet hostname from all files and from history
-  <!-- hai:{"id":"simple-0f558179-3e1d-4acd-bef4-ec9028dff735","labels":["steward"],"createdAt":"2026-10-17T12:54:00.321Z","updatedAt":"2026-10-17T12:58:47.698Z"} -->
-
 ## In Progress
+
+- [~] [54] Remove the tailnet hostname from all files and from history
+      <!-- hai:{"id":"simple-0f558179-3e1d-4acd-bef4-ec9028dff735","labels":["steward"],"createdAt":"2026-10-17T12:54:00.321Z","updatedAt":"2026-10-17T12:59:38.198Z"} -->
 
 - [16] Learn from session observation records: a lowest-priority Kandev task the
   Heartbeat creates when unread records exist, writing observations and proposed
