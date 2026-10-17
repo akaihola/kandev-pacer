@@ -19,6 +19,11 @@ Rules for TASKS.md usage are at the bottom of the file.
   atom
   <!-- hai:{"id":"simple-b13db05a-2c9d-4505-8cd5-1d1b843a5d44","labels":["steward"],"createdAt":"2026-10-17T23:10:11.429Z","updatedAt":"2026-10-17T23:10:11.429Z"} -->
 
+- [57] Rehearse the T3 cutover: run main against a dev T3 server built from [56]
+    - Depends on: [56]
+
+  <!-- hai:{"id":"simple-eb430d86-8360-4383-84c5-febfee1088d3","labels":["steward"],"createdAt":"2026-10-17T23:10:22.175Z","updatedAt":"2026-10-17T23:10:22.175Z"} -->
+
 ## Scheduled
 
 ## In Progress
@@ -314,7 +319,7 @@ Rules for TASKS.md usage are at the bottom of the file.
 
 [19]: docs/tasks/19-uv-source-path-documentation-unclear.md
 
-<!-- hai:reserved-numbers:1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,26,27,28,29,30,31,32,33,34,35,36,37,38,39,40,41,42,43,44,45,46,47,48,49,50,51,52,53,54,55,56 -->
+<!-- hai:reserved-numbers:1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,26,27,28,29,30,31,32,33,34,35,36,37,38,39,40,41,42,43,44,45,46,47,48,49,50,51,52,53,54,55,56,57 -->
 
 [20]: docs/tasks/20-command-not-found-error.md
 [21]: docs/tasks/21-unclear-urlerror.md
@@ -369,6 +374,8 @@ Rules for TASKS.md usage are at the bottom of the file.
 [55]: docs/tasks/55-gather-acceptance-evidence-for-the-34-review-queue-items.md
 
 [56]: docs/tasks/56-prepare-the-t3-upgrade-with-the-pacing-hook-patch-for-deployment-from-.md
+
+[57]: docs/tasks/57-rehearse-the-t3-cutover-run-main-against-a-dev-t3-server-built-from-56.md
 
 ## Rules
 
