@@ -15,13 +15,13 @@ Rules for TASKS.md usage are at the bottom of the file.
 
 ## Ordered backlog
 
-- [51] Count only paced threads against concurrency_total
-  <!-- hai:{"id":"simple-8fd046bd-0a6c-4041-acb3-c0c670ac04e6","labels":["steward"],"createdAt":"2026-10-17T07:07:02.465Z","updatedAt":"2026-10-17T07:07:02.465Z"} -->
-
 - [52] A tracker that fails to parse stops pacing for every project
   <!-- hai:{"id":"simple-a77c430b-d72d-4f30-a910-9534cc450248","labels":["steward"],"createdAt":"2026-10-17T07:07:03.309Z","updatedAt":"2026-10-17T07:07:03.309Z"} -->
 
 ## Scheduled
+
+- [51] Count only paced threads against concurrency_total
+  <!-- hai:{"id":"simple-8fd046bd-0a6c-4041-acb3-c0c670ac04e6","labels":["steward"],"createdAt":"2026-10-17T07:07:02.465Z","updatedAt":"2026-10-17T07:25:37.051Z"} -->
 
 ## In Progress
 
