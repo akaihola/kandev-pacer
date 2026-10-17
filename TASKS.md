@@ -15,9 +15,6 @@ Rules for TASKS.md usage are at the bottom of the file.
 
 ## Ordered backlog
 
-- [50] Update the tests to Hai's sourceState field
-  <!-- hai:{"id":"simple-0032e3fe-2aeb-4c7b-856b-3c018aa9513c","labels":["steward"],"createdAt":"2026-10-17T07:07:01.094Z","updatedAt":"2026-10-17T07:07:01.094Z"} -->
-
 - [49] Port T3 mode to T3's V2 protocol: pacedRuns discovery and queued-run.admit
     - Depends on: [50]
   <!-- hai:{"id":"simple-da78b7a4-bee2-4ffe-86eb-a294b70b2388","labels":["steward"],"createdAt":"2026-10-16T16:43:07.027Z","updatedAt":"2026-10-17T07:07:18.495Z"} -->
@@ -29,6 +26,9 @@ Rules for TASKS.md usage are at the bottom of the file.
   <!-- hai:{"id":"simple-a77c430b-d72d-4f30-a910-9534cc450248","labels":["steward"],"createdAt":"2026-10-17T07:07:03.309Z","updatedAt":"2026-10-17T07:07:03.309Z"} -->
 
 ## Scheduled
+
+- [50] Update the tests to Hai's sourceState field
+  <!-- hai:{"id":"simple-0032e3fe-2aeb-4c7b-856b-3c018aa9513c","labels":["steward"],"createdAt":"2026-10-17T07:07:01.094Z","updatedAt":"2026-10-17T07:14:40.332Z"} -->
 
 ## In Progress
 
