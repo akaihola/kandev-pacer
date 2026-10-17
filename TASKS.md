@@ -27,10 +27,10 @@ Rules for TASKS.md usage are at the bottom of the file.
 
 ## Scheduled
 
-- [50] Update the tests to Hai's sourceState field
-  <!-- hai:{"id":"simple-0032e3fe-2aeb-4c7b-856b-3c018aa9513c","labels":["steward"],"createdAt":"2026-10-17T07:07:01.094Z","updatedAt":"2026-10-17T07:14:40.332Z"} -->
-
 ## In Progress
+
+- [~] [50] Update the tests to Hai's sourceState field
+      <!-- hai:{"id":"simple-0032e3fe-2aeb-4c7b-856b-3c018aa9513c","labels":["steward"],"createdAt":"2026-10-17T07:07:01.094Z","updatedAt":"2026-10-17T07:15:05.468Z"} -->
 
 - [16] Learn from session observation records: a lowest-priority Kandev task the
   Heartbeat creates when unread records exist, writing observations and proposed
