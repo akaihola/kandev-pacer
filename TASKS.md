@@ -25,11 +25,6 @@ Rules for TASKS.md usage are at the bottom of the file.
 
 ## In Progress
 
-- [~] [49] Port T3 mode to T3's V2 protocol: pacedRuns discovery and queued-run.admit
-    - Depends on: [50]
-
-      <!-- hai:{"id":"simple-da78b7a4-bee2-4ffe-86eb-a294b70b2388","labels":["steward"],"createdAt":"2026-10-16T16:43:07.027Z","updatedAt":"2026-10-17T07:17:25.459Z"} -->
-
 - [16] Learn from session observation records: a lowest-priority Kandev task the
   Heartbeat creates when unread records exist, writing observations and proposed
   solution prompts to the right repository's unreviewed section.
@@ -42,6 +37,11 @@ Rules for TASKS.md usage are at the bottom of the file.
   before resuming tasks.
 
 ## Completed / Accepted
+
+- [ ] [49] Port T3 mode to T3's V2 protocol: pacedRuns discovery and queued-run.admit
+    - Depends on: [50]
+
+      <!-- hai:{"id":"simple-da78b7a4-bee2-4ffe-86eb-a294b70b2388","labels":["steward"],"createdAt":"2026-10-16T16:43:07.027Z","updatedAt":"2026-10-17T07:24:40.167Z"} -->
 
 - [ ] [50] Update the tests to Hai's sourceState field
       <!-- hai:{"id":"simple-0032e3fe-2aeb-4c7b-856b-3c018aa9513c","labels":["steward"],"createdAt":"2026-10-17T07:07:01.094Z","updatedAt":"2026-10-17T07:16:16.361Z"} -->

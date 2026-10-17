@@ -77,3 +77,52 @@ Update `docs/t3-pacing-hook.md` (protocol parameter, `options`, `running`),
   item in the vault tracker.
 
 Out of scope: the `t3-start-thread` skill, which also speaks V1 (separate item).
+
+## Implementation and validation, 2026-10-17
+
+Implemented in `05986f7`, merged into local main. V2 transport, activity, worktree
+launches, archived-thread observation, paced-run discovery and durable admission
+retries are covered. Saved unresolved V1 commands are held for inspection.
+
+Validation used the canonical checkout's Python environment with `PYTHONPATH=src`
+to load this worktree's code:
+
+- Full suite: 904 passed, 20 skipped. Skips are opt-in live tests.
+- `darker --check`, `graylint` with Ruff and ty, and `git diff --check` passed.
+- The workflow tests also use V2 launch envelopes for TASKS.md, scratch and backlog
+  sources. Every admission reply class has offline coverage.
+
+The end-to-end check used the patched T3 source at `ea944594ce` in
+`/home/agent/.t3/worktrees/t3code/t3code-9f66b19e`. A read-only backup of the earlier
+V1 seed database was copied and pruned with the recovered `prune-v1.sql`, leaving
+12 stopped threads. The server imported that copy into V2. A separate server bound
+only `127.0.0.1:18749`, with private state and a new scratch Git repository under
+`/home/agent/tmp/pacer-v2-49`. Its bearer session had only `orchestration:read` and
+`orchestration:operate`. No browser interaction was needed for this wire check.
+
+The real `T3Pacer.tick()` scheduled a scratch issue and launched Haiku 4.5 through
+`orchestration.launchThread`. The worker wrote `launch-ok.txt` in the isolated
+worktree and completed. A `message.dispatch` follow-up ending in `…` parked and
+appeared in `pacedRuns`. The pacer admitted it, deliberately discarded the
+successful reply, then restarted and resent the saved command ID. Both replies
+had sequence `166626`. The follow-up completed with exactly one provider attempt.
+
+Thread: `3d37c8c8-51eb-4441-9739-12e7d8dbc8ca`. Paced run:
+`run:thread:3d37c8c8-51eb-4441-9739-12e7d8dbc8ca:ordinal:2`.
+Read-only database checks found exactly two completed runs and two completed
+provider attempts on that thread, one for the initial launch and one for the
+paced follow-up. The isolated server was stopped afterwards.
+
+The end-to-end harness used a deterministic open quota verdict and empty quota
+readings. It exercised the real transport, scheduler, persistence, restart and
+provider turns without redeeming resets or depending on live allowance timing.
+Offline tests cover closed quota gates, provider and total capacity, quota read
+errors, disabled providers, API-key policy, and reset waiting.
+
+Local evidence is under `/home/agent/tmp/pacer-v2-49`: `e2e.py`, `admit_e2e.py`,
+`admit.json`, `result.json`, `database-evidence.json` and `pytest-final.log`.
+The token file and server state are private test artifacts, not repository files.
+
+Live gogo T3 0.0.45 and its running pacer were not restarted or changed. Deployment
+remains a separate coordination item. V2 failed-workspace cleanup remains
+unverified, as in the original request. Completion awaits user acceptance.
