@@ -19,9 +19,6 @@ Rules for TASKS.md usage are at the bottom of the file.
 
 ## In Progress
 
-- [~] [55] Gather acceptance evidence for the 34 review-queue items
-      <!-- hai:{"id":"simple-1589de5a-10e5-4287-9a0c-16c6baf5af62","labels":["steward"],"createdAt":"2026-10-17T17:06:23.520Z","updatedAt":"2026-10-17T17:12:16.400Z"} -->
-
 - [16] Learn from session observation records: a lowest-priority Kandev task the
   Heartbeat creates when unread records exist, writing observations and proposed
   solution prompts to the right repository's unreviewed section.
@@ -34,6 +31,9 @@ Rules for TASKS.md usage are at the bottom of the file.
   before resuming tasks.
 
 ## Completed / Accepted
+
+- [ ] [55] Gather acceptance evidence for the 34 review-queue items
+      <!-- hai:{"id":"simple-1589de5a-10e5-4287-9a0c-16c6baf5af62","labels":["steward"],"createdAt":"2026-10-17T17:06:23.520Z","updatedAt":"2026-10-17T17:32:51.307Z"} -->
 
 - [ ] [54] Remove the tailnet hostname from all files and from history
       <!-- hai:{"id":"simple-0f558179-3e1d-4acd-bef4-ec9028dff735","labels":["steward"],"createdAt":"2026-10-17T12:54:00.321Z","updatedAt":"2026-10-17T13:02:43.560Z"} -->
