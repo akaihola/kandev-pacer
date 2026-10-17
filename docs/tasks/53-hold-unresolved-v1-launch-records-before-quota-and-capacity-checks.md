@@ -50,3 +50,21 @@ isolation of an unreadable tracker. `uv run pytest tests/test_t3.py
 tests/test_t3_client.py -q` passed 213 tests. Failed V2 workspace-setup cleanup
 remains unverified, as [49] says. The full review note is in the vault,
 `git -C /home/agent/my-knowledge show 606b679:"agents/steward/inbox/2026-10-17 kandev-pacer V2 cutover review.md"`.
+
+## Completion evidence, 2026-10-17
+
+Implemented in `036b2bf`. Reconciliation now gives absent V1 launches a permanent
+tracker inspection hold before scheduling or admission. Saved commands and IDs
+remain intact. Imported active and archived threads reconcile without relaunching.
+
+- Real V1 envelopes cover prepared, scheduled and submitted records under closed
+  quota, disabled providers, full provider slots and open gates. Every case also
+  checks another tracker's launch, unchanged tracker contents and Git revision,
+  and hold persistence after restarting the pacer.
+- Six further cases cover active and archived imported threads in all three phases.
+- Removing the fix makes all 12 absent-thread cases fail.
+- `uv run --extra t3 pytest -q`: 942 passed, 20 skipped.
+- `uv run darker --check`, `uv run graylint` and `git diff --check` passed.
+
+Completion awaits user acceptance. The live V2 cutover and failed workspace-setup
+cleanup remain outside this issue's validation.

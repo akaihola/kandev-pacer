@@ -19,9 +19,6 @@ Rules for TASKS.md usage are at the bottom of the file.
 
 ## In Progress
 
-- [~] [53] Hold unresolved V1 launch records before quota and capacity checks
-      <!-- hai:{"id":"simple-3065dc85-78d7-4c10-a98f-a9b47b58e061","labels":["steward"],"createdAt":"2026-10-17T11:05:14.552Z","updatedAt":"2026-10-17T11:32:02.933Z"} -->
-
 - [16] Learn from session observation records: a lowest-priority Kandev task the
   Heartbeat creates when unread records exist, writing observations and proposed
   solution prompts to the right repository's unreviewed section.
@@ -34,6 +31,9 @@ Rules for TASKS.md usage are at the bottom of the file.
   before resuming tasks.
 
 ## Completed / Accepted
+
+- [ ] [53] Hold unresolved V1 launch records before quota and capacity checks
+      <!-- hai:{"id":"simple-3065dc85-78d7-4c10-a98f-a9b47b58e061","labels":["steward"],"createdAt":"2026-10-17T11:05:14.552Z","updatedAt":"2026-10-17T11:34:06.613Z"} -->
 
 - [ ] [52] A tracker that fails to parse stops pacing for every project
       <!-- hai:{"id":"simple-a77c430b-d72d-4f30-a910-9534cc450248","labels":["steward"],"createdAt":"2026-10-17T07:07:03.309Z","updatedAt":"2026-10-17T07:31:51.091Z"} -->
