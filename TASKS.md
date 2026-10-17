@@ -118,8 +118,8 @@ Rules for TASKS.md usage are at the bottom of the file.
       retries with a new thread ID, up to three times. A pending launch waiting for
       capacity logs why nothing else launches.
 
-- [ ] [31] Dirty repo blocks all trackers
-      <!-- hai:{"id":"simple-5569346b-76c6-4a78-ad00-4f62faa13598","priority":"none","labels":[],"createdAt":"2026-10-06T05:24:40.114Z","updatedAt":"2026-10-06T05:39:22.197Z"} -->
+- [x] [31] Dirty repo blocks all trackers
+      <!-- hai:{"id":"simple-5569346b-76c6-4a78-ad00-4f62faa13598","priority":"none","labels":[],"createdAt":"2026-10-06T05:24:40.114Z","updatedAt":"2026-10-17T12:54:17.356Z"} -->
 
 - [x] [29] Unclear tracker error
       <!-- hai:{"id":"simple-deb4a03b-3449-4cf8-8d19-6efb79ccd008","priority":"none","labels":[],"createdAt":"2026-10-05T19:03:41.798Z","updatedAt":"2026-10-05T19:32:13.326Z"} -->
@@ -154,8 +154,8 @@ Rules for TASKS.md usage are at the bottom of the file.
 - [x] [22] Unclear ValueError
       <!-- hai:{"id":"simple-04f2f10f-b85d-4318-8db4-1ea72176c3e1","priority":"none","labels":[],"createdAt":"2026-10-04T18:54:18.448Z","updatedAt":"2026-10-04T19:03:05.774Z"} -->
 
-- [ ] [21] Unclear URLError
-      <!-- hai:{"id":"simple-0ad93f1d-3593-46f0-b76c-5cea0e0cba6f","priority":"none","labels":[],"createdAt":"2026-10-04T18:47:10.449Z","updatedAt":"2026-10-04T18:47:10.449Z"} -->
+- [x] [21] Unclear URLError
+      <!-- hai:{"id":"simple-0ad93f1d-3593-46f0-b76c-5cea0e0cba6f","priority":"none","labels":[],"createdAt":"2026-10-04T18:47:10.449Z","updatedAt":"2026-10-17T12:54:19.078Z"} -->
 
 - [x] [18] Pace TASKS.md work through Hai's Python API and launch admitted tasks in T3
       Code.
