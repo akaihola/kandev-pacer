@@ -22,11 +22,11 @@ Rules for TASKS.md usage are at the bottom of the file.
 
 ## Scheduled
 
-- [56] Prepare the T3 upgrade with the pacing-hook patch for deployment from
-  atom
-  <!-- hai:{"id":"simple-b13db05a-2c9d-4505-8cd5-1d1b843a5d44","labels":["steward"],"createdAt":"2026-10-17T23:10:11.429Z","updatedAt":"2026-10-17T23:10:43.168Z"} -->
-
 ## In Progress
+
+- [~] [56] Prepare the T3 upgrade with the pacing-hook patch for deployment from
+  atom
+      <!-- hai:{"id":"simple-b13db05a-2c9d-4505-8cd5-1d1b843a5d44","labels":["steward"],"createdAt":"2026-10-17T23:10:11.429Z","updatedAt":"2026-10-17T23:11:08.649Z"} -->
 
 - [16] Learn from session observation records: a lowest-priority Kandev task the
   Heartbeat creates when unread records exist, writing observations and proposed
