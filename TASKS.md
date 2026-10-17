@@ -15,10 +15,6 @@ Rules for TASKS.md usage are at the bottom of the file.
 
 ## Ordered backlog
 
-- [49] Port T3 mode to T3's V2 protocol: pacedRuns discovery and queued-run.admit
-    - Depends on: [50]
-  <!-- hai:{"id":"simple-da78b7a4-bee2-4ffe-86eb-a294b70b2388","labels":["steward"],"createdAt":"2026-10-16T16:43:07.027Z","updatedAt":"2026-10-17T07:07:18.495Z"} -->
-
 - [51] Count only paced threads against concurrency_total
   <!-- hai:{"id":"simple-8fd046bd-0a6c-4041-acb3-c0c670ac04e6","labels":["steward"],"createdAt":"2026-10-17T07:07:02.465Z","updatedAt":"2026-10-17T07:07:02.465Z"} -->
 
@@ -26,6 +22,10 @@ Rules for TASKS.md usage are at the bottom of the file.
   <!-- hai:{"id":"simple-a77c430b-d72d-4f30-a910-9534cc450248","labels":["steward"],"createdAt":"2026-10-17T07:07:03.309Z","updatedAt":"2026-10-17T07:07:03.309Z"} -->
 
 ## Scheduled
+
+- [49] Port T3 mode to T3's V2 protocol: pacedRuns discovery and queued-run.admit
+    - Depends on: [50]
+  <!-- hai:{"id":"simple-da78b7a4-bee2-4ffe-86eb-a294b70b2388","labels":["steward"],"createdAt":"2026-10-16T16:43:07.027Z","updatedAt":"2026-10-17T07:17:06.814Z"} -->
 
 ## In Progress
 
