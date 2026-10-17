@@ -2002,22 +2002,140 @@ def test_archived_launch_is_observed_without_occupying_capacity(setup):
     )
 
 
-def test_saved_v1_launch_is_held_before_v2_dispatch(setup, caplog):
+@pytest.fixture
+def saved_v1_launch(setup, request):
     pacer, path, server = setup
-    source = TasksStore(path).read()
-    record_path, record = pacer.prepare(
-        str(path),
-        TasksStore(path),
-        source,
-        t3.eligible(source)[0],
-        server.data["threads"][0],
-        server.data["projects"][0],
-    )
-    record["command"]["bootstrap"] = {"old": "V1"}
+    parent = server.data["threads"][0]
+    inherited = {
+        key: parent[key] for key in ("modelSelection", "runtimeMode", "interactionMode")
+    }
+    command = {
+        "type": "thread.turn.start",
+        "commandId": "v1-command",
+        "threadId": "v1-thread",
+        **inherited,
+        "createdAt": t3.stamp(time.time()),
+        "message": {
+            "messageId": "v1-message",
+            "role": "user",
+            "text": "Implement task-1",
+            "attachments": [],
+        },
+        "bootstrap": {
+            "createThread": {
+                "projectId": "project",
+                "title": "First",
+                **inherited,
+                "branch": None,
+                "worktreePath": None,
+                "createdAt": t3.stamp(time.time()),
+            },
+            "prepareWorktree": {
+                "projectCwd": str(path.parent),
+                "baseBranch": "main",
+                "branch": "pacer-v1-thread",
+                "startFromOrigin": False,
+                "requireWorktree": True,
+            },
+        },
+    }
+    record_path = pacer.record_path(str(path), "task-1")
+    record = {
+        "tracker": str(path),
+        "issue": "task-1",
+        "revision": TasksStore(path).read()["revision"],
+        "url": server.url,
+        "command": command,
+        "phase": "prepared",
+    }
+    if request.param != "prepared":
+        pacer.schedule(record_path, record)
+    record["phase"] = request.param
     t3.save(record_path, record)
+    return record_path, record
+
+
+@pytest.mark.parametrize(
+    "saved_v1_launch", ["prepared", "scheduled", "submitted"], indirect=True
+)
+@pytest.mark.parametrize("gate", ["quota", "disabled", "capacity", "open"])
+def test_saved_v1_launch_is_held_before_v2_dispatch(
+    setup, saved_v1_launch, tmp_path, monkeypatch, caplog, gate, clock
+):
+    pacer, path, server = setup
+    record_path, record = saved_v1_launch
+    second = add_tracker(pacer, server, tmp_path / "repo2")
+    server.data["threads"][-1]["modelSelection"] = {
+        "instanceId": "claudeAgent",
+        "model": "claude",
+    }
+    pacer.config.providers_raw = (
+        "anthropic" if gate == "disabled" else "openai anthropic"
+    )
+    if gate == "quota":
+        monkeypatch.setattr(
+            pacer,
+            "selection_verdict",
+            lambda selection, *args: Verdict(
+                "closed" if selection["instanceId"] == "codex" else "open", 1.0, ""
+            ),
+        )
+    elif gate == "capacity":
+        busy = {**server.data["threads"][0], "id": "busy", "status": "running"}
+        server.data["threads"].append(busy)
+        record_paced_thread(pacer, busy)
+    before = path.read_bytes(), t3.git(path.parent, "rev-parse", "HEAD")
     pacer.tick()
+    held = json.loads(record_path.read_text())
+    assert held == {
+        **record,
+        "hold": {
+            "scope": "tracker",
+            "reason": "Saved V1 launch needs inspection before retrying on V2",
+            "since": t3.stamp(clock[0]),
+            "retry_at": None,
+        },
+    }
+    assert (path.read_bytes(), t3.git(path.parent, "rev-parse", "HEAD")) == before
+    assert [project_of(c) for c in server.calls] == ["project2"]
+    [warning] = held_lines(caplog)
+    assert f"tracker {path}" in warning
+    assert "Saved V1 launch needs inspection" in warning
+    assert "issue task-1 thread v1-thread" in warning
+    assert f"to release: rm {shlex.quote(str(record_path))}" in warning
+    # Reconstruct the pacer with both trackers, then free the healthy provider.
+    pacer.config.t3_trackers.append(
+        {"tracker": str(second), "parent_thread": "parent2"}
+    )
+    server.data["threads"][-1].update(status="idle", activeRunId=None)
+    clock[0] += 60
+    restarted = t3.T3Pacer(pacer.config, server)
+    restarted.tick()
+    assert json.loads(record_path.read_text()) == held
+    assert [project_of(c) for c in server.calls] == ["project2", "project2"]
+
+
+@pytest.mark.parametrize(
+    "saved_v1_launch", ["prepared", "scheduled", "submitted"], indirect=True
+)
+@pytest.mark.parametrize("archived", [False, True])
+def test_imported_v1_launch_is_observed_without_relaunch(
+    setup, saved_v1_launch, archived
+):
+    pacer, path, server = setup
+    record_path, record = saved_v1_launch
+    imported = {**server.data["threads"][0], "id": "v1-thread"}
+    server.data["archivedThreads" if archived else "threads"].append(imported)
+    pacer.config.providers_raw = "anthropic"
+    before = path.read_bytes(), t3.git(path.parent, "rev-parse", "HEAD")
+    pacer.tick()
+    observed = json.loads(record_path.read_text())
+    assert observed["phase"] == "observed"
+    assert observed["thread"]["id"] == "v1-thread"
+    assert observed["command"] == record["command"]
+    assert "hold" not in observed
     assert not server.calls
-    assert "Saved V1 launch needs inspection" in caplog.text
+    assert (path.read_bytes(), t3.git(path.parent, "rev-parse", "HEAD")) == before
 
 
 def test_paced_id_save_failure_prevents_send(setup, monkeypatch):

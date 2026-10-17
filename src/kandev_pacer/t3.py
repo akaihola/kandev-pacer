@@ -756,6 +756,20 @@ class T3Pacer:
                     save(path, record)
                 held.append((path, record))
             elif record["phase"] in {"prepared", "scheduled", "submitted"}:
+                # Imported threads reconcile above; absent V1 launches must never
+                # reach scheduling or wait behind quota and capacity gates on V2.
+                if "bootstrap" in record["command"]:
+                    reason = "Saved V1 launch needs inspection before retrying on V2"
+                    if record.get("hold", {}).get("reason") != reason:
+                        record["hold"] = {
+                            "scope": "tracker",
+                            "reason": reason,
+                            "since": stamp(now),
+                            "retry_at": None,
+                        }
+                        save(path, record)
+                    held.append((path, record))
+                    continue
                 hold = record.get("hold")
                 if hold and (
                     hold["retry_at"] is None

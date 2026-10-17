@@ -521,7 +521,11 @@ If T3 rejects every launch, for example because T3 itself is broken, each tracke
 its own three attempts, so each project can collect up to three leftover worktrees.
 
 Unresolved saved V1 commands with `bootstrap` are held for inspection before any
-V2 dispatch. Reconcile these with the original server before removing records.
+scheduling, quota or capacity checks. The permanent hold names the tracker and
+blocks only its work; other eligible trackers can still launch. Imported threads
+found in the active or archived snapshot reconcile without relaunching. The saved
+command and hold survive restarts. Reconcile these with the original server before
+removing records.
 
 Apart from held records, do not delete records to retry: that discards duplicate
 launch protection. Endpoint or tracker changes also require reconciling existing
