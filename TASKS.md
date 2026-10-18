@@ -17,13 +17,13 @@ Rules for TASKS.md usage are at the bottom of the file.
 
 ## Scheduled
 
-- [59] Make main green again: [52]'s fixtures after Hai's Prettier tolerance,
+## In Progress
+
+- [~] [59] Make main green again: [52]'s fixtures after Hai's Prettier tolerance,
   and three ty errors
     - Depends on: [58]
 
-  <!-- hai:{"id":"simple-5aecb087-6f52-4946-8fc5-21ae11d8e8c6","labels":["steward"],"createdAt":"2026-10-18T05:13:20.369Z","updatedAt":"2026-10-18T05:33:57.709Z"} -->
-
-## In Progress
+      <!-- hai:{"id":"simple-5aecb087-6f52-4946-8fc5-21ae11d8e8c6","labels":["steward"],"createdAt":"2026-10-18T05:13:20.369Z","updatedAt":"2026-10-18T05:34:36.596Z"} -->
 
 - [16] Learn from session observation records: a lowest-priority Kandev task the
   Heartbeat creates when unread records exist, writing observations and proposed
