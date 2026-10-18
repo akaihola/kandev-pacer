@@ -398,7 +398,10 @@ Here are the rules for TASKS.md usage:
 
 - Bullets under `## Unverified proposals` are ideas that nobody has reviewed yet. They
   are not candidates for scheduling: a heartbeat never picks from this section. Antti
-  reviews a proposal and moves it into `## Ordered backlog`, or deletes it.
+  reviews a proposal and moves it into `## Ordered backlog`, or deletes it. Besides,
+  the steward (`~/my-knowledge/agents/steward/`) may also move a proposal that fits
+  `~/my-knowledge/pages/Goals.md` into `## Ordered backlog`; it lists each move in its
+  daily digest.
 - Before adding a proposal, read the whole section. Drop an exact duplicate. Merge a
   similar existing proposal with the new one into a single revision that combines the
   ideas of both.
