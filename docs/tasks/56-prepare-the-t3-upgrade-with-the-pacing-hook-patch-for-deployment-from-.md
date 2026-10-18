@@ -130,3 +130,50 @@ was found in the hook or low-memory documentation; Antti must choose one.
 
 Nothing was pushed, deployed or restarted. The live T3 server, its database,
 the running pacer and its state were untouched.
+
+### Update, 2026-10-18 05:11 EEST
+
+Preparation completed after the steward revised the memory stop rule in
+kandev-pacer `3d88d3c`. The earlier blocked result above remains historical.
+The monitor now stops below 2 GiB MemAvailable, or on swap growth greater
+than 512 MiB relative to the start of each step. Every resumed step passed
+within those limits. No live T3 data or pacer state was accessed.
+
+The validated code commit remains `91cfe8521fe26753dd9fa34db4ba35c100147b43`,
+on stable v0.1.0, `81493efb71e8e8244f95d3e9f71d8369654ab151`.
+
+| Check | Result |
+| --- | --- |
+| Capped frozen dependency refresh | Passed |
+| `Pacing.test.ts` | 40 passed |
+| `PacedQueue.test.ts` | 18 passed |
+| `ThreadStop.test.ts` | 19 passed, including buffered-wake cancellation |
+| `t3-lowmem tc --importers --base v0.1.0` | Passed, zero errors |
+| Scoped lint of the seven code/test files | Passed, four warnings at declarations also present upstream |
+| `git diff --check` | Passed |
+
+The typecheck covered six changed server files and 178 direct importers,
+plus one changed contracts file and 11 direct importers. It reported 31
+suggestions in server scope and zero contracts diagnostics. As designed,
+it hides diagnostics outside that scope; this was not a whole-server check.
+Its server scope peaked at 3.3 GiB. Across the dependency refresh, tests,
+typecheck and lint, the lowest sampled MemAvailable was 5,088,504 KiB,
+about 4.85 GiB, and the largest sampled swap growth was 200,068 KiB,
+about 195 MiB, during the typecheck.
+
+Exported with `git format-patch -1 91cfe8521fe26753dd9fa34db4ba35c100147b43 --stdout`:
+
+- Patch: `/home/agent/.local/state/t3-upgrade-prep/2026-10-18/t3code-pacing-hook-v0.1.0.patch`
+- Size: 63,105 bytes.
+- SHA-256: `4379ccc25dcd6ae9afeb67118867bef033dbad438d7ff9a5a468bac39dc621a9`
+
+Verification applied the patch to a temporary Git index loaded from clean
+v0.1.0, with whitespace errors rejected. Exactly seven code/test files were
+changed, no documentation. All patched blobs match the validated commit;
+adding its separately carried docs reproduces that commit's complete tree.
+The worktree and live data were not used as the application target.
+
+Logs, including `install-resumed.log`, the three suite logs, `typecheck.log`,
+`lint.log` and `patch-verification.log`, are alongside the patch. No low-memory
+scopes remain running. Nothing was pushed, deployed or restarted. Atom's
+patch transfer route remains an open question for Antti.
