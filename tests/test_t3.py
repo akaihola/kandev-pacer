@@ -2,9 +2,11 @@
 
 import copy
 import json
+import re
 import shlex
 import subprocess
 import time
+import types
 
 import pytest
 
@@ -108,6 +110,23 @@ def add_tracker(pacer, server, root):
         {**server.data["threads"][0], "id": "parent2", "projectId": "project2"}
     )
     return path
+
+
+# Hai's own tests pin this error (tests/python/test_prettier.py), so it should
+# survive Hai accepting more layouts, as a wrapped definition stopped failing.
+UNREADABLE = "Duplicate description reference [1]"
+
+
+def break_tracker(path):
+    """Give [1] a second, conflicting link definition, which Hai rejects."""
+    path.write_text(
+        path.read_text().replace(
+            "[1]: docs/tasks/1.md", "[1]: docs/tasks/1.md\n[1]: docs/tasks/2.md"
+        )
+    )
+    # Fail here, not in a later assertion, if Hai starts accepting it.
+    with pytest.raises(hai_tasks.TasksError, match=re.escape(UNREADABLE)):
+        TasksStore(path).read()
 
 
 def held_lines(caplog):
@@ -855,9 +874,7 @@ def test_unreadable_tracker_skips_only_itself_and_retains_records(
         {"tracker": str(second), "parent_thread": "parent2"}
     )
     original = first.read_text()
-    first.write_text(
-        original.replace("[1]: docs/tasks/1.md", "[1]:\n  docs/tasks/1.md")
-    )
+    break_tracker(first)
     t3.git(first.parent, "commit", "-am", "break link definition")
     calls_before = len(server.calls)
 
@@ -870,7 +887,7 @@ def test_unreadable_tracker_skips_only_itself_and_retains_records(
         assert all(p.read_bytes() == data for p, data in saved.items())
         [warning] = [r.message for r in caplog.records if r.levelname == "WARNING"]
         assert f"skipping unreadable tracker {first}" in warning
-        assert "Task [1] has no description reference" in warning
+        assert UNREADABLE in warning
     assert [project_of(c) for c in server.calls[calls_before:]] == [
         "project2",
         "project2",
@@ -894,15 +911,16 @@ def test_startup_and_dump_order_skip_unreadable_tracker(
     pacer.config.t3_trackers.append(
         {"tracker": str(second), "parent_thread": "parent2"}
     )
-    first.write_text(
-        first.read_text().replace("[1]: docs/tasks/1.md", "[1]:\n  docs/tasks/1.md")
-    )
+    break_tracker(first)
 
     def stop_after_tick(*args):
         raise KeyboardInterrupt
 
     monkeypatch.setattr(t3, "Server", lambda *args: server)
-    monkeypatch.setattr(t3.time, "sleep", stop_after_tick)
+    # Replace only t3's time module. Patching time.sleep itself also hits the
+    # waits for git inside the tick and can stop run() before it launches.
+    clock = types.SimpleNamespace(**{**vars(time), "sleep": stop_after_tick})
+    monkeypatch.setattr(t3, "time", clock)
     assert t3.run(pacer.config, dump_order=dump_order) == 0
     if dump_order:
         rows = json.loads(capsys.readouterr().out)
@@ -910,7 +928,7 @@ def test_startup_and_dump_order_skip_unreadable_tracker(
         assert not list(pacer.state.glob("*.json"))
     else:
         assert [project_of(c) for c in server.calls] == ["project2"]
-    assert "Task [1] has no description reference" in caplog.text
+    assert UNREADABLE in caplog.text
     assert str(first) in caplog.text
 
 

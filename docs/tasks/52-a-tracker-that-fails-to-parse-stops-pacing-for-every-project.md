@@ -36,3 +36,7 @@ to load this worktree's code. The full offline suite passed with 924 tests and
 seven unreadable-tracker cases passed. `darker --check`, `graylint` and
 `git diff --check` passed. No live launches were made; live T3 deployment remains
 part of the separate V2 rollout described in task [49].
+
+Update, 2026-10-18: Hai `abbb1ac` (2026-10-17) reads a wrapped link definition, so
+the fixtures above stopped breaking the tracker. Since [59] they give `[1]` a second,
+conflicting definition instead, and check that Hai rejects it before the test runs.

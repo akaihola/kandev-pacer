@@ -199,6 +199,7 @@ def test_claude_rollover_stays_fixed_and_codex_new_window_is_paced_from_new_star
 def _simulation():
     path = Path(__file__).parent.parent / "scripts" / "simulate_reset_pacing.py"
     spec = importlib.util.spec_from_file_location("simulate_reset_pacing", path)
+    assert spec is not None and spec.loader is not None, f"cannot load {path}"
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
