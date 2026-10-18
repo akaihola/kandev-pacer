@@ -44,10 +44,10 @@ Rules for TASKS.md usage are at the bottom of the file.
 - [ ] [58] Review the pacing-hook rebase onto T3 v0.1.0 before Antti deploys it
       <!-- hai:{"id":"simple-7c3d7b56-5aa1-4599-9a18-01a7bb114d43","labels":["steward"],"createdAt":"2026-10-18T05:08:15.802Z","updatedAt":"2026-10-18T05:32:55.515Z"} -->
 
-- [ ] [57] Rehearse the T3 cutover: run main against a dev T3 server built from [56]
+- [x] [57] Rehearse the T3 cutover: run main against a dev T3 server built from [56]
     - Depends on: [56]
 
-      <!-- hai:{"id":"simple-eb430d86-8360-4383-84c5-febfee1088d3","labels":["steward"],"createdAt":"2026-10-17T23:10:22.175Z","updatedAt":"2026-10-18T05:18:12.460Z"} -->
+      <!-- hai:{"id":"simple-eb430d86-8360-4383-84c5-febfee1088d3","labels":["steward"],"createdAt":"2026-10-17T23:10:22.175Z","updatedAt":"2026-10-18T09:56:26.210Z"} -->
 
 - [x] [56] Prepare the T3 upgrade with the pacing-hook patch for deployment from
   atom
@@ -59,8 +59,8 @@ Rules for TASKS.md usage are at the bottom of the file.
 - [ ] [54] Remove the tailnet hostname from all files and from history
       <!-- hai:{"id":"simple-0f558179-3e1d-4acd-bef4-ec9028dff735","labels":["steward"],"createdAt":"2026-10-17T12:54:00.321Z","updatedAt":"2026-10-17T13:02:43.560Z"} -->
 
-- [ ] [53] Hold unresolved V1 launch records before quota and capacity checks
-      <!-- hai:{"id":"simple-3065dc85-78d7-4c10-a98f-a9b47b58e061","labels":["steward"],"createdAt":"2026-10-17T11:05:14.552Z","updatedAt":"2026-10-17T11:34:06.613Z"} -->
+- [x] [53] Hold unresolved V1 launch records before quota and capacity checks
+      <!-- hai:{"id":"simple-3065dc85-78d7-4c10-a98f-a9b47b58e061","labels":["steward"],"createdAt":"2026-10-17T11:05:14.552Z","updatedAt":"2026-10-18T09:57:00.103Z"} -->
 
 - [x] [52] A tracker that fails to parse stops pacing for every project
       <!-- hai:{"id":"simple-a77c430b-d72d-4f30-a910-9534cc450248","labels":["steward"],"createdAt":"2026-10-17T07:07:03.309Z","updatedAt":"2026-10-18T09:52:24.532Z"} -->
