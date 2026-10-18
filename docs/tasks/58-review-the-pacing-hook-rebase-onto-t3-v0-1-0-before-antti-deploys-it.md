@@ -62,3 +62,37 @@ Result section of this file.
 - Every hunk of the range-diff and every overlapping upstream commit is
   accounted for.
 - The go/no-go and the newer-tag answer each give their reasons.
+
+## Result, 2026-10-18
+
+Go: deploy the v0.1.0 patch. No newer tag. Full review:
+`docs/reviews/2026-10-18-pacing-hook-rebase-review.md`.
+
+- The range-diff changes one hunk of 25 beyond context: Stop. [56] resolved it
+  correctly. Upstream `05e4f888a0` (#19099) now cancels buffered provider wakes
+  at Stop, and those are agent messages the hook never paces. The only slip is
+  a lost `Pacing patch:` comment prefix. The docs commit, the three new files
+  and the other 24 hunks are identical apart from line offsets.
+- The 13 upstream commits that touch files the hook changes and the 19 that
+  touch code it calls or depends on leave the gate, the dispatch queue branch,
+  edit, promote-to-steer, release, the admit checks and the post-commit drain
+  as they were. They add no start path that can reach a paced run, and leave
+  the `pacedRuns` tables and snapshot route unchanged.
+- Nothing blocks deployment, and nothing needs a fix after it. All eight
+  findings are notes. Two correct this issue's invariants: a server restart
+  leaves a parked run admittable by the pacer, as the spec intends, and settle
+  is refused while a parked run exists. One refines [56]'s checklist: since
+  v0.1.0 a restart also wakes completed runs whose background work it cut
+  (`eeaac49a9d`, #19291), on top of the continuation now on by default
+  (`b9ad3daf8d`, #18461). Antti still decides that setting before cutover.
+- No stable tag follows v0.1.0. No fix up to `v0.1.1-nightly.20261018.3285`
+  touches code the hook relies on. The patch fails `git apply --check` on
+  `v0.1.1-nightly.20261017.3238` in the contracts file (`86534db4d3`, #19559),
+  so moving to 0.1.1 needs a rebase.
+- The patch file's SHA-256 is `4379ccc2…`. It is byte-identical to
+  `git format-patch -1 91cfe8521f` and applies cleanly to a temporary index
+  of v0.1.0.
+
+Read-only throughout. Nothing in t3code was checked out, fetched, built or
+run. The live T3 server, its userdata, the running pacer and its state were
+not touched. Nothing was pushed.
