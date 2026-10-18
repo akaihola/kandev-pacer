@@ -25,9 +25,6 @@ Rules for TASKS.md usage are at the bottom of the file.
 
 ## In Progress
 
-- [~] [58] Review the pacing-hook rebase onto T3 v0.1.0 before Antti deploys it
-      <!-- hai:{"id":"simple-7c3d7b56-5aa1-4599-9a18-01a7bb114d43","labels":["steward"],"createdAt":"2026-10-18T05:08:15.802Z","updatedAt":"2026-10-18T05:20:26.387Z"} -->
-
 - [16] Learn from session observation records: a lowest-priority Kandev task the
   Heartbeat creates when unread records exist, writing observations and proposed
   solution prompts to the right repository's unreviewed section.
@@ -40,6 +37,9 @@ Rules for TASKS.md usage are at the bottom of the file.
   before resuming tasks.
 
 ## Completed / Accepted
+
+- [ ] [58] Review the pacing-hook rebase onto T3 v0.1.0 before Antti deploys it
+      <!-- hai:{"id":"simple-7c3d7b56-5aa1-4599-9a18-01a7bb114d43","labels":["steward"],"createdAt":"2026-10-18T05:08:15.802Z","updatedAt":"2026-10-18T05:32:55.515Z"} -->
 
 - [ ] [57] Rehearse the T3 cutover: run main against a dev T3 server built from [56]
     - Depends on: [56]
