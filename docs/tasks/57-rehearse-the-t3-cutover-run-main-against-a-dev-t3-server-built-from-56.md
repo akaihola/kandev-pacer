@@ -84,3 +84,22 @@ Don't fix defects here: the steward files them. Record a short summary in a
 
 - Every scenario has an outcome with evidence, or the reason it could not run.
 - No live state changed, and no copy of the database is left behind.
+
+## Result, 2026-10-18
+
+Rehearsal report completed with all six scenarios marked not run. Setup stopped
+under this issue's memory rule when host swap increased by 76,244 KiB, from
+3,627,272 to 3,703,516 KiB, after creating the disposable worktree. Available
+memory remained above 8 GiB; the source of the swap growth is unproven. [56]'s
+validation had completed, but its revised 512 MiB allowance does not amend
+this issue's stricter stop rule.
+
+See [the rehearsal report](../reviews/2026-10-18-t3-cutover-rehearsal.md) for
+commands, measurements, each scenario's missing evidence and cleanup. No dev
+server, database copy, pacer or provider turn was started. The temporary t3code
+worktree and scratch directory were removed. Live state was unchanged.
+
+This is not cutover approval. Main against the real V2 server and restart
+accounting remain unverified. Provisionally disable "Continue threads after
+restarts" at cutover until scenario 6 passes; that recommendation is based
+on source inspection, not a reproduced defect. No setting was changed.
