@@ -23,10 +23,10 @@ Rules for TASKS.md usage are at the bottom of the file.
 
 ## Scheduled
 
-- [58] Review the pacing-hook rebase onto T3 v0.1.0 before Antti deploys it
-  <!-- hai:{"id":"simple-7c3d7b56-5aa1-4599-9a18-01a7bb114d43","labels":["steward"],"createdAt":"2026-10-18T05:08:15.802Z","updatedAt":"2026-10-18T05:19:39.046Z"} -->
-
 ## In Progress
+
+- [~] [58] Review the pacing-hook rebase onto T3 v0.1.0 before Antti deploys it
+      <!-- hai:{"id":"simple-7c3d7b56-5aa1-4599-9a18-01a7bb114d43","labels":["steward"],"createdAt":"2026-10-18T05:08:15.802Z","updatedAt":"2026-10-18T05:20:26.387Z"} -->
 
 - [16] Learn from session observation records: a lowest-priority Kandev task the
   Heartbeat creates when unread records exist, writing observations and proposed
