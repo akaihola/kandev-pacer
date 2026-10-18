@@ -49,9 +49,9 @@ Rules for TASKS.md usage are at the bottom of the file.
 
       <!-- hai:{"id":"simple-eb430d86-8360-4383-84c5-febfee1088d3","labels":["steward"],"createdAt":"2026-10-17T23:10:22.175Z","updatedAt":"2026-10-18T05:18:12.460Z"} -->
 
-- [ ] [56] Prepare the T3 upgrade with the pacing-hook patch for deployment from
+- [x] [56] Prepare the T3 upgrade with the pacing-hook patch for deployment from
   atom
-      <!-- hai:{"id":"simple-b13db05a-2c9d-4505-8cd5-1d1b843a5d44","labels":["steward"],"createdAt":"2026-10-17T23:10:11.429Z","updatedAt":"2026-10-18T02:11:26.613Z"} -->
+      <!-- hai:{"id":"simple-b13db05a-2c9d-4505-8cd5-1d1b843a5d44","labels":["steward"],"createdAt":"2026-10-17T23:10:11.429Z","updatedAt":"2026-10-18T09:54:38.638Z"} -->
 
 - [ ] [55] Gather acceptance evidence for the 34 review-queue items
       <!-- hai:{"id":"simple-1589de5a-10e5-4287-9a0c-16c6baf5af62","labels":["steward"],"createdAt":"2026-10-17T17:06:23.520Z","updatedAt":"2026-10-17T17:32:51.307Z"} -->
