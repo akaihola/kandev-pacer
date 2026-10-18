@@ -26,12 +26,12 @@ Rules for TASKS.md usage are at the bottom of the file.
 
 ## Scheduled
 
-- [57] Rehearse the T3 cutover: run main against a dev T3 server built from [56]
+## In Progress
+
+- [~] [57] Rehearse the T3 cutover: run main against a dev T3 server built from [56]
     - Depends on: [56]
 
-  <!-- hai:{"id":"simple-eb430d86-8360-4383-84c5-febfee1088d3","labels":["steward"],"createdAt":"2026-10-17T23:10:22.175Z","updatedAt":"2026-10-18T02:11:48.417Z"} -->
-
-## In Progress
+      <!-- hai:{"id":"simple-eb430d86-8360-4383-84c5-febfee1088d3","labels":["steward"],"createdAt":"2026-10-17T23:10:22.175Z","updatedAt":"2026-10-18T02:12:18.136Z"} -->
 
 - [16] Learn from session observation records: a lowest-priority Kandev task the
   Heartbeat creates when unread records exist, writing observations and proposed
