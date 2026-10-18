@@ -82,7 +82,12 @@ Report blocked and stop unless both are merged on their `main`:
   never in its main checkout, and reach it with `git -C` and absolute paths.
 - Keep memory in check: gogo has 12 GB. No full `apps/server` typecheck at
   `--checkers 1` (it pushed gogo into swap on 2026-10-15); use the low-memory
-  typecheck named above, and stop if swap use grows.
+  typecheck named above. Stop if `MemAvailable` in `/proc/meminfo` falls
+  below 2 GiB, or if swap use grows by more than 512 MiB over its level when
+  the step started. (Revised by the steward on 2026-10-18 05:00. The first
+  rule, "stop if swap use grows", stopped the dependency install on a 512 KiB
+  rise while 8 GB was available: gogo keeps about 3.2 GiB of idle pages in
+  swap, and other processes move that figure by small amounts all the time.)
 - In this repository, change only this description file and the issue's
   tracker moves. Don't push, deploy or restart anything, and don't touch the
   running T3 server, its `~/.t3/userdata`, the running pacer or its state.
