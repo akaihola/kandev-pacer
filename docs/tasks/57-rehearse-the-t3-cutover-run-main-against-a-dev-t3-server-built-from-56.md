@@ -103,3 +103,32 @@ This is not cutover approval. Main against the real V2 server and restart
 accounting remain unverified. Provisionally disable "Continue threads after
 restarts" at cutover until scenario 6 passes; that recommendation is based
 on source inspection, not a reproduced defect. No setting was changed.
+
+### Resumed result, 2026-10-18 08:17 EEST
+
+The steward revised this issue's memory stop rule in `a195a3e`. Rebased onto
+main, keeping the revised rule and the first attempt's historical result above.
+The new rehearsal supersedes its not-run outcomes and provisional recommendation.
+
+All six scenarios passed against a disposable server using [56]'s validated
+`91cfe8521fe26753dd9fa34db4ba35c100147b43` on v0.1.0. The read-only backup
+took 13.201 seconds; the pruned two-thread seed imported its shells in
+188.364 ms, and startup to listening took 20.106 seconds. Main reconciled the
+copied records, held a synthetic V1 submitted record, launched and observed
+both scratch issues, excluded manual work from paced capacity, and admitted
+an API ellipsis prompt. Six short provider turns were used, including the
+interrupted turn and its automatic continuation.
+
+A dev-server restart cancelled the admitted run and created a linked
+continuation without new admission. The pacer recovered, counted it as one
+paced thread, observed completion, then launched the waiting second issue.
+Recommend leaving restart continuation enabled for cutover, with the explicit
+limit that it does not recheck quota through the pacer. This tested a graceful
+restart with quota available, not crash recovery or closed quota gates.
+
+No product defect or cutover blocker was reproduced. Maximum swap growth was
+202.75 MiB and minimum MemAvailable was 5.91 GiB, within the revised limits.
+All started processes stopped, both scratch provider worktrees and the temporary
+t3code worktree were removed, and the temporary root containing all database
+copies, tokens and private imported data was deleted. No live state changed.
+See the report for commands, logs, per-scenario evidence and test limits.
