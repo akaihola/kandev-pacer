@@ -18,6 +18,12 @@ Rules for TASKS.md usage are at the bottom of the file.
 - [58] Review the pacing-hook rebase onto T3 v0.1.0 before Antti deploys it
   <!-- hai:{"id":"simple-7c3d7b56-5aa1-4599-9a18-01a7bb114d43","labels":["steward"],"createdAt":"2026-10-18T05:08:15.802Z","updatedAt":"2026-10-18T05:08:15.802Z"} -->
 
+- [59] Make main green again: [52]'s fixtures after Hai's Prettier tolerance,
+  and three ty errors
+    - Depends on: [58]
+
+  <!-- hai:{"id":"simple-5aecb087-6f52-4946-8fc5-21ae11d8e8c6","labels":["steward"],"createdAt":"2026-10-18T05:13:20.369Z","updatedAt":"2026-10-18T05:13:20.369Z"} -->
+
 ## Scheduled
 
 - [57] Rehearse the T3 cutover: run main against a dev T3 server built from [56]
@@ -322,7 +328,7 @@ Rules for TASKS.md usage are at the bottom of the file.
 
 [19]: docs/tasks/19-uv-source-path-documentation-unclear.md
 
-<!-- hai:reserved-numbers:1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,26,27,28,29,30,31,32,33,34,35,36,37,38,39,40,41,42,43,44,45,46,47,48,49,50,51,52,53,54,55,56,57,58 -->
+<!-- hai:reserved-numbers:1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,26,27,28,29,30,31,32,33,34,35,36,37,38,39,40,41,42,43,44,45,46,47,48,49,50,51,52,53,54,55,56,57,58,59 -->
 
 [20]: docs/tasks/20-command-not-found-error.md
 [21]: docs/tasks/21-unclear-urlerror.md
@@ -381,6 +387,8 @@ Rules for TASKS.md usage are at the bottom of the file.
 [57]: docs/tasks/57-rehearse-the-t3-cutover-run-main-against-a-dev-t3-server-built-from-56.md
 
 [58]: docs/tasks/58-review-the-pacing-hook-rebase-onto-t3-v0-1-0-before-antti-deploys-it.md
+
+[59]: docs/tasks/59-make-main-green-again-52-s-fixtures-after-hai-s-prettier-tolerance-and.md
 
 ## Rules
 
