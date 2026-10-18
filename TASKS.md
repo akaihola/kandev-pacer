@@ -59,11 +59,11 @@ Rules for TASKS.md usage are at the bottom of the file.
 - [ ] [53] Hold unresolved V1 launch records before quota and capacity checks
       <!-- hai:{"id":"simple-3065dc85-78d7-4c10-a98f-a9b47b58e061","labels":["steward"],"createdAt":"2026-10-17T11:05:14.552Z","updatedAt":"2026-10-17T11:34:06.613Z"} -->
 
-- [ ] [52] A tracker that fails to parse stops pacing for every project
-      <!-- hai:{"id":"simple-a77c430b-d72d-4f30-a910-9534cc450248","labels":["steward"],"createdAt":"2026-10-17T07:07:03.309Z","updatedAt":"2026-10-17T07:31:51.091Z"} -->
+- [x] [52] A tracker that fails to parse stops pacing for every project
+      <!-- hai:{"id":"simple-a77c430b-d72d-4f30-a910-9534cc450248","labels":["steward"],"createdAt":"2026-10-17T07:07:03.309Z","updatedAt":"2026-10-18T09:52:24.532Z"} -->
 
-- [ ] [51] Count only paced threads against concurrency_total
-      <!-- hai:{"id":"simple-8fd046bd-0a6c-4041-acb3-c0c670ac04e6","labels":["steward"],"createdAt":"2026-10-17T07:07:02.465Z","updatedAt":"2026-10-17T07:28:30.588Z"} -->
+- [x] [51] Count only paced threads against concurrency_total
+      <!-- hai:{"id":"simple-8fd046bd-0a6c-4041-acb3-c0c670ac04e6","labels":["steward"],"createdAt":"2026-10-17T07:07:02.465Z","updatedAt":"2026-10-18T09:48:43.867Z"} -->
 
 - [ ] [49] Port T3 mode to T3's V2 protocol: pacedRuns discovery and queued-run.admit
     - Depends on: [50]
