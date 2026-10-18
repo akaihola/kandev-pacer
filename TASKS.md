@@ -19,12 +19,6 @@ Rules for TASKS.md usage are at the bottom of the file.
 
 ## In Progress
 
-- [~] [59] Make main green again: [52]'s fixtures after Hai's Prettier tolerance,
-  and three ty errors
-    - Depends on: [58]
-
-      <!-- hai:{"id":"simple-5aecb087-6f52-4946-8fc5-21ae11d8e8c6","labels":["steward"],"createdAt":"2026-10-18T05:13:20.369Z","updatedAt":"2026-10-18T05:34:36.596Z"} -->
-
 - [16] Learn from session observation records: a lowest-priority Kandev task the
   Heartbeat creates when unread records exist, writing observations and proposed
   solution prompts to the right repository's unreviewed section.
@@ -37,6 +31,12 @@ Rules for TASKS.md usage are at the bottom of the file.
   before resuming tasks.
 
 ## Completed / Accepted
+
+- [ ] [59] Make main green again: [52]'s fixtures after Hai's Prettier tolerance,
+  and three ty errors
+    - Depends on: [58]
+
+      <!-- hai:{"id":"simple-5aecb087-6f52-4946-8fc5-21ae11d8e8c6","labels":["steward"],"createdAt":"2026-10-18T05:13:20.369Z","updatedAt":"2026-10-18T05:40:24.000Z"} -->
 
 - [ ] [58] Review the pacing-hook rebase onto T3 v0.1.0 before Antti deploys it
       <!-- hai:{"id":"simple-7c3d7b56-5aa1-4599-9a18-01a7bb114d43","labels":["steward"],"createdAt":"2026-10-18T05:08:15.802Z","updatedAt":"2026-10-18T05:32:55.515Z"} -->
