@@ -15,12 +15,12 @@ Rules for TASKS.md usage are at the bottom of the file.
 
 ## Ordered backlog
 
+## Scheduled
+
 - [57] Rehearse the T3 cutover: run main against a dev T3 server built from [56]
     - Depends on: [56]
 
-  <!-- hai:{"id":"simple-eb430d86-8360-4383-84c5-febfee1088d3","labels":["steward"],"createdAt":"2026-10-17T23:10:22.175Z","updatedAt":"2026-10-17T23:10:22.175Z"} -->
-
-## Scheduled
+  <!-- hai:{"id":"simple-eb430d86-8360-4383-84c5-febfee1088d3","labels":["steward"],"createdAt":"2026-10-17T23:10:22.175Z","updatedAt":"2026-10-18T02:11:48.417Z"} -->
 
 ## In Progress
 
