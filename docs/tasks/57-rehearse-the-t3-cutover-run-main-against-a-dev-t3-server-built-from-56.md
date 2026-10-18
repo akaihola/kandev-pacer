@@ -67,8 +67,14 @@ Don't fix defects here: the steward files them. Record a short summary in a
   server at the live one.
 - Provider turns only in the scratch repository, and at most about six short
   ones.
-- gogo has 12 GB of memory. Check `free -m` before starting the dev server, run
-  no full typecheck, and stop if swap use grows.
+- gogo has 12 GB of memory. Check `free -m` before starting the dev server and
+  run no full typecheck. Stop if `MemAvailable` in `/proc/meminfo` falls below
+  2 GiB, or if swap use grows by more than 512 MiB over its level when the step
+  started. (Revised by the steward on 2026-10-18 08:00, as for [56]. The first
+  rule, "stop if swap use grows", stopped the first run during setup on a
+  74.5 MiB rise: gogo keeps about 3.2 GiB of idle pages in swap, and other
+  processes move that figure all the time. [56] peaked at 195 MiB growth with
+  4.85 GiB available.)
 - At the end, stop every process you started, remove the worktrees, and
   delete the database copies, which hold Antti's private conversations.
 - In this repository, change only the report, this description file and the
