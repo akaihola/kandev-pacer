@@ -10,8 +10,9 @@ Rules for TASKS.md usage are at the bottom of the file.
 - [41] Verify Claude reset contract and supervise useful reset trials
   <!-- hai:{"id":"simple-75487633-ff73-4817-ac73-5364758dc38e","createdAt":"2026-10-10T10:59:20.476Z","updatedAt":"2026-10-10T10:59:20.476Z"} -->
 
-- [40] Make reset redemption outcomes and diagnostics provider-specific
-  <!-- hai:{"id":"simple-01626a87-ecf4-4d88-b00d-ba3c08a3686a","createdAt":"2026-10-10T10:59:20.368Z","updatedAt":"2026-10-10T10:59:20.368Z"} -->
+- [40] Record banked resets and redemption outcomes in files the steward can
+  read
+  <!-- hai:{"id":"simple-01626a87-ecf4-4d88-b00d-ba3c08a3686a","createdAt":"2026-10-10T10:59:20.368Z","updatedAt":"2026-10-18T09:56:01.271Z"} -->
 
 ## Ordered backlog
 
